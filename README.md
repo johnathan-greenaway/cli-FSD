@@ -1,7 +1,7 @@
 # cli-FSD
 Use natural language to interface with your command line. 
 
-FSD for your CLI takes your natural language input and uses the OpenAI API to take the appropriate actions on your command line. By default, the interface runs in Companion mode and creates .sh scripts incrementally to accomplish the users request.  
+A lightweight and portable autopilot utility for your command line. Takes natural language as input and uses the OpenAI API to take the appropriate actions on your command line. Use safe mode to run Companion mode and creates .sh scripts incrementally to accomplish the users request.
 
 **Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments. 
 
