@@ -1,7 +1,7 @@
 # cli-FSD
 Use natural language to interface with your command line. 
 
-A lightweight and portable autopilot utility for your command line. Takes natural language as input and uses the OpenAI API to take the appropriate actions on your command line. Use safe mode to run Companion mode and creates .sh scripts incrementally to accomplish the users request.
+A lightweight and portable autopilot utility for your CLI. Takes natural language as input and uses the OpenAI API to take the appropriate actions by generating and parsing shell scripts. Use safe mode to run as a companion that creates shell scripts in incremenrs to accomplish the users request.
 
 **Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments. 
 
@@ -51,10 +51,10 @@ A lightweight and portable autopilot utility for your command line. Takes natura
     The `requirements.txt` file should include the following packages:
 
     ```
-    Flask==2.1.2
-    flask-cors==3.0.10
-    python-dotenv==0.20.0
-    requests==2.27.1
+    Flask
+    flask-cors
+    python-dotenv
+    requests
     ```
 
 5. **Environment Variables: (optional)**
@@ -68,22 +68,23 @@ A lightweight and portable autopilot utility for your command line. Takes natura
 
 ### Usage
 
-- To start the chatbot in Terminal:
+- To start in companion mode in Terminal:
 
     ```bash
-    python <script-name>.py
+    python safe-mode.py
     ```
 
-- To enable Autopilot mode from the start, use the `-autopilot on` argument:
+- To enable Autopilot from the start, use the `-autopilot on` argument:
 
     ```bash
-    python <script-name>.py -autopilot on
+    python safe-mode.py -autopilot on
     ```
+    OR:
 
-- To process a specific query at startup without entering the interactive mode:
+- To process a specific task using autopilot and bypass companion mode:
 
     ```bash
-    python <script-name>.py "Your query here"
+    python cli-FSD.py "Your task here"
     ```
 
 - For additional options, you can enter `CMD` mode by typing `CMD` at any prompt.
