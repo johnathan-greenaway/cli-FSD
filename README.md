@@ -18,8 +18,8 @@ FSD for your CLI takes your natural language input and uses the OpenAI API to ta
 1. **Clone the repository:**
 
     ```bash
-    git clone <repository-url>
-    cd <project-directory>
+    git clone https://github.com/WazaCraft/cli-FSD
+    cd cli-FSD
     ```
 
 2. **Set up a Python virtual environment:**
