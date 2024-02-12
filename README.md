@@ -1,7 +1,7 @@
 # cli-FSD
-Use natural language to interface with your command line. 
+Natural language driven autopilot for interfacing with your command line. 
 
-A lightweight and portable autopilot utility for your CLI. Takes natural language as input and uses the OpenAI API to take the appropriate actions by generating and parsing shell scripts. Use safe mode to run as a companion that creates shell scripts in incremenrs to accomplish the users request.
+A lightweight and portable autopilot utility for your CLI. Takes natural language as input and uses the OpenAI API to take the appropriate actions by generating and parsing shell scripts. Run '''safe mode.py''' to run as a terminal companion that creates, stored and asks permission to execute scripts incrementally to accomplish the user's request.
 
 **Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments. 
 
