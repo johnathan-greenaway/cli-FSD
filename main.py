@@ -66,9 +66,10 @@ conversation_history = []
 def print_instructions():
     print(f"{BOLD}Terminal Companion with Full Self Drive Mode{RESET}")
     print("Type your message and press Enter to chat.")
-    print("Type 'CMD' to enter command mode for additional options.")
+    print("Type 'CMD' to enter command mode and enter 'script' to save and run a script")
     print("Type 'autopilot' in command mode to toggle autopilot mode on/off.")
-    print(f"{BOLD}Giving LLMs access to run shell commands is dangerous. Only Full Self Drive Mode in sandbox environments. {RESET}")
+    print("--------------------------------------------------")
+    print(f"{BOLD}Giving LLMs access to run shell commands is dangerous. Only use autopilot in sandbox environments. {RESET}")
     print("--------------------------------------------------")
 
 def print_message(sender, message):
