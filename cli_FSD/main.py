@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv, set_key
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime,date
 import platform
 import glob
 import asyncio
@@ -17,23 +17,22 @@ import argparse
 import sys
 import threading
 
-def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2):
-    if use_emojis:
-        frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "]  # Added a space after each emoji
-    else:
-        frames = ["- ", "\\ ", "| ", "/ "]  # Added a space after each ASCII character
+global llm_suggestions 
+global replicate_suggestions  # This will store suggestions from Replicate
+replicate_suggestions = ""
 
+
+
+def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2):
+    frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "] if use_emojis else ["- ", "\\ ", "| ", "/ "]
     while not stop_event.is_set():
         for frame in frames:
             if stop_event.is_set():
                 break
-            # Added a space after the message for separation
             sys.stdout.write(f"\r{message} {frame}")
             sys.stdout.flush()
             time.sleep(interval)
-    # Clear the line after stopping
-    sys.stdout.write("\r" + " " * (len(message) + len(frames[0]) + 1) + "\r")
-
+    sys.stdout.write("\r" + " " * (len(message) + 4) + "\r")  # Clear the line
 
 # Setup argument parser for known flags only
 parser = argparse.ArgumentParser(description="Terminal Companion with Full Self Drive Mode")
@@ -81,8 +80,74 @@ if not api_key:
     dotenv_path.touch(exist_ok=True)
     set_key(dotenv_path, "OPENAI_API_KEY", api_key)
 
+replicate_api_key = os.getenv("REPLICATE_API_KEY")
+if not replicate_api_key:
+    replicate_api_key = input("Please enter your Replicate API key (leave blank to skip): ")
+    if replicate_api_key:  # If a key is provided, save it to .env for future use
+        dotenv_path.touch(exist_ok=True)
+        set_key(dotenv_path, "REPLICATE_API_KEY", replicate_api_key)
+
 server_port = int(os.getenv("SERVER_PORT", 5000))
 conversation_history = []
+
+def consult_replicate_for_error_resolution(error_message, replicate_api_key):
+    """
+    Uses Replicate's API to consult for advice on resolving an encountered error.
+    """
+    global replicate_suggestions  # Use the global variable to store Replicate's suggestions
+
+    # Specify the model version ID for 'meta/codellama-34b-instruct'
+    version_id = "eeb928567781f4e90d2aba57a51baef235de53f907c214a4ab42adabf5bb9736"
+
+    headers = {
+        "Authorization": f"Token {replicate_api_key}",
+        "Content-Type": "application/json"
+    }
+
+    data = json.dumps({
+      "version": version_id,
+      "input": {
+        "top_k": 50,
+        "top_p": 0.9,
+        "prompt": f"Error encountered: {error_message}. Write a function to resolve it, and also talk like a pirate.",
+        "max_tokens": 500,
+        "temperature": 0.75,
+        "system_prompt": "Responses should be written in Python.",
+        "repeat_penalty": 1.1,
+        "presence_penalty": 0,
+        "frequency_penalty": 0
+      }
+    })
+
+    try:
+        # Start a new prediction
+        response = requests.post("https://api.replicate.com/v1/predictions", headers=headers, data=data)
+        response.raise_for_status()
+        prediction = response.json()
+        prediction_id = prediction["id"]
+
+        # Poll for the prediction result
+        while True:
+            pred_response = requests.get(f"https://api.replicate.com/v1/predictions/{prediction_id}", headers=headers)
+            pred_response.raise_for_status()
+            prediction_result = pred_response.json()
+            if prediction_result["status"] in ["succeeded", "failed", "canceled"]:
+                break
+            time.sleep(2)  # Simple polling delay
+
+        if prediction_result["status"] == "succeeded":
+            replicate_suggestions = prediction_result["output"]
+            print("Replicate suggests:\n" + replicate_suggestions)  # Optionally print suggestion
+        else:
+            print("Replicate encountered an error or the prediction was canceled.")
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to consult Replicate API: {e}")
+
+
+def handle_error_with_llm_and_replicate(error_message, api_key, replicate_api_key):
+    consult_llm_for_error_resolution(error_message, api_key)
+    consult_replicate_for_error_resolution(error_message, replicate_api_key)
+
 
 def print_instructions():
     print(f"{GREEN}{BOLD}Terminal Companion with Full Self Drive Mode{RESET}")
@@ -133,26 +198,31 @@ def print_streamed_message(message, color=CYAN):
         time.sleep(0.03)
     print()
 
-def execute_shell_command(command, stream_output=True):
-    print(f"{CYAN}Processing...{RESET}")  # Static message before executing the command
+def execute_shell_command(command, api_key, stream_output=True):
+    """
+    Executes a given shell command and streams the output. Consults the LLM if an error occurs.
+    """
+    print(f"{CYAN}Executing command...{RESET}")
     try:
-        process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-        if stream_output:
-            # Stream output in real-time
-            for line in iter(process.stdout.readline, ''):
-                print(f"{CYAN}{line.strip()}{RESET}")
-        else:
-            # Wait for the command to complete and then process the output
-            output, _ = process.communicate()
-            print(f"{CYAN}{output.strip()}{RESET}")
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        stdout, stderr = process.communicate()
 
-        process.stdout.close()  # Close the stdout after processing the output
-        return_code = process.wait()  # Wait for the subprocess to terminate
-        if return_code:
-            raise subprocess.CalledProcessError(return_code, command)
+        if stream_output and stdout:
+            print(f"{CYAN}{stdout}{RESET}")
+
+        if process.returncode != 0 and stderr:
+            # An error occurred, add more context and consult the LLM for resolution
+            error_context = f"Error executing command '{command}': {stderr.strip()}"
+            print(f"{RED}Error encountered: {error_context}{RESET}")
+            resolution = consult_llm_for_error_resolution(error_context, api_key)
+            if resolution:
+                print(f"{GREEN}Suggested resolution:\n{resolution}{RESET}")
+            else:
+                print(f"{RED}No resolution suggested.{RESET}")
+        else:
+            print(f"{GREEN}Command executed successfully.{RESET}")
     except subprocess.CalledProcessError as e:
-        # If the command failed, print the error. Adjust depending on how you wish to display errors.
-        print(f"{YELLOW}Command failed with error: {e.output}{RESET}")
+        print(f"{RED}Command execution failed with error: {e}{RESET}")
 
 def chat_with_model(message, autopilot=False):
     headers = {
@@ -231,11 +301,14 @@ def get_system_info():
         'cpu': platform.processor()
     }
 
+# Global variable to store LLM suggestions
+llm_suggestions = None
+
 def consult_llm_for_error_resolution(error_message, api_key):
     """
     Consults the LLM for advice on resolving an encountered error.
     """
-    # Format the error message into a question for the LLM
+    global llm_suggestions  # Use the global variable
     prompt_message = f"I encountered an error while running a script: '{error_message}'. How can I resolve this?"
 
     headers = {
@@ -255,13 +328,16 @@ def consult_llm_for_error_resolution(error_message, api_key):
         response.raise_for_status()
         chat_response = response.json()
         if chat_response['choices'] and chat_response['choices'][0]['message']['content']:
-            return clean_up_llm_response(chat_response['choices'][0]['message']['content'])
+            suggestion = clean_up_llm_response(chat_response['choices'][0]['message']['content'])
+            llm_suggestions = suggestion  # Store the suggestion globally
+            print("LLM suggests:\n" + suggestion)  # Optionally print suggestion
         else:
             print("No advice was returned by the model.")
-            return None
     except requests.exceptions.RequestException as e:
         print(f"API request error: {e}")
         return None
+
+
 
 def execute_script_with_repl_and_consultation(script, api_key):
     """
@@ -322,9 +398,7 @@ def assemble_final_script(scripts, api_key):
     system_info = get_system_info()
     
     # Create a detailed description of the system info to include in the prompt.
-    info_details = (f"System information: OS={system_info['os']}, OS Version={system_info['os_version']}, "
-                    f"Architecture={system_info['architecture']}, Python Version={system_info['python_version']}, "
-                    f"CPU={system_info['cpu']}.")
+    info_details = get_system_info
 
     # Join all scripts into one, assuming they're compatible or sequential.
     final_script_prompt = "\n\n".join(script for script, _, _ in scripts)
@@ -441,6 +515,8 @@ def clean_up_llm_response(llm_response):
     else:
         print("No executable script blocks found in the response.")
         return llm_response  # Return original response if no blocks are found
+        return llm_response.strip()
+
 
 def cleanup_previous_assembled_scripts():
     # Search for hidden assembled scripts with the naming pattern
@@ -466,7 +542,7 @@ def auto_handle_script_execution(final_script, autopilot=False, stream_output=Tr
 
     # Execute the script
     print(f"{CYAN}Executing {filename}...{RESET}")
-    execute_shell_command(f"./{filename}", stream_output=stream_output)
+    execute_shell_command(f"./{filename}", api_key, stream_output=stream_output)
 
 def animated_sending_message(stop_event):
     chars = ["\\", "|", "/", "-"]
@@ -501,37 +577,100 @@ def save_file():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
+def clear_line():
+    sys.stdout.write("\033[K")  # ANSI escape code to clear the line
+    sys.stdout.flush()
+    
 def process_input_in_autopilot_mode(query, autopilot_mode):
+    stop_event = threading.Event()
+    loading_thread = threading.Thread(target=animated_loading, args=(stop_event,))
+    loading_thread.start()
     print(f"{CYAN}Sending command to LLM...{RESET}")
     llm_response = chat_with_model(query, autopilot=autopilot_mode)
     scripts = extract_script_from_response(llm_response)
     if scripts:
         final_script = assemble_final_script(scripts, api_key)
         auto_handle_script_execution(final_script, autopilot=autopilot_mode, stream_output=True)
+        stop_event.clear()  # Reset the stop_event for reuse
+        stop_event.set()
+
     else:
         print("No executable script found in the LLM response.")
+    stop_event.clear()  # Reset the stop_event for reuse
+    stop_event.set()
+    loading_thread.join()
+    clear_line()
 
-if __name__ == "__main__":
+def get_weather():
+    try:
+        # Fetch weather information. Customize the URL with your city or use IP-based location
+        response = requests.get('http://wttr.in/?format=3')
+        if response.status_code == 200:
+            return response.text
+        else:
+            return "Weather information is currently unavailable."
+    except Exception as e:
+        return "Failed to fetch weather information."
+
+# Function to get basic system info
+def get_system_info():
+    info = {
+        'OS': platform.system(),
+        'Version': platform.version(),
+        'Machine': platform.machine(),
+        'Processor': platform.processor(),
+    }
+    return ", ".join([f"{key}: {value}" for key, value in info.items()])
+
+# Function to display a greeting message
+def display_greeting():
+    today = date.today()
+    last_run_file = ".last_run.txt"
+    last_run = None
+
+    # Check if the last run file exists and read the date
+    if os.path.exists(last_run_file):
+        with open(last_run_file, "r") as file:
+            last_run = file.read().strip()
+    
+    # Write the current date to the file
+    with open(last_run_file, "w") as file:
+        file.write(str(today))
+
+    # If today is not the last run date, display the greeting
+    if str(today) != last_run:
+        weather = get_weather()
+        system_info = get_system_info()
+        print(f"{weather}")
+        print(f"{system_info}")
+        print("What would you like to do today?")
+
+        # Flush the output to ensure it's displayed before waiting for input
+        sys.stdout.flush()
+
+def main():
     autopilot_mode = args.autopilot
     cleanup_previous_assembled_scripts()
-    # Call this function at the start of your program
     print_instructions_once_per_day()
-# Create a stop event for the animated loading
+    display_greeting()
     stop_event = threading.Event()
-
     # Start the animated loading in a separate thread
     loading_thread = threading.Thread(target=animated_loading, args=(stop_event, True, "Processing", 0.2))
-    loading_thread.start()
-
     if query:
+        loading_thread.start()
         process_input_in_autopilot_mode(query, autopilot_mode)
-    else:
+        stop_event.set()
+        loading_thread.join()  # Wait for the animation thread to finish
 
+    else:
+        stop_event.clear()  # Reset the stop_event for reuse
+        stop_event.set()
+ 
        # If no query is provided, enter the standard command loop
+
         while True:
             if command_mode:
-                stop_event.set()
-                loading_thread.join()
                 command = input("\033[92mCMD>\033[0m ").strip().lower()
                 if command == 'quit':
                     break
@@ -570,7 +709,7 @@ if __name__ == "__main__":
                         print(model)
                 elif command == 'config':
                     print(f"Current configuration: Model = {current_model}, Server Port = {server_port}")
-                elif command == 'server':
+#               elif command == 'server':
                     action = input("Enter server action (up, down): ")
                     if action.lower() == 'up':
                         app.run(port=server_port)
@@ -579,22 +718,46 @@ if __name__ == "__main__":
                     else:
                         print("Invalid server action")
                 command_mode = False
+            elif llm_suggestions:
+                # Process the LLM suggestions
+                print(f"{CYAN}Processing LLM suggestion:{RESET} {llm_suggestions}")
+                user_input = llm_suggestions  # Treat the suggestion as user input
+                llm_suggestions = None  # Reset the suggestions to ensure it's processed only once                 
             else:
-                stop_event.set()
-                loading_thread.join()
-                user_input = input(f"{YELLOW}You:{RESET} ").strip()
+                stop_event.set()  # Signal the thread to stop
+                sys.stdout.flush()  # Ensure all output has been flushed to the console
+                user_input = input(f"{YELLOW}@:{RESET} ").strip()
                 if user_input.upper() == 'CMD':
-                    command_mode = True
-                    continue
+                    command_mode = True 
+                    
                 elif autopilot_mode:
-                   process_input_in_autopilot_mode(user_input, autopilot_mode)
+                    llm_response = chat_with_model(user_input, autopilot=True)
+                    scripts = extract_script_from_response(llm_response)
+                    if scripts:
+                        for script, file_extension, _ in scripts:
+                            if file_extension == "py":
+                                final_script = assemble_final_script([(script, file_extension, "python")], api_key)
+                                # Execute only Python scripts with error handling and consultation
+                                execute_script_with_repl_and_consultation(final_script, api_key)
+                            else:
+                                print(f"Bypassing repl test and executing in local environment: {script[:30]}...")
+                                process_input_in_autopilot_mode(user_input, autopilot_mode)
+                                stop_event.set()
+                            
+                            print("Enter another task or press ctrl+z to quit.")
+                            
+                    else:
+                        print("No executable script found in the LLM response.")
                 else:
                     # Non-autopilot mode processing
                     last_response = chat_with_model(user_input, autopilot=False)
                     print_streamed_message(last_response, CYAN)
+                    
 
-    # Stop the animated loading
-    stop_event.set()
-    loading_thread.join()
 
     print("Operation completed.")
+    stop_event.set()
+
+
+if __name__ == "__main__":
+    main()
