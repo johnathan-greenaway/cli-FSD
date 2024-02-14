@@ -18,22 +18,15 @@ import sys
 import threading
 
 def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2):
-    if use_emojis:
-        frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "]  # Added a space after each emoji
-    else:
-        frames = ["- ", "\\ ", "| ", "/ "]  # Added a space after each ASCII character
-
+    frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "] if use_emojis else ["- ", "\\ ", "| ", "/ "]
     while not stop_event.is_set():
         for frame in frames:
             if stop_event.is_set():
                 break
-            # Added a space after the message for separation
             sys.stdout.write(f"\r{message} {frame}")
             sys.stdout.flush()
             time.sleep(interval)
-    # Clear the line after stopping
-    sys.stdout.write("\r" + " " * (len(message) + len(frames[0]) + 1) + "\r")
-
+    sys.stdout.write("\r" + " " * (len(message) + 4) + "\r")  # Clear the line
 
 # Setup argument parser for known flags only
 parser = argparse.ArgumentParser(description="Terminal Companion with Full Self Drive Mode")
@@ -133,26 +126,31 @@ def print_streamed_message(message, color=CYAN):
         time.sleep(0.03)
     print()
 
-def execute_shell_command(command, stream_output=True):
-    print(f"{CYAN}Processing...{RESET}")  # Static message before executing the command
+def execute_shell_command(command, api_key, stream_output=True):
+    """
+    Executes a given shell command and streams the output. Consults the LLM if an error occurs.
+    """
+    print(f"{CYAN}Executing command...{RESET}")
     try:
-        process = subprocess.Popen(command, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-        if stream_output:
-            # Stream output in real-time
-            for line in iter(process.stdout.readline, ''):
-                print(f"{CYAN}{line.strip()}{RESET}")
-        else:
-            # Wait for the command to complete and then process the output
-            output, _ = process.communicate()
-            print(f"{CYAN}{output.strip()}{RESET}")
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        stdout, stderr = process.communicate()
 
-        process.stdout.close()  # Close the stdout after processing the output
-        return_code = process.wait()  # Wait for the subprocess to terminate
-        if return_code:
-            raise subprocess.CalledProcessError(return_code, command)
+        if stream_output and stdout:
+            print(f"{CYAN}{stdout}{RESET}")
+
+        if process.returncode != 0 and stderr:
+            # An error occurred, add more context and consult the LLM for resolution
+            error_context = f"Error executing command '{command}': {stderr.strip()}"
+            print(f"{RED}Error encountered: {error_context}{RESET}")
+            resolution = consult_llm_for_error_resolution(error_context, api_key)
+            if resolution:
+                print(f"{GREEN}Suggested resolution:\n{resolution}{RESET}")
+            else:
+                print(f"{RED}No resolution suggested.{RESET}")
+        else:
+            print(f"{GREEN}Command executed successfully.{RESET}")
     except subprocess.CalledProcessError as e:
-        # If the command failed, print the error. Adjust depending on how you wish to display errors.
-        print(f"{YELLOW}Command failed with error: {e.output}{RESET}")
+        print(f"{RED}Command execution failed with error: {e}{RESET}")
 
 def chat_with_model(message, autopilot=False):
     headers = {
@@ -441,6 +439,8 @@ def clean_up_llm_response(llm_response):
     else:
         print("No executable script blocks found in the response.")
         return llm_response  # Return original response if no blocks are found
+        return llm_response.strip()
+
 
 def cleanup_previous_assembled_scripts():
     # Search for hidden assembled scripts with the naming pattern
@@ -466,7 +466,7 @@ def auto_handle_script_execution(final_script, autopilot=False, stream_output=Tr
 
     # Execute the script
     print(f"{CYAN}Executing {filename}...{RESET}")
-    execute_shell_command(f"./{filename}", stream_output=stream_output)
+    execute_shell_command(f"./{filename}", api_key, stream_output=stream_output)
 
 def animated_sending_message(stop_event):
     chars = ["\\", "|", "/", "-"]
@@ -501,37 +501,53 @@ def save_file():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
+
+def clear_line():
+    sys.stdout.write("\033[K")  # ANSI escape code to clear the line
+    sys.stdout.flush()
+    
 def process_input_in_autopilot_mode(query, autopilot_mode):
+    stop_event = threading.Event()
+    loading_thread = threading.Thread(target=animated_loading, args=(stop_event,))
+    loading_thread.start()
     print(f"{CYAN}Sending command to LLM...{RESET}")
     llm_response = chat_with_model(query, autopilot=autopilot_mode)
     scripts = extract_script_from_response(llm_response)
     if scripts:
         final_script = assemble_final_script(scripts, api_key)
         auto_handle_script_execution(final_script, autopilot=autopilot_mode, stream_output=True)
+        stop_event.clear()  # Reset the stop_event for reuse
+        stop_event.set()
+
     else:
         print("No executable script found in the LLM response.")
-
+    stop_event.clear()  # Reset the stop_event for reuse
+    stop_event.set()
+    loading_thread.join()
+    clear_line()
+    
 if __name__ == "__main__":
     autopilot_mode = args.autopilot
     cleanup_previous_assembled_scripts()
-    # Call this function at the start of your program
     print_instructions_once_per_day()
-# Create a stop event for the animated loading
     stop_event = threading.Event()
-
     # Start the animated loading in a separate thread
     loading_thread = threading.Thread(target=animated_loading, args=(stop_event, True, "Processing", 0.2))
-    loading_thread.start()
-
     if query:
+        loading_thread.start()
         process_input_in_autopilot_mode(query, autopilot_mode)
-    else:
+        stop_event.set()
+        loading_thread.join()  # Wait for the animation thread to finish
 
+    else:
+        stop_event.clear()  # Reset the stop_event for reuse
+        stop_event.set()
+ 
        # If no query is provided, enter the standard command loop
+
         while True:
             if command_mode:
-                stop_event.set()
-                loading_thread.join()
                 command = input("\033[92mCMD>\033[0m ").strip().lower()
                 if command == 'quit':
                     break
@@ -570,7 +586,7 @@ if __name__ == "__main__":
                         print(model)
                 elif command == 'config':
                     print(f"Current configuration: Model = {current_model}, Server Port = {server_port}")
-                elif command == 'server':
+#               elif command == 'server':
                     action = input("Enter server action (up, down): ")
                     if action.lower() == 'up':
                         app.run(port=server_port)
@@ -580,21 +596,36 @@ if __name__ == "__main__":
                         print("Invalid server action")
                 command_mode = False
             else:
-                stop_event.set()
-                loading_thread.join()
-                user_input = input(f"{YELLOW}You:{RESET} ").strip()
+                stop_event.set()  # Signal the thread to stop
+                sys.stdout.flush()  # Ensure all output has been flushed to the console
+                user_input = input(f"{YELLOW}@:{RESET} ").strip()
                 if user_input.upper() == 'CMD':
-                    command_mode = True
-                    continue
+                    command_mode = True 
+                    
                 elif autopilot_mode:
-                   process_input_in_autopilot_mode(user_input, autopilot_mode)
+                    llm_response = chat_with_model(user_input, autopilot=True)
+                    scripts = extract_script_from_response(llm_response)
+                    if scripts:
+                        for script, file_extension, _ in scripts:
+                            if file_extension == "py":
+                                final_script = assemble_final_script([(script, file_extension, "python")], api_key)
+                                # Execute only Python scripts with error handling and consultation
+                                execute_script_with_repl_and_consultation(final_script, api_key)
+                            else:
+                                print(f"Bypassing repl test and executing in local environment: {script[:30]}...")
+                                process_input_in_autopilot_mode(user_input, autopilot_mode)
+                                stop_event.set()
+                            
+                            print("Enter another task or press ctrl+z to quit.")
+                            
+                    else:
+                        print("No executable script found in the LLM response.")
                 else:
                     # Non-autopilot mode processing
                     last_response = chat_with_model(user_input, autopilot=False)
                     print_streamed_message(last_response, CYAN)
+                    
 
-    # Stop the animated loading
-    stop_event.set()
-    loading_thread.join()
 
     print("Operation completed.")
+    stop_event.set()

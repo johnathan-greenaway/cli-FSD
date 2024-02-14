@@ -18,22 +18,15 @@ import sys
 import threading
 
 def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2):
-    if use_emojis:
-        frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "]  # Added a space after each emoji
-    else:
-        frames = ["- ", "\\ ", "| ", "/ "]  # Added a space after each ASCII character
-
+    frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "] if use_emojis else ["- ", "\\ ", "| ", "/ "]
     while not stop_event.is_set():
         for frame in frames:
             if stop_event.is_set():
                 break
-            # Added a space after the message for separation
             sys.stdout.write(f"\r{message} {frame}")
             sys.stdout.flush()
             time.sleep(interval)
-    # Clear the line after stopping
-    sys.stdout.write("\r" + " " * (len(message) + len(frames[0]) + 1) + "\r")
-
+    sys.stdout.write("\r" + " " * (len(message) + 4) + "\r")  # Clear the line
 
 # Setup argument parser for known flags only
 parser = argparse.ArgumentParser(description="Terminal Companion with Full Self Drive Mode")
@@ -501,37 +494,53 @@ def save_file():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
+
+def clear_line():
+    sys.stdout.write("\033[K")  # ANSI escape code to clear the line
+    sys.stdout.flush()
+    
 def process_input_in_autopilot_mode(query, autopilot_mode):
+    stop_event = threading.Event()
+    loading_thread = threading.Thread(target=animated_loading, args=(stop_event,))
+    loading_thread.start()
     print(f"{CYAN}Sending command to LLM...{RESET}")
     llm_response = chat_with_model(query, autopilot=autopilot_mode)
     scripts = extract_script_from_response(llm_response)
     if scripts:
         final_script = assemble_final_script(scripts, api_key)
         auto_handle_script_execution(final_script, autopilot=autopilot_mode, stream_output=True)
+        stop_event.clear()  # Reset the stop_event for reuse
+        stop_event.set()
+
     else:
         print("No executable script found in the LLM response.")
-
+    stop_event.clear()  # Reset the stop_event for reuse
+    stop_event.set()
+    loading_thread.join()
+    clear_line()
+    
 if __name__ == "__main__":
     autopilot_mode = args.autopilot
     cleanup_previous_assembled_scripts()
-    # Call this function at the start of your program
     print_instructions_once_per_day()
-# Create a stop event for the animated loading
     stop_event = threading.Event()
-
     # Start the animated loading in a separate thread
     loading_thread = threading.Thread(target=animated_loading, args=(stop_event, True, "Processing", 0.2))
-    loading_thread.start()
-
     if query:
+        loading_thread.start()
         process_input_in_autopilot_mode(query, autopilot_mode)
-    else:
+        stop_event.set()
+        loading_thread.join()  # Wait for the animation thread to finish
 
+    else:
+        stop_event.clear()  # Reset the stop_event for reuse
+        stop_event.set()
+ 
        # If no query is provided, enter the standard command loop
+
         while True:
             if command_mode:
-                stop_event.set()
-                loading_thread.join()
                 command = input("\033[92mCMD>\033[0m ").strip().lower()
                 if command == 'quit':
                     break
@@ -570,7 +579,7 @@ if __name__ == "__main__":
                         print(model)
                 elif command == 'config':
                     print(f"Current configuration: Model = {current_model}, Server Port = {server_port}")
-                elif command == 'server':
+#               elif command == 'server':
                     action = input("Enter server action (up, down): ")
                     if action.lower() == 'up':
                         app.run(port=server_port)
@@ -580,21 +589,37 @@ if __name__ == "__main__":
                         print("Invalid server action")
                 command_mode = False
             else:
-                stop_event.set()
-                loading_thread.join()
-                user_input = input(f"{YELLOW}You:{RESET} ").strip()
+                stop_event.set()  # Signal the thread to stop
+                sys.stdout.flush()  # Ensure all output has been flushed to the console
+                user_input = input(f"{YELLOW}@:{RESET} ").strip()
                 if user_input.upper() == 'CMD':
-                    command_mode = True
-                    continue
+                    command_mode = True 
+                    
                 elif autopilot_mode:
-                   process_input_in_autopilot_mode(user_input, autopilot_mode)
+                    llm_response = chat_with_model(user_input, autopilot=True)
+                    scripts = extract_script_from_response(llm_response)
+                    if scripts:
+                        for script, file_extension, _ in scripts:
+                            if file_extension == "py":
+                                final_script = assemble_final_script([(script, file_extension, "python")], api_key)
+                                # Execute only Python scripts with error handling and consultation
+                                execute_script_with_repl_and_consultation(final_script, api_key)
+                            else:
+                                print(f"Bypassing repl test and executing in local environment: {script[:30]}...")
+                                process_input_in_autopilot_mode(user_input, autopilot_mode)
+                                stop_event.set()
+                            
+                            print("Process complete.")
+                            print("Enter another task or press ctrl+z to quit.")
+                            
+                    else:
+                        print("No executable script found in the LLM response.")
                 else:
                     # Non-autopilot mode processing
                     last_response = chat_with_model(user_input, autopilot=False)
                     print_streamed_message(last_response, CYAN)
+                    
 
-    # Stop the animated loading
-    stop_event.set()
-    loading_thread.join()
 
     print("Operation completed.")
+    stop_event.set()
