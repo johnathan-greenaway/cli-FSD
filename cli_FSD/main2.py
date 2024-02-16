@@ -1,4 +1,3 @@
-#0.4.6
 import os
 import requests
 import json
@@ -17,12 +16,12 @@ import time
 import argparse
 import sys
 import threading
-import shlex
-from assembler import AssemblyAssist
 
 global llm_suggestions 
 global replicate_suggestions  # This will store suggestions from Replicate
 replicate_suggestions = ""
+
+
 
 def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2):
     frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "] if use_emojis else ["- ", "\\ ", "| ", "/ "]
@@ -42,6 +41,8 @@ parser.add_argument("-autopilot", choices=['on', 'off'], default='off',
                     help="Turn autopilot mode on or off at startup")
 args, unknown = parser.parse_known_args()
 query = ' '.join(unknown)  # Construct the query from unknown arguments
+
+
 app = Flask(__name__)
 CORS(app)
 
@@ -72,17 +73,80 @@ models = {
 
 
 current_model = os.getenv("DEFAULT_MODEL", "gpt-4-turbo-preview")
+
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     api_key = input("Please enter your OpenAI API key: ")
     dotenv_path.touch(exist_ok=True)
     set_key(dotenv_path, "OPENAI_API_KEY", api_key)
 
+replicate_api_key = os.getenv("REPLICATE_API_KEY")
+if not replicate_api_key:
+    replicate_api_key = input("Please enter your Replicate API key (leave blank to skip): ")
+    if replicate_api_key:  # If a key is provided, save it to .env for future use
+        dotenv_path.touch(exist_ok=True)
+        set_key(dotenv_path, "REPLICATE_API_KEY", replicate_api_key)
 
 server_port = int(os.getenv("SERVER_PORT", 5000))
 conversation_history = []
 
+def consult_replicate_for_error_resolution(error_message, replicate_api_key):
+    """
+    Uses Replicate's API to consult for advice on resolving an encountered error.
+    """
+    global replicate_suggestions  # Use the global variable to store Replicate's suggestions
 
+    # Specify the model version ID for 'meta/codellama-34b-instruct'
+    version_id = "eeb928567781f4e90d2aba57a51baef235de53f907c214a4ab42adabf5bb9736"
+
+    headers = {
+        "Authorization": f"Token {replicate_api_key}",
+        "Content-Type": "application/json"
+    }
+
+    data = json.dumps({
+      "version": version_id,
+      "input": {
+        "top_k": 50,
+        "top_p": 0.9,
+        "prompt": f"Error encountered: {error_message}. Write a function to resolve it, and also talk like a pirate.",
+        "max_tokens": 500,
+        "temperature": 0.75,
+        "system_prompt": "Responses should be written in Python.",
+        "repeat_penalty": 1.1,
+        "presence_penalty": 0,
+        "frequency_penalty": 0
+      }
+    })
+
+    try:
+        # Start a new prediction
+        response = requests.post("https://api.replicate.com/v1/predictions", headers=headers, data=data)
+        response.raise_for_status()
+        prediction = response.json()
+        prediction_id = prediction["id"]
+
+        # Poll for the prediction result
+        while True:
+            pred_response = requests.get(f"https://api.replicate.com/v1/predictions/{prediction_id}", headers=headers)
+            pred_response.raise_for_status()
+            prediction_result = pred_response.json()
+            if prediction_result["status"] in ["succeeded", "failed", "canceled"]:
+                break
+            time.sleep(2)  # Simple polling delay
+
+        if prediction_result["status"] == "succeeded":
+            replicate_suggestions = prediction_result["output"]
+            print("Replicate suggests:\n" + replicate_suggestions)  # Optionally print suggestion
+        else:
+            print("Replicate encountered an error or the prediction was canceled.")
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to consult Replicate API: {e}")
+
+
+def handle_error_with_llm_and_replicate(error_message, api_key, replicate_api_key):
+    consult_llm_for_error_resolution(error_message, api_key)
+    consult_replicate_for_error_resolution(error_message, replicate_api_key)
 
 
 def print_instructions():
@@ -122,6 +186,7 @@ def print_instructions_once_per_day():
         print_instructions()
 
 
+
 def print_message(sender, message):
     color = YELLOW if sender == "user" else CYAN
     prefix = f"{color}You:{RESET} " if sender == "user" else f"{color}Bot:{RESET} "
@@ -133,12 +198,9 @@ def print_streamed_message(message, color=CYAN):
         time.sleep(0.03)
     print()
 
-
-
 def execute_shell_command(command, api_key, stream_output=True):
     """
-    Executes a given shell command and streams the output. If an error occurs, it consults the LLM for resolution,
-    attempts to extract actionable scripts from the LLM's response, and executes them if found.
+    Executes a given shell command and streams the output. Consults the LLM if an error occurs.
     """
     print(f"{CYAN}Executing command...{RESET}")
     try:
@@ -149,48 +211,18 @@ def execute_shell_command(command, api_key, stream_output=True):
             print(f"{CYAN}{stdout}{RESET}")
 
         if process.returncode != 0 and stderr:
+            # An error occurred, add more context and consult the LLM for resolution
             error_context = f"Error executing command '{command}': {stderr.strip()}"
             print(f"{RED}Error encountered: {error_context}{RESET}")
             resolution = consult_llm_for_error_resolution(error_context, api_key)
             if resolution:
                 print(f"{GREEN}Suggested resolution:\n{resolution}{RESET}")
-                scripts = extract_script_from_response(resolution)
-                for script, _, lang in scripts:
-                    print(f"{CYAN}Executing suggested {lang} script:{RESET}\n{script}")
-                    if lang == "bash":
-                        # Execute the script directly if it's a bash script
-                        subprocess.run(script, shell=True)
-                    elif lang == "python":
-                        # For Python scripts, you might want to handle them differently
-                        # For example, write to a .py file and then execute, or use exec()
-                        pass
-                    else:
-                        print(f"{RED}Unsupported script language: {lang}.{RESET}")
             else:
                 print(f"{RED}No resolution suggested.{RESET}")
         else:
             print(f"{GREEN}Command executed successfully.{RESET}")
     except subprocess.CalledProcessError as e:
         print(f"{RED}Command execution failed with error: {e}{RESET}")
-
-       # Optionally, allow for new user input or further actions here
-        user_input = ""  # Reset or set user_input based on your application's needs
-
-def parse_resolution_for_command(resolution):
-    """
-    Parses the LLM's resolution text to extract an actionable command.
-    This is a placeholder for your parsing logic. Adapt this to fit the format of your LLM's suggestions.
-    """
-    # Example parsing logic (very basic, likely needs to be more sophisticated)
-    if "run the command" in resolution:
-        # Extract the command following a specific phrase
-        start = resolution.find("run the command") + len("run the command")
-        command = resolution[start:].strip()
-        # Safely split the command into a list for subprocess
-        return shlex.split(command)
-    # Add more parsing rules as needed based on the format of resolutions
-    return None
-
 
 def chat_with_model(message, autopilot=False):
     headers = {
@@ -230,6 +262,7 @@ def extract_script_from_response(response):
         # Default to bash script if language is unspecified
         scripts.append((script, "sh", "bash"))
     return scripts
+
 
 def save_script(script, file_extension):
     filename = input("Enter a filename for the script (without extension): ")
@@ -275,7 +308,7 @@ def consult_llm_for_error_resolution(error_message, api_key):
     """
     Consults the LLM for advice on resolving an encountered error.
     """
-    global llm_suggestions  # Assuming this variable is properly initialized elsewhere
+    global llm_suggestions  # Use the global variable
     prompt_message = f"I encountered an error while running a script: '{error_message}'. How can I resolve this?"
 
     headers = {
@@ -295,61 +328,16 @@ def consult_llm_for_error_resolution(error_message, api_key):
         response.raise_for_status()
         chat_response = response.json()
         if chat_response['choices'] and chat_response['choices'][0]['message']['content']:
-            suggestion = chat_response['choices'][0]['message']['content'].strip()  # Assuming clean_up_llm_response does this
+            suggestion = clean_up_llm_response(chat_response['choices'][0]['message']['content'])
             llm_suggestions = suggestion  # Store the suggestion globally
             print("LLM suggests:\n" + suggestion)  # Optionally print suggestion
-            return suggestion
         else:
             print("No advice was returned by the model.")
-            return None
     except requests.exceptions.RequestException as e:
         print(f"API request error: {e}")
         return None
 
-def consult_openai_for_error_resolution(error_message, system_info="", api_key=api_key):
-    instructions = "You are a code debugging assistant. Provide debugging advice."
-    scriptReviewer = AssemblyAssist(api_key, instructions)  # Instance of AssemblyAssist
-    system_info = get_system_info
 
-
-    """
-    Consults the OpenAI API through the Script Reviewer for advice on resolving an encountered error,
-    including system information and previous LLM suggestions.
-    """
-    # Ensure api_key is defined globally or passed as an argument
-    llm_suggestion = consult_llm_for_error_resolution(error_message, api_key)
-    if not llm_suggestion:
-        print("Failed to get LLM suggestion.")
-        return
-
-    # Constructing the full message with system info and LLM suggestions
-    full_message = f"Error encountered: {error_message}.\nSystem Info: {system_info}\nLLM Suggestion: {llm_suggestion}. How can I resolve it?"
-
-    # Sending the constructed message to the Script Reviewer's thread
-    try:
-        # Adding the message to the thread
-        if scriptReviewer.add_message_to_thread(full_message):
-            # Trigger the assistant to process the thread and wait for a response
-            scriptReviewer.run_assistant()
-            # Polling for new messages from the assistant, including the response
-            response_texts = scriptReviewer.get_messages()
-            # Assuming get_messages() now returns a list of messages or an empty list
-            if response_texts:
-                response_text = " ".join([msg['content']['text']['value'] for msg in response_texts])
-                print("Script Reviewer suggests:\n" + response_text)
-                return response_text
-            else:
-                print("No response received from Script Reviewer.")
-        else:
-            print("Failed to add message to Script Reviewer's thread.")
-    except Exception as e:
-        print(f"Failed to consult Script Reviewer: {e}")
-
-
-def handle_error_with_llm_and_replicate(error_message, api_key, replicate_api_key):
-    consult_llm_for_error_resolution(error_message, api_key)
-    consult_openai_for_error_resolution(error_message, api_key)
-    #consult_replicate_for_error_resolution(error_message, replicate_api_key)
 
 def execute_script_with_repl_and_consultation(script, api_key):
     """
@@ -400,6 +388,7 @@ def execute_script_with_repl_and_consultation(script, api_key):
         else:
             print("Manual resolution required. No specific suggestions from LLM.")
 
+
 def assemble_final_script(scripts, api_key):
     """
     Sends the extracted scripts along with system information to the OpenAI API 'chat completions' endpoint 
@@ -446,6 +435,7 @@ def assemble_final_script(scripts, api_key):
     except requests.exceptions.RequestException as e:
         print(f"API request error: {e}")
         return None
+
 
 def reset_conversation():
     global conversation_history
@@ -496,6 +486,7 @@ if args.autopilot == 'on':
 else:
     autopilot_mode = False
 
+
 def create_bash_invocation_script(full_filename, language):
     bash_script_name = input("Enter a filename for the bash script (without extension): ")
     bash_full_filename = f"{bash_script_name}.sh"
@@ -526,6 +517,7 @@ def clean_up_llm_response(llm_response):
         return llm_response  # Return original response if no blocks are found
         return llm_response.strip()
 
+
 def cleanup_previous_assembled_scripts():
     # Search for hidden assembled scripts with the naming pattern
     for filename in glob.glob(".assembled_script_*.sh"):
@@ -534,6 +526,7 @@ def cleanup_previous_assembled_scripts():
             print(f"Deleted previous assembled script: {filename}")
         except OSError as e:
             print(f"Error deleting file {filename}: {e}")
+
 
 def auto_handle_script_execution(final_script, autopilot=False, stream_output=True):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -563,6 +556,8 @@ def animated_sending_message(stop_event):
 
 cleanup_previous_assembled_scripts()
 
+
+
 # Flask route to handle chat requests
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -581,6 +576,7 @@ def save_file():
         return {"status": "success", "message": f"File saved to {file_path}"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 def clear_line():
     sys.stdout.write("\033[K")  # ANSI escape code to clear the line
@@ -627,10 +623,6 @@ def get_system_info():
     }
     return ", ".join([f"{key}: {value}" for key, value in info.items()])
 
-system_info = get_system_info()
-instructions = f"You are a helpful assistant. The system information is as follows: {system_info}. Please review the following script for errors and suggest improvements."
-
-
 # Function to display a greeting message
 def display_greeting():
     today = date.today()
@@ -657,17 +649,7 @@ def display_greeting():
         # Flush the output to ensure it's displayed before waiting for input
         sys.stdout.flush()
 
-
-
 def main():
-    scriptReviewer = AssemblyAssist(
-    api_key=api_key,
-    instructions=instructions,
-    name="Script Reviewer"
-)
-    if not scriptReviewer.start_conversation():
-        print("Failed to initiate conversation with Script Reviewer.")
-        return
     autopilot_mode = args.autopilot
     cleanup_previous_assembled_scripts()
     print_instructions_once_per_day()
@@ -686,8 +668,8 @@ def main():
         stop_event.set()
  
        # If no query is provided, enter the standard command loop
+
         while True:
-            user_input = input(f"{YELLOW}@:{RESET} ").strip()
             if command_mode:
                 command = input("\033[92mCMD>\033[0m ").strip().lower()
                 if command == 'quit':
@@ -728,14 +710,14 @@ def main():
                 elif command == 'config':
                     print(f"Current configuration: Model = {current_model}, Server Port = {server_port}")
 #               elif command == 'server':
-#                    action = input("Enter server action (up, down): ")
-#                    if action.lower() == 'up':
-#                        app.run(port=server_port)
-#                    elif action.lower() == 'down':
-#                        print("Server stopping is manually handled; please use Ctrl+C.")
-#                    else:
-#                        print("Invalid server action")
-#               command_mode = False
+                    action = input("Enter server action (up, down): ")
+                    if action.lower() == 'up':
+                        app.run(port=server_port)
+                    elif action.lower() == 'down':
+                        print("Server stopping is manually handled; please use Ctrl+C.")
+                    else:
+                        print("Invalid server action")
+                command_mode = False
             elif llm_suggestions:
                 # Process the LLM suggestions
                 print(f"{CYAN}Processing LLM suggestion:{RESET} {llm_suggestions}")
@@ -761,7 +743,7 @@ def main():
                                 print(f"Bypassing repl test and executing in local environment: {script[:30]}...")
                                 process_input_in_autopilot_mode(user_input, autopilot_mode)
                                 stop_event.set()
-
+                            
                             print("Enter another task or press ctrl+z to quit.")
                             
                     else:
