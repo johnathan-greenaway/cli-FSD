@@ -12,6 +12,8 @@ from .main import execute_script_with_repl_and_consultation
 from .main import extract_script_from_response
 from .main import handle_error_with_llm_and_replicate
 
+from assembler import AssemblyAssist
+
 
 
 # You can import specific classes or functions from your modules here

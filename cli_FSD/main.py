@@ -37,9 +37,9 @@ def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.
 
 # Setup argument parser for known flags only
 parser = argparse.ArgumentParser(description="Terminal Companion with Full Self Drive Mode")
-parser.add_argument("-a", "--autopilot", action="store_true", default='off', help="Turn autopilot mode on")
-parser.add_argument("-autopilot", choices=['on', 'off'], default='off',
+parser.add_argument("-a", "--autopilot", type=str, choices=['on', 'off'], default='off',
                     help="Turn autopilot mode on or off at startup")
+args = parser.parse_args()
 args, unknown = parser.parse_known_args()
 query = ' '.join(unknown)  # Construct the query from unknown arguments
 app = Flask(__name__)
@@ -281,7 +281,7 @@ def get_system_info():
 # Global variable to store LLM suggestions
 llm_suggestions = None
 
-def consult_llm_for_error_resolution(error_message, api_key, get_system_info):
+def consult_llm_for_error_resolution(error_message, api_key):
     """
     Consults the LLM for advice on resolving an encountered error.
     """
@@ -306,7 +306,8 @@ def consult_llm_for_error_resolution(error_message, api_key, get_system_info):
         response.raise_for_status()
         chat_response = response.json()
         if chat_response['choices'] and chat_response['choices'][0]['message']['content']:
-            suggestion = chat_response['choices'][0]['message']['content'].strip()  # Assuming clean_up_llm_response does this
+            suggestion = chat_response['choices'][0]['message']['content'].strip()  # Assuming clean_up_llm_response does thiss
+            print(f"{CYAN}Processing LLM suggestion:{RESET} {llm_suggestions}")            
             llm_suggestions = suggestion  # Store the suggestion globally
             print("LLM suggests:\n" + suggestion)  # Optionally print suggestion
             return suggestion
@@ -660,16 +661,7 @@ def main():
     if args.autopilot == 'on':
         autopilot_mode = True
     else:
-        autopilot_mode = False
-    
-#    scriptReviewer = AssemblyAssist(
-#    api_key=api_key,
-#    instructions=instructions,
-#    name="Script Reviewer"
-#)
-#    if not scriptReviewer.start_conversation():
-#        print("Failed to initiate conversation with Script Reviewer.")
-#        return
+        autopilot_mode = False    
     autopilot_mode = args.autopilot
     cleanup_previous_assembled_scripts()
     print_instructions_once_per_day()
@@ -677,6 +669,7 @@ def main():
     stop_event = threading.Event()
     # Start the animated loading in a separate thread
     loading_thread = threading.Thread(target=animated_loading, args=(stop_event, True, "Processing", 0.2))
+    
     if query:
         loading_thread.start()
         process_input_in_autopilot_mode(query, autopilot_mode)
