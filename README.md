@@ -9,11 +9,19 @@ A lightweight and portable autopilot utility for your CLI. Takes natural languag
 
 ### Prerequisites
 
-- Python 3.10 (may work with earlier versions)
-- Pip for Python package installation
+- Python 3.10 or later (may work with earlier versions)
+- pip 24.0 or later 
 - An OpenAI API key
+- A Replicate API key
 
 ### Installation
+
+
+0. **Pre-requisites:**
+- Upgrade pip
+    ```bash
+     python3 -m pip install --upgrade pip
+    ```
 
 1. **Clone the repository:**
 
@@ -25,7 +33,7 @@ A lightweight and portable autopilot utility for your CLI. Takes natural languag
 2. **Set up a Python virtual environment:**
 
     ```bash
-    python -m venv venv
+    python -m venv FSD
     ```
 
 3. **Activate the virtual environment:**
@@ -33,65 +41,37 @@ A lightweight and portable autopilot utility for your CLI. Takes natural languag
     - On Windows:
 
         ```cmd
-        .\venv\Scripts\activate
+        .\FSD\Scripts\activate
         ```
 
     - On Unix or MacOS:
 
         ```bash
-        source venv/bin/activate
+        source FSD/bin/activate
         ```
 
-4. **Install the required Python packages:**
+4. **Install the cli-FSD Python package:**
 
     ```bash
-    pip install -r requirements.txt
+    pip install .
     ```
 
-    The `requirements.txt` file should include the following packages:
-
-    ```
-    Flask
-    flask-cors
-    python-dotenv
-    requests
-    ```
-
-5. **Environment Variables: (optional)**
-
-    Create a `.env` file in the project root directory and add your OpenAI API key and the server port (optional):
-
-    ```
-    OPENAI_API_KEY=your_openai_api_key_here
-    SERVER_PORT=5000 # Optional: default is 5000
-    ```
-
+   
 ### Usage
 
-- To start in companion mode in Terminal:
+- To start in safe-mode in your Terminal:
 
     ```bash
     python safe-mode.py
     ```
 
-- To enable Autopilot from the start, use the `-autopilot on` argument:
+- To run in companion mode and process a specific task using autopilot type '@' from anywhere in your terminal followed by a command:
 
     ```bash
-    python safe-mode.py -autopilot on
-    ```
-    OR:
-
-- To process a specific task using autopilot and bypass companion mode:
-
-    ```bash
-    python cli-FSD.py "Your task here"
+   @ what time is it
     ```
 
 - For additional options, you can enter `CMD` mode by typing `CMD` at any prompt.
-
-### Flask Server
-
-- To start the Flask server, enter `CMD` mode and type `server up`. The server listens on the port specified in your `.env` file or defaults to 5000.
 
 ### Contributing
 
