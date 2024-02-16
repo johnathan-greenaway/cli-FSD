@@ -18,7 +18,7 @@ import argparse
 import sys
 import threading
 import shlex
-from assembler import AssemblyAssist
+from .assembler import AssemblyAssist
 
 global llm_suggestions 
 global replicate_suggestions  # This will store suggestions from Replicate
@@ -39,7 +39,6 @@ def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.
 parser = argparse.ArgumentParser(description="Terminal Companion with Full Self Drive Mode")
 parser.add_argument("-a", "--autopilot", type=str, choices=['on', 'off'], default='off',
                     help="Turn autopilot mode on or off at startup")
-args = parser.parse_args()
 args, unknown = parser.parse_known_args()
 query = ' '.join(unknown)  # Construct the query from unknown arguments
 app = Flask(__name__)
