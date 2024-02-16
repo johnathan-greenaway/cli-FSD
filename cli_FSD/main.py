@@ -1,4 +1,4 @@
-#0.4.6
+#0.47
 import os
 import requests
 import json
@@ -81,8 +81,18 @@ if not api_key:
 
 server_port = int(os.getenv("SERVER_PORT", 5000))
 conversation_history = []
+ 
+def get_system_info():
+    info = {
+        'OS': platform.system(),
+        'Version': platform.version(),
+        'Machine': platform.machine(),
+        'Processor': platform.processor(),
+    }
+    return ", ".join([f"{key}: {value}" for key, value in info.items()])
 
-
+system_info = get_system_info()
+instructions = f"You are a helpful assistant. The system information is as follows: {system_info}. Please review the following script for errors and suggest improvements."
 
 
 def print_instructions():
@@ -184,7 +194,7 @@ def parse_resolution_for_command(resolution):
     # Example parsing logic (very basic, likely needs to be more sophisticated)
     if "run the command" in resolution:
         # Extract the command following a specific phrase
-        start = resolution.find("run the command") + len("run the command")
+        start = resolution.find("'''") + len("run the command")
         command = resolution[start:].strip()
         # Safely split the command into a list for subprocess
         return shlex.split(command)
@@ -271,12 +281,13 @@ def get_system_info():
 # Global variable to store LLM suggestions
 llm_suggestions = None
 
-def consult_llm_for_error_resolution(error_message, api_key):
+def consult_llm_for_error_resolution(error_message, api_key, get_system_info):
     """
     Consults the LLM for advice on resolving an encountered error.
     """
     global llm_suggestions  # Assuming this variable is properly initialized elsewhere
-    prompt_message = f"I encountered an error while running a script: '{error_message}'. How can I resolve this?"
+    system_info = get_system_info()
+    prompt_message = f"System Info: {system_info}\n Error: '{error_message}'. \n Provide code that resolves the error. Do not comment, only use code."
 
     headers = {
         "Content-Type": "application/json",
@@ -285,7 +296,7 @@ def consult_llm_for_error_resolution(error_message, api_key):
     data = {
         "model": "gpt-4-turbo-preview",
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "system", "content": "You are responsible for debugging errors in various shell scripts. Only respond using code articulated in markdown (as you normally do). Any natural language response will break the chain and the script. Only respond with code."},
             {"role": "user", "content": prompt_message}
         ]
     }
@@ -309,7 +320,7 @@ def consult_llm_for_error_resolution(error_message, api_key):
 def consult_openai_for_error_resolution(error_message, system_info="", api_key=api_key):
     instructions = "You are a code debugging assistant. Provide debugging advice."
     scriptReviewer = AssemblyAssist(api_key, instructions)  # Instance of AssemblyAssist
-    system_info = get_system_info
+    system_info = get_system_info()
 
 
     """
@@ -488,13 +499,6 @@ def handle_script_invocation(scripts):
                 if run:
                     execute_shell_command(f"bash {full_filename}")
 
-last_response = ""
-command_mode = False
-autopilot_mode = False
-if args.autopilot == 'on':
-    autopilot_mode = True
-else:
-    autopilot_mode = False
 
 def create_bash_invocation_script(full_filename, language):
     bash_script_name = input("Enter a filename for the bash script (without extension): ")
@@ -617,18 +621,6 @@ def get_weather():
     except Exception as e:
         return "Failed to fetch weather information."
 
-# Function to get basic system info
-def get_system_info():
-    info = {
-        'OS': platform.system(),
-        'Version': platform.version(),
-        'Machine': platform.machine(),
-        'Processor': platform.processor(),
-    }
-    return ", ".join([f"{key}: {value}" for key, value in info.items()])
-
-system_info = get_system_info()
-instructions = f"You are a helpful assistant. The system information is as follows: {system_info}. Please review the following script for errors and suggest improvements."
 
 
 # Function to display a greeting message
@@ -660,14 +652,24 @@ def display_greeting():
 
 
 def main():
-    scriptReviewer = AssemblyAssist(
-    api_key=api_key,
-    instructions=instructions,
-    name="Script Reviewer"
-)
-    if not scriptReviewer.start_conversation():
-        print("Failed to initiate conversation with Script Reviewer.")
-        return
+    global llm_suggestions 
+
+    last_response = ""
+    command_mode = False
+    autopilot_mode = False
+    if args.autopilot == 'on':
+        autopilot_mode = True
+    else:
+        autopilot_mode = False
+    
+#    scriptReviewer = AssemblyAssist(
+#    api_key=api_key,
+#    instructions=instructions,
+#    name="Script Reviewer"
+#)
+#    if not scriptReviewer.start_conversation():
+#        print("Failed to initiate conversation with Script Reviewer.")
+#        return
     autopilot_mode = args.autopilot
     cleanup_previous_assembled_scripts()
     print_instructions_once_per_day()
@@ -687,7 +689,6 @@ def main():
  
        # If no query is provided, enter the standard command loop
         while True:
-            user_input = input(f"{YELLOW}@:{RESET} ").strip()
             if command_mode:
                 command = input("\033[92mCMD>\033[0m ").strip().lower()
                 if command == 'quit':
