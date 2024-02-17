@@ -17,7 +17,7 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 
 0. **Pre-requisites:**
 - Upgrade pip
-    ```bash
+    ```
      python3 -m pip install --upgrade pip
     ```
 
