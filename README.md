@@ -62,7 +62,7 @@ A lightweight and portable autopilot utility for your CLI. Takes natural languag
 - To start in safe-mode in your Terminal:
 
     ```bash
-    python safe-mode.py
+    @ what time is it -s
     ```
 
 - To run in companion mode and process a specific task using autopilot type '@' from anywhere in your terminal followed by a command:
