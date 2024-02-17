@@ -681,6 +681,14 @@ def process_input_in_safe_mode(query, safe_mode):
     else:
         print("No executable script found in the LLM response.")
 
+def process_input_based_on_mode(query, safe_mode, autopilot_mode):
+    if safe_mode:
+        process_input_in_safe_mode(query, safe_mode)
+    elif autopilot_mode:
+        process_input_in_autopilot_mode(query, autopilot_mode)
+    else:
+        process_input(query)
+                      
 def main():
     global llm_suggestions
 
@@ -710,22 +718,11 @@ def main():
 
     # Start the animated loading in a separate thread only if a query is present
     if query:
-        if safe_mode:
-            # Process the input in safe mode
-            print("Safe mode is ON. You will be prompted before executing any commands.")
-            process_input_in_safe_mode(query, safe_mode)  # This function should handle the safe mode logic
-        elif autopilot_mode:
-            # Process the input in autopilot mode
-            process_input_in_autopilot_mode(query, autopilot_mode)
-        else:
-
-            process_input(query)
-            stop_event.set()
-            loading_thread = threading.Thread(target=animated_loading, args=(stop_event,))
-        
+        process_input_based_on_mode(query, safe_mode, autopilot_mode)            # Process the input in safe mode
 
     while True:
         user_input = input(f"{YELLOW}@:{RESET} ").strip()
+        scripts = [] 
 
         if command_mode:
             command = input("\033[92mCMD>\033[0m ").strip().lower()
@@ -776,6 +773,22 @@ def main():
             sys.stdout.flush()  # Ensure all output has been flushed to the console
             if user_input.upper() == 'CMD':
                 command_mode = True 
+            if user_input.lower() == 'safe':
+                safe_mode = True
+                autopilot_mode = False
+                print("Switched to safe mode. You will be prompted before executing any commands.")
+            elif user_input.lower() == 'autopilot':
+                safe_mode = False
+                autopilot_mode = True
+                print("Switched to autopilot mode.")
+            elif user_input.lower() == 'normal':
+                safe_mode = False
+                autopilot_mode = False
+                print("Switched to normal mode.")
+
+            # If no special commands, process input based on current mode
+            if not command_mode:
+                process_input_based_on_mode(user_input, safe_mode, autopilot_mode)            
                 
             elif autopilot_mode:
                 llm_response = chat_with_model(user_input, autopilot=True)
