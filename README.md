@@ -79,7 +79,7 @@ Contributions to this project are welcome. Please fork the repository, make your
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
+This project is licensed under the GNU GPL - see the [LICENSE.md](LICENSE.md) file for details.
 
 ## Acknowledgments
 
