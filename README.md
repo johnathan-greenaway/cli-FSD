@@ -1,7 +1,7 @@
 # cli-FSD
-Natural language driven autopilot for interfacing with your command line. 
+Natural language interface for your command line. 
 
-A lightweight and portable autopilot utility for your CLI. Takes natural language as input and uses the OpenAI API to take the appropriate actions by generating and parsing shell scripts. Run '''safe mode.py''' to run as a terminal companion that creates, stored and asks permission to execute scripts incrementally to accomplish the user's request.
+A lightweight and portable autopilot utility for CLI tasks. Takes natural language as input and uses the OpenAI API to take the appropriate actions by generating and parsing shell scripts. Find answers to questions and let AI execute commands with your permission in Safe Mode or enable Autopilot to automate tasks or make script modules and microservices on the fly. 
 
 **Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments. 
 
@@ -12,10 +12,8 @@ A lightweight and portable autopilot utility for your CLI. Takes natural languag
 - Python 3.10 or later (may work with earlier versions)
 - pip 24.0 or later 
 - An OpenAI API key
-- A Replicate API key
 
 ### Installation
-
 
 0. **Pre-requisites:**
 - Upgrade pip
@@ -23,7 +21,16 @@ A lightweight and portable autopilot utility for your CLI. Takes natural languag
      python3 -m pip install --upgrade pip
     ```
 
-1. **Clone the repository:**
+**Install using pip:**
+
+    ```bash
+    pip install cli-FSD
+    ```
+  (if you are testing the package, follow steps to setup and activate a virtual environment **before** running pip install.).
+
+**Manual Installation**
+
+1. **Clone the repo:**
 
     ```bash
     git clone https://github.com/WazaCraft/cli-FSD
@@ -55,7 +62,6 @@ A lightweight and portable autopilot utility for your CLI. Takes natural languag
     ```bash
     pip install .
     ```
-
    
 ### Usage
 
