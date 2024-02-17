@@ -16,16 +16,16 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 ### Installation
 
 0. **Pre-requisites:**
+   
 - Upgrade pip
-    ```
-         python3 -m pip install --upgrade pip
-    ```
+
+           python3 -m pip install --upgrade pip
+    
 
 **Install using pip:**
 
-    ```
     pip install cli-FSD
-    ```
+
   (if you are testing the package, follow steps to setup and activate a virtual environment **before** running pip install.).
 
 **Manual Installation**
