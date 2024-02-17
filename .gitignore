@@ -5,7 +5,10 @@ __pycache__/
 
 # C extensions
 *.so
-
+.lastrun.txt
+.last_run.txt
+.last_instructions_display.txt
+*.assembled_
 # Distribution / packaging
 .Python
 build/

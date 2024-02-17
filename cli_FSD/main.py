@@ -36,13 +36,6 @@ def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.
     sys.stdout.write("\r" + " " * (len(message) + 4) + "\r")  # Clear the line
 
 # Setup argument parser for known flags only
-parser = argparse.ArgumentParser(description="Terminal Companion with Full Self Drive Mode")
-parser.add_argument("-a", "--autopilot", type=str, choices=['on', 'off'], default='off',
-                    help="Turn autopilot mode on or off at startup")
-args, unknown = parser.parse_known_args()
-query = ' '.join(unknown)  # Construct the query from unknown arguments
-app = Flask(__name__)
-CORS(app)
 
 CYAN = "\033[96m"
 YELLOW = "\033[93m"
@@ -92,7 +85,8 @@ def get_system_info():
 
 system_info = get_system_info()
 instructions = f"You are a helpful assistant. The system information is as follows: {system_info}. Please review the following script for errors and suggest improvements."
-
+app = Flask(__name__)
+CORS(app)
 
 def print_instructions():
     print(f"{GREEN}{BOLD}Terminal Companion with Full Self Drive Mode{RESET}")
@@ -144,11 +138,17 @@ def print_streamed_message(message, color=CYAN):
 
 
 
-def execute_shell_command(command, api_key, stream_output=True):
+def execute_shell_command(command, api_key, stream_output=True, safe_mode=False):
     """
     Executes a given shell command and streams the output. If an error occurs, it consults the LLM for resolution,
     attempts to extract actionable scripts from the LLM's response, and executes them if found.
     """
+    if safe_mode:
+        user_confirmation = input(f"Do you want to execute the following command: {command}? (yes/no): ").lower()
+        if user_confirmation != "yes":
+            print("Command execution aborted by the user.")
+            return
+
     print(f"{CYAN}Executing command...{RESET}")
     try:
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
@@ -157,21 +157,21 @@ def execute_shell_command(command, api_key, stream_output=True):
         if stream_output and stdout:
             print(f"{CYAN}{stdout}{RESET}")
 
+        # Check the process return code and handle errors
         if process.returncode != 0 and stderr:
             error_context = f"Error executing command '{command}': {stderr.strip()}"
             print(f"{RED}Error encountered: {error_context}{RESET}")
+            # Consult the LLM for error resolution
             resolution = consult_llm_for_error_resolution(error_context, api_key)
             if resolution:
                 print(f"{GREEN}Suggested resolution:\n{resolution}{RESET}")
+                # Extract and execute scripts from the resolution, if any
                 scripts = extract_script_from_response(resolution)
                 for script, _, lang in scripts:
-                    print(f"{CYAN}Executing suggested {lang} script:{RESET}\n{script}")
                     if lang == "bash":
-                        # Execute the script directly if it's a bash script
-                        subprocess.run(script, shell=True)
+                        execute_shell_command(script, api_key, safe_mode=safe_mode)
                     elif lang == "python":
-                        # For Python scripts, you might want to handle them differently
-                        # For example, write to a .py file and then execute, or use exec()
+                        # Handle Python script execution
                         pass
                     else:
                         print(f"{RED}Unsupported script language: {lang}.{RESET}")
@@ -182,8 +182,7 @@ def execute_shell_command(command, api_key, stream_output=True):
     except subprocess.CalledProcessError as e:
         print(f"{RED}Command execution failed with error: {e}{RESET}")
 
-       # Optionally, allow for new user input or further actions here
-        user_input = ""  # Reset or set user_input based on your application's needs
+        # Handle the error and potentially prompt for user input or further action
 
 def parse_resolution_for_command(resolution):
     """
@@ -240,13 +239,23 @@ def extract_script_from_response(response):
         scripts.append((script, "sh", "bash"))
     return scripts
 
-def save_script(script, file_extension):
-    filename = input("Enter a filename for the script (without extension): ")
+def save_script(script, file_extension, stop_event = threading.Event()
+):
+    stop_event = threading.Event()
+    # Adding a space after the prompt icon for clarity
+    stop_event.set()  # Signal to stop the loading animation
+    loading_thread = threading.Thread(target=animated_loading, args=(stop_event,))
+    loading_thread.start()
+
+
+    loading_thread.join()  # Wait for the thread to finish
+    filename = input("Enter a filename for the script (without extension): ").strip()  # Ensure to strip any leading/trailing whitespace
     full_filename = f"{filename}.{file_extension}"
     with open(full_filename, "w") as file:
         file.write(script)
     print(f"Script saved as {full_filename}.")
     return full_filename
+
 
 def user_decide_and_act(script, file_extension):
     if script:
@@ -495,9 +504,11 @@ def handle_script_invocation(scripts):
                         print(f"Run the following command to add to $PATH:\n{export_path_command}")
                         # Note: This change will only last for the session; consider adding to profile files for permanence
             elif file_extension == "sh":
+                safe_mode = args.safe  # This is already a boolean due to action="store_true"
+
                 run = input("Would you like to run this bash script now? (yes/no): ").lower() == "yes"
                 if run:
-                    execute_shell_command(f"bash {full_filename}")
+                    execute_shell_command(f"bash {full_filename}",  api_key, stream_output=True, safe_mode=safe_mode)
 
 
 def create_bash_invocation_script(full_filename, language):
@@ -649,121 +660,167 @@ def display_greeting():
         # Flush the output to ensure it's displayed before waiting for input
         sys.stdout.flush()
 
+def process_input_in_safe_mode(query, safe_mode):
+    llm_response = chat_with_model(query, autopilot=False)
+    print_streamed_message(llm_response, CYAN)  # Ensure the LLM's response is printed
 
+    scripts = extract_script_from_response(llm_response)
+    if scripts:
+        for script, file_extension, _ in scripts:
+            full_filename = save_script(script, file_extension)  # This function saves the script and returns the filename
+            print(f"Script extracted and saved as {full_filename}.")
+            # Ask the user if they want to execute the saved script
+            if safe_mode:
+                user_confirmation = input(f"Do you want to execute the saved script {full_filename}? (yes/no): ").lower()
+                if user_confirmation == "yes":
+                    execute_shell_command(f"bash {full_filename}", api_key, safe_mode=safe_mode)
+                else:
+                    print("Script execution aborted by the user.")
+            else:
+                execute_shell_command(f"bash {full_filename}", api_key, safe_mode=safe_mode)
+    else:
+        print("No executable script found in the LLM response.")
 
 def main():
-    global llm_suggestions 
+    global llm_suggestions
 
     last_response = ""
     command_mode = False
-    autopilot_mode = False
-    if args.autopilot == 'on':
-        autopilot_mode = True
-    else:
-        autopilot_mode = False    
-    autopilot_mode = args.autopilot
     cleanup_previous_assembled_scripts()
     print_instructions_once_per_day()
     display_greeting()
     stop_event = threading.Event()
-    # Start the animated loading in a separate thread
-    loading_thread = threading.Thread(target=animated_loading, args=(stop_event, True, "Processing", 0.2))
+
+
+    # Setup argument parser
+    parser = argparse.ArgumentParser(description="Terminal Companion with Full Self Drive Mode")
+    parser.add_argument("-s", "--safe", action="store_true", help="Run in safe mode")
+    parser.add_argument("-a", "--autopilot", choices=['on', 'off'], default='off',
+                        help="Turn autopilot mode on or off at startup")
+    args, unknown = parser.parse_known_args()
     
+    # If additional arguments are provided, join them into a single string
+    query = ' '.join(unknown)
+
+    # Set autopilot mode based on the -a or --autopilot argument
+    autopilot_mode = args.autopilot
+    safe_mode = args.safe 
+
+
+
+    # Start the animated loading in a separate thread only if a query is present
     if query:
-        loading_thread.start()
-        process_input_in_autopilot_mode(query, autopilot_mode)
-        stop_event.set()
-        loading_thread.join()  # Wait for the animation thread to finish
+        if safe_mode:
+            # Process the input in safe mode
+            print("Safe mode is ON. You will be prompted before executing any commands.")
+            process_input_in_safe_mode(query, safe_mode)  # This function should handle the safe mode logic
+        elif autopilot_mode:
+            # Process the input in autopilot mode
+            process_input_in_autopilot_mode(query, autopilot_mode)
+        else:
 
-    else:
-        stop_event.clear()  # Reset the stop_event for reuse
-        stop_event.set()
- 
-       # If no query is provided, enter the standard command loop
-        while True:
-            if command_mode:
-                command = input("\033[92mCMD>\033[0m ").strip().lower()
-                if command == 'quit':
-                    break
-                elif command == 'reset':
-                    reset_conversation()
-                    print("\033[94mThe conversation has been reset.\033[0m")
-                elif command == 'save':
-                    file_path = input("Enter the file path to save the last response: ")
-                    with open(file_path, "w") as file:
-                        file.write(last_response)
-                    print(f"Response saved to {file_path}")
-                elif command == 'autopilot':
-                    autopilot_mode = not autopilot_mode
-                    print(f"Autopilot mode {'enabled' if autopilot_mode else 'disabled'}.")
-                elif command == 'script':
-                    if last_response:
-                        scripts = extract_script_from_response(last_response)
-                        if scripts:
-                            final_script = assemble_final_script(scripts)
-                            auto_handle_script_execution(final_script)  # Call the revised function here
-                        else:
-                            print("No script found in the last response.")
-                    else:
-                        print("No last response to process.")
+            process_input(query)
+            stop_event.set()
+            loading_thread = threading.Thread(target=animated_loading, args=(stop_event,))
+        
 
-                elif command == 'model':
-                    new_model = input("Enter the model to switch to: ")
-                    if new_model in models:
-                        current_model = new_model
-                        print(f"Model switched to {current_model}")
-                    else:
-                        print("Invalid model")
-                elif command == 'list_models':
-                    print("Available models:")
-                    for model in models.keys():
-                        print(model)
-                elif command == 'config':
-                    print(f"Current configuration: Model = {current_model}, Server Port = {server_port}")
-#               elif command == 'server':
-#                    action = input("Enter server action (up, down): ")
-#                    if action.lower() == 'up':
-#                        app.run(port=server_port)
-#                    elif action.lower() == 'down':
-#                        print("Server stopping is manually handled; please use Ctrl+C.")
-#                    else:
-#                        print("Invalid server action")
-#               command_mode = False
-            elif llm_suggestions:
-                # Process the LLM suggestions
-                print(f"{CYAN}Processing LLM suggestion:{RESET} {llm_suggestions}")
-                user_input = llm_suggestions  # Treat the suggestion as user input
-                llm_suggestions = None  # Reset the suggestions to ensure it's processed only once                 
-            else:
-                stop_event.set()  # Signal the thread to stop
-                sys.stdout.flush()  # Ensure all output has been flushed to the console
-                user_input = input(f"{YELLOW}@:{RESET} ").strip()
-                if user_input.upper() == 'CMD':
-                    command_mode = True 
-                    
-                elif autopilot_mode:
-                    llm_response = chat_with_model(user_input, autopilot=True)
-                    scripts = extract_script_from_response(llm_response)
+    while True:
+        user_input = input(f"{YELLOW}@:{RESET} ").strip()
+
+        if command_mode:
+            command = input("\033[92mCMD>\033[0m ").strip().lower()
+            if command == 'quit':
+                break
+            elif command == 'reset':
+                reset_conversation()
+                print("\033[94mThe conversation has been reset.\033[0m")
+            elif command == 'save':
+                file_path = input("Enter the file path to save the last response: ")
+                with open(file_path, "w") as file:
+                    file.write(last_response)
+                print(f"Response saved to {file_path}")
+            elif command == 'autopilot':
+                autopilot_mode = not autopilot_mode
+                print(f"Autopilot mode {'enabled' if autopilot_mode else 'disabled'}.")
+            elif command == 'script':
+                if last_response:
+                    scripts = extract_script_from_response(last_response)
                     if scripts:
-                        for script, file_extension, _ in scripts:
-                            if file_extension == "py":
-                                final_script = assemble_final_script([(script, file_extension, "python")], api_key)
-                                # Execute only Python scripts with error handling and consultation
-                                execute_script_with_repl_and_consultation(final_script, api_key)
-                            else:
-                                print(f"Bypassing repl test and executing in local environment: {script[:30]}...")
-                                process_input_in_autopilot_mode(user_input, autopilot_mode)
-                                stop_event.set()
-
-                            print("Enter another task or press ctrl+z to quit.")
-                            
+                        final_script = assemble_final_script(scripts)
+                        auto_handle_script_execution(final_script)  # Call the revised function here
                     else:
-                        print("No executable script found in the LLM response.")
+                        print("No script found in the last response.")
                 else:
-                    # Non-autopilot mode processing
-                    last_response = chat_with_model(user_input, autopilot=False)
-                    print_streamed_message(last_response, CYAN)
-                    
+                    print("No last response to process.")
+            elif command == 'model':
+                new_model = input("Enter the model to switch to: ")
+                if new_model in models:
+                    current_model = new_model
+                    print(f"Model switched to {current_model}")
+                else:
+                    print("Invalid model")
+            elif command == 'list_models':
+                print("Available models:")
+                for model in models.keys():
+                    print(model)
+            elif command == 'config':
+                print(f"Current configuration: Model = {current_model}, Server Port = {server_port}")
+        elif llm_suggestions:
+            # Process the LLM suggestions
+            print(f"{CYAN}Processing LLM suggestion:{RESET} {llm_suggestions}")
+            user_input = llm_suggestions  # Treat the suggestion as user input
+            llm_suggestions = None  # Reset the suggestions to ensure it's processed only once                 
+        else:
+            sys.stdout.flush()  # Ensure all output has been flushed to the console
+            stop_event.set()  # Signal the thread to stop
+            sys.stdout.flush()  # Ensure all output has been flushed to the console
+            if user_input.upper() == 'CMD':
+                command_mode = True 
+                
+            elif autopilot_mode:
+                llm_response = chat_with_model(user_input, autopilot=True)
+                scripts = extract_script_from_response(llm_response)
+            if scripts:
+                for script, file_extension, _ in scripts:
+                    filename = input("Enter a filename for the script (without extension): ")   
+                    full_filename = f"{filename}.{file_extension}"
+                    with open(full_filename, "w") as file:
+                        file.write(script)
+            
+                    if file_extension == "py":
+                        final_script = assemble_final_script([(script, file_extension, "python")], api_key)
+                        # Execute only Python scripts with error handling and consultation
+                        execute_script_with_repl_and_consultation(final_script, api_key)
+                    elif file_extension == "sh":
+                        # Add the `safe_mode` parameter when executing the script
+                        execute_shell_command(f"bash {full_filename}", api_key, safe_mode=safe_mode)
+                    else:
+                        print(f"Bypassing repl test and executing in local environment: {script[:30]}...")
+                        process_input_in_autopilot_mode(user_input, autopilot_mode)
+                        stop_event.set()
+
+                        print("Enter another task or press ctrl+z to quit.")
+                        
+            else:
+                    print("No executable script found in the LLM response.")
+        if not autopilot_mode or safe_mode:
+            user_input = input(f"{YELLOW}@:{RESET} ").strip()
+            # Non-autopilot mode processing
+            process_input_in_safe_mode(query, safe_mode)  # This function should handle the safe mode logic
+            print_streamed_message(last_response, CYAN)
+
+        elif safe_mode == True:
+            user_input = input(f"{YELLOW}@:{RESET} ").strip()
+            # Non-autopilot mode processing
+            process_input_in_safe_mode(query, safe_mode)  # This function should handle the safe mode logic
+            print_streamed_message(last_response, CYAN)
+
+        elif autopilot_mode == True:
+            user_input = input(f"{YELLOW}@:{RESET} ").strip()
+            # Non-autopilot mode processing
+            process_input_in_autopilot_mode(query, safe_mode)  # This function should handle the safe mode logic
+            print_streamed_message(last_response, CYAN)
+                                                                
 
 
     print("Operation completed.")
