@@ -18,12 +18,12 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 0. **Pre-requisites:**
 - Upgrade pip
     ```
-     python3 -m pip install --upgrade pip
+         python3 -m pip install --upgrade pip
     ```
 
 **Install using pip:**
 
-    ```bash
+    ```
     pip install cli-FSD
     ```
   (if you are testing the package, follow steps to setup and activate a virtual environment **before** running pip install.).
@@ -32,15 +32,15 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 
 1. **Clone the repo:**
 
-    ```bash
+    ```
     git clone https://github.com/WazaCraft/cli-FSD
     cd cli-FSD
     ```
 
 2. **Set up a Python virtual environment:**
 
-    ```bash
-    python -m venv FSD
+    ```
+        python -m venv FSD
     ```
 
 3. **Activate the virtual environment:**
