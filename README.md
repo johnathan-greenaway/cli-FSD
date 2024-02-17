@@ -79,6 +79,10 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 
 - For additional options, you can enter `CMD` mode by typing `CMD` at any prompt.
 
+### Try it in Codespaces
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
+))
+
 ### Contributing
 
 Contributions to this project are welcome. Please fork the repository, make your changes, and submit a pull request for review.
