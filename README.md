@@ -5,6 +5,7 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 
 **Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments. I made this tool to help me learn, experiment and problem solve in low stakes development environments. If you don't have access to a machine like that you can also: 
 
+
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
 )
 
