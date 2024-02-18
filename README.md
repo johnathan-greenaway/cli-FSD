@@ -28,7 +28,7 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
            python3 -m pip install --upgrade pip
     
 
-**Install using pip:**
+**One line install using pip:**
 
     pip install cli-FSD
 
