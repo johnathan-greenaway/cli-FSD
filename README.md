@@ -7,8 +7,7 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 
 ##### I made cli-FSD for experimenting and problem solving in low stakes development environments. If you don't have access to a machine like that you can try it below: 
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
-)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main)
 
 [![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@wazacraft/cli-FSD)
 ## Getting Started
@@ -90,11 +89,9 @@ Letting an LLM execute code on your computer is objectively dangerous. I've used
 
 If you don't want to run it locally:
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
-)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main)
 
-
-[![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)(https://repl.it/wazacraft/cli-FSD)]
+[![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@wazacraft/cli-FSD)
 
 ## Project Progress
 ### To Do
