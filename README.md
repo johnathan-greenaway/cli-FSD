@@ -89,8 +89,11 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 Letting an LLM execute code on your computer is objectively dangerous. I've used cli-FSD on every computer I own but think it's important for users to understand the risk associated with this concept. 
 
 If you don't want to run it locally:
+
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
 )
+
+
 [![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@yourusername/projectname)
 
 ## Project Progress
