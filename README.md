@@ -10,7 +10,7 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
 )
 
-[![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@yourusername/projectname)
+[![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@wazacraft/cli-FSD)
 ## Getting Started
 
 ### Prerequisites
