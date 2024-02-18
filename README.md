@@ -97,12 +97,18 @@ If you don't want to run it locally:
 ### To Do
 - [x] - implement LLM error handling and resolution flows 
 - [x] - refactor flags for SafeMode, Autopilot
+- [ ] - implement restricted commands parser
 - [ ] - refactor and expand CMD module. 
 - [ ] - finish OpenAI Assistants integration
-- [ ] - Replicate API integration
+- [ ] - integrate other LLM providers with http request APIs similar to /v1/completions
+- [ ] - build advanced menu and config options
 
 ## Considering
-- [ ] - Automated error detection    
+- [ ] - passive error detection and resolution for CLI interactions
+- [ ] - voice control
+   - [ ] - voice notation
+- [ ] - automation schedules and background states
+
 
 ### Contributing
 
