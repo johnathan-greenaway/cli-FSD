@@ -3,7 +3,10 @@ Natural language interface for your command line.
 
 A lightweight and portable autopilot utility for CLI tasks. Takes natural language as input and uses the OpenAI API to take the appropriate actions by generating and parsing shell scripts. Find answers to questions and let AI execute commands with your permission in Safe Mode or enable Autopilot to automate tasks or make script modules and microservices on the fly. 
 
-**Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments. 
+**Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments. I made this tool to help me learn, experiment and problem solve in low stakes development environments. If you don't have access to a machine like that you can also: 
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
+)
 
 ## Getting Started
 
@@ -79,9 +82,17 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 
 - For additional options, you can enter `CMD` mode by typing `CMD` at any prompt.
 
-### Try it in Codespaces
+### Low-stakes Demos
+Letting an LLM execute code on your computer is objectively dangerous. I've used cli-FSD on every computer I own but think it's important for users to understand the risk associated with this concept. 
+
+If you don't want to run it locally:
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
-))
+)
+
+https://replit.com/@WazaCraft/cli-FSD?v=1
+
+
+
 
 ### Contributing
 
