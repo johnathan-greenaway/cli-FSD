@@ -5,11 +5,12 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 
 **Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments.
 
-I made cli-FSD for experimenting and problem solving in low stakes development environments. If you don't have access to a machine like that you can try it using: 
+##### I made cli-FSD for experimenting and problem solving in low stakes development environments. If you don't have access to a machine like that you can try it using: 
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
 )
 
+[![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@yourusername/projectname)
 ## Getting Started
 
 ### Prerequisites
@@ -90,14 +91,28 @@ Letting an LLM execute code on your computer is objectively dangerous. I've used
 If you don't want to run it locally:
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
 )
+[![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@yourusername/projectname)
 
-https://repl.it/badge/github/wazacraft/cli-fsd
+## Project Progress
+### To Do
+- [x] - implement LLM error handling and resolution flows 
+- [x] - refactor flags for SafeMode, Autopilot
+- [ ] - refactor and expand CMD module. 
+- [ ] - finish OpenAI Assistants integration
+- [ ] - Replicate API integration
 
-
+## Considering
+- [ ] - Automated error detection    
 
 ### Contributing
 
 Contributions to this project are welcome. Please fork the repository, make your changes, and submit a pull request for review.
+
+Contributions to the main branch should aim to adhere to the project principles: 
+- portable (I'm avoiding unnecessary dependencies whenever possible)
+- utility focused
+
+
 
 ## License
 
