@@ -91,7 +91,7 @@ If you don't want to run it locally:
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
 )
 
-https://repl.it/github/wazacraft/cli-fsd
+https://repl.it/badge/github/wazacraft/cli-fsd
 
 
 
