@@ -5,7 +5,7 @@ A lightweight and portable autopilot utility for CLI tasks. Takes natural langua
 
 **Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments.
 
-##### I made cli-FSD for experimenting and problem solving in low stakes development environments. If you don't have access to a machine like that you can try it using: 
+##### I made cli-FSD for experimenting and problem solving in low stakes development environments. If you don't have access to a machine like that you can try it below: 
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)]([URL](https://github.com/codespaces/new?repo=wazacraft/cli-FSD&ref=main
 )
