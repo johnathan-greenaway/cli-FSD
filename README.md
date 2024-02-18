@@ -94,8 +94,7 @@ If you don't want to run it locally:
 )
 
 
-[![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@yourusername/projectname)
-
+[![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)]
 ## Project Progress
 ### To Do
 - [x] - implement LLM error handling and resolution flows 
