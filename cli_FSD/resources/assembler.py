@@ -130,7 +130,7 @@ class AssemblyAssist:
     
 # Testing block
 if __name__ == "__main__":
-    api_key = "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"  # Replace with your actual OpenAI API key
+    # api_key = YOUR OPENAI-API-KEY# Replace with your actual OpenAI API key
     instructions = "You are a code debugging assistant. Provide debugging advice."  # Example instructions
     chatbot = AssemblyAssist(api_key, instructions)
 

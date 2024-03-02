@@ -1,4 +1,7 @@
-#0.48
+
+#0.75 - Refactored resolution process 
+#to-do: clean up old resolution flow, fix CMD mode, fixed assembly assist import
+
 import os
 import requests
 import json
@@ -10,6 +13,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv, set_key
 from pathlib import Path
 from datetime import datetime,date
+from .resources.assembler import AssemblyAssist
 import platform
 import glob
 import asyncio
@@ -18,11 +22,13 @@ import argparse
 import sys
 import threading
 import shlex
-from .assembler import AssemblyAssist
+import queue
 
 global llm_suggestions 
 global replicate_suggestions  # This will store suggestions from Replicate
 replicate_suggestions = ""
+
+suggestions_queue = queue.Queue()
 
 def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2):
     frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "] if use_emojis else ["- ", "\\ ", "| ", "/ "]
@@ -45,6 +51,8 @@ BOLD = "\033[1m"
 RED = "\033[31m"
 GREEN = "\033[32m"
 YELLOW = "\033[33m"
+
+
 
 dotenv_path = Path('.env')
 load_dotenv(dotenv_path=dotenv_path)
@@ -124,6 +132,10 @@ def print_instructions_once_per_day():
             file.write(current_date.strftime("%Y-%m-%d"))
         print_instructions()
 
+def ask_user_to_retry():
+    # Ask user if they want to retry the original command after executing the resolution
+    user_input = input("Do you want to retry the original command? (yes/no): ").lower()
+    return user_input == "yes"
 
 def print_message(sender, message):
     color = YELLOW if sender == "user" else CYAN
@@ -136,53 +148,55 @@ def print_streamed_message(message, color=CYAN):
         time.sleep(0.03)
     print()
 
+def process_pending_suggestions():
+    while not suggestions_queue.empty():
+        suggestion = suggestions_queue.get()
+        print(f"{CYAN}Processing LLM suggestion:{RESET} {suggestion}")
+        # Execute the suggestion if it's a valid command
+        if suggestion.strip().startswith("chmod"):
+            subprocess.run(suggestion, shell=True, text=True)
+            print(f"{GREEN}Suggestion executed: {suggestion}{RESET}")
+        suggestions_queue.task_done()
 
 
 def execute_shell_command(command, api_key, stream_output=True, safe_mode=False):
-    """
-    Executes a given shell command and streams the output. If an error occurs, it consults the LLM for resolution,
-    attempts to extract actionable scripts from the LLM's response, and executes them if found.
-    """
+    global llm_suggestions
+    
+    if command.startswith('./'):
+        os.chmod(command[2:], 0o755)  # Ensure the script is executable
+
     if safe_mode:
-        user_confirmation = input(f"Do you want to execute the following command: {command}? (yes/no): ").lower()
-        if user_confirmation != "yes":
+        user_confirmation = input(f"Do you want to execute the following command: {command}? (yes/no): ").strip()
+        if user_confirmation.lower() != "yes":
             print("Command execution aborted by the user.")
             return
 
-    print(f"{CYAN}Executing command...{RESET}")
     try:
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        stdout, stderr = process.communicate()
+        # Redirecting stderr to stdout to capture all output
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1)
+        
+        output_lines = []
+        for line in iter(process.stdout.readline, ''):
+            if stream_output:
+                print(line, end='')  # Print each line of output as it comes
+            output_lines.append(line.strip())
+        
+        process.stdout.close()
+        return_code = process.wait()
 
-        if stream_output and stdout:
-            print(f"{CYAN}{stdout}{RESET}")
-
-        # Check the process return code and handle errors
-        if process.returncode != 0 and stderr:
-            error_context = f"Error executing command '{command}': {stderr.strip()}"
-            print(f"{RED}Error encountered: {error_context}{RESET}")
-            # Consult the LLM for error resolution
+        if return_code != 0:
+            error_context = "\n".join(output_lines)  # Combine all output lines to form the error context
+            print(f"{RED}Error encountered executing command: {error_context}{RESET}")
             resolution = consult_llm_for_error_resolution(error_context, api_key)
-            if resolution:
-                print(f"{GREEN}Suggested resolution:\n{resolution}{RESET}")
-                # Extract and execute scripts from the resolution, if any
-                scripts = extract_script_from_response(resolution)
-                for script, _, lang in scripts:
-                    if lang == "bash":
-                        execute_shell_command(script, api_key, safe_mode=safe_mode)
-                    elif lang == "python":
-                        # Handle Python script execution
-                        pass
-                    else:
-                        print(f"{RED}Unsupported script language: {lang}.{RESET}")
-            else:
-                print(f"{RED}No resolution suggested.{RESET}")
+            scripts = extract_script_from_response(resolution)
+            for script in scripts:
+                execute_resolution_script(script)
+                llm_suggestions = None
         else:
             print(f"{GREEN}Command executed successfully.{RESET}")
     except subprocess.CalledProcessError as e:
         print(f"{RED}Command execution failed with error: {e}{RESET}")
 
-        # Handle the error and potentially prompt for user input or further action
 
 def parse_resolution_for_command(resolution):
     """
@@ -198,7 +212,6 @@ def parse_resolution_for_command(resolution):
         return shlex.split(command)
     # Add more parsing rules as needed based on the format of resolutions
     return None
-
 
 def chat_with_model(message, autopilot=False):
     headers = {
@@ -231,13 +244,26 @@ def chat_with_model(message, autopilot=False):
     return model_response
 
 def extract_script_from_response(response):
-    # Adjusted regex to match code blocks without a language specifier
+    if not isinstance(response, str):
+        print("Error: 'response' expected to be a string, received:", type(response))
+        return []
+    # Proceed with extracting scripts from the string 'response'
     matches = re.findall(r"```(?:bash|python)?\n(.*?)```", response, re.DOTALL)
-    scripts = []
-    for script in matches:
-        # Default to bash script if language is unspecified
-        scripts.append((script, "sh", "bash"))
+    scripts = [(match, "sh", "bash") for match in matches]  # Adjusted to return a tuple (script, ext, lang)
     return scripts
+
+
+def execute_resolution_script(script):
+    global llm_suggestions
+    print("Executing resolution script:\n", script)
+    process = subprocess.run(script, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if process.returncode == 0:
+        print("Resolution script executed successfully:", process.stdout)
+        llm_suggestions = None
+    else:
+        print("Error while executing resolution script:", process.stderr)
+        llm_suggestions = None                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        
+
 
 def save_script(script, file_extension, stop_event = threading.Event()
 ):
@@ -274,20 +300,21 @@ def user_decide_and_act(script, file_extension):
     else:
         print("No script found in the last response.")
 
-def get_system_info():
-    """
-    Collect basic system information.
-    """
-    return {
-        'os': platform.system(),
-        'os_version': platform.version(),
-        'architecture': platform.machine(),
-        'python_version': platform.python_version(),
-        'cpu': platform.processor()
-    }
+#def get_system_info():
+#    """
+#    Collect basic system information.
+#    """
+#    return {
+#        'os': platform.system(),
+#        'os_version': platform.version(),
+#        'architecture': platform.machine(),
+#        'python_version': platform.python_version(),
+#        'cpu': platform.processor()
+#    }
 
 # Global variable to store LLM suggestions
 llm_suggestions = None
+
 
 def consult_llm_for_error_resolution(error_message, api_key):
     """
@@ -295,6 +322,7 @@ def consult_llm_for_error_resolution(error_message, api_key):
     """
     global llm_suggestions  # Assuming this variable is properly initialized elsewhere
     system_info = get_system_info()
+    print(f"{CYAN}Consulting LLM for error resolution:{RESET} {error_message}")
     prompt_message = f"System Info: {system_info}\n Error: '{error_message}'. \n Provide code that resolves the error. Do not comment, only use code."
 
     headers = {
@@ -315,9 +343,9 @@ def consult_llm_for_error_resolution(error_message, api_key):
         chat_response = response.json()
         if chat_response['choices'] and chat_response['choices'][0]['message']['content']:
             suggestion = chat_response['choices'][0]['message']['content'].strip()  # Assuming clean_up_llm_response does thiss
-            print(f"{CYAN}Processing LLM suggestion:{RESET} {llm_suggestions}")            
             llm_suggestions = suggestion  # Store the suggestion globally
-            print("LLM suggests:\n" + suggestion)  # Optionally print suggestion
+            print(f"{CYAN}Processing LLM suggestion:{RESET} {llm_suggestions}")            
+#            print("LLM suggests:\n" + suggestion)  # Optionally print suggestion
             return suggestion
         else:
             print("No advice was returned by the model.")
@@ -386,7 +414,8 @@ def execute_script_with_repl_and_consultation(script, api_key):
         # Consult LLM for error resolution
         error_resolution = consult_llm_for_error_resolution(str(e), api_key)
         if error_resolution:
-            print(f"LLM suggests:\n{error_resolution}")
+
+            print(f"{GREEN}{BOLD}LLM suggests: \n error_resolution{RESET}")
             
             # Enter REPL for manual intervention or to try executing a corrected script
             while True:
@@ -426,12 +455,12 @@ def assemble_final_script(scripts, api_key):
     for processing and assembling into a final executable script, ensuring compatibility based on the provided system info.
     """
     # Collect system information.
-    system_info = get_system_info()
+    #system_info = get_system_info()
     
-    # Create a detailed description of the system info to include in the prompt.
+    #Create a detailed description of the system info to include in the prompt.
     info_details = get_system_info
 
-    # Join all scripts into one, assuming they're compatible or sequential.
+    #Join all scripts into one, assuming they're compatible or sequential.
     final_script_prompt = "\n\n".join(script for script, _, _ in scripts)
     
     # Enhance the prompt with system information for the LLM to consider.
@@ -553,7 +582,8 @@ def cleanup_previous_assembled_scripts():
 def auto_handle_script_execution(final_script, autopilot=False, stream_output=True):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f".assembled_script_{timestamp}.sh"
-    
+    stop_event = threading.Event()
+
     # Save the final script
     with open(filename, "w") as file:
         file.write(final_script)
@@ -563,8 +593,12 @@ def auto_handle_script_execution(final_script, autopilot=False, stream_output=Tr
     os.chmod(filename, 0o755)
 
     # Execute the script
+    
+    stop_event.set()  # Signal to stop the loading animation
     print(f"{CYAN}Executing {filename}...{RESET}")
     execute_shell_command(f"./{filename}", api_key, stream_output=stream_output)
+    stop_event.set() 
+    print(f"{CYAN}Complete. {filename}...{RESET}")
 
 def animated_sending_message(stop_event):
     chars = ["\\", "|", "/", "-"]
@@ -699,7 +733,6 @@ def main():
     display_greeting()
     stop_event = threading.Event()
 
-
     # Setup argument parser
     parser = argparse.ArgumentParser(description="Terminal Companion with Full Self Drive Mode")
     parser.add_argument("-s", "--safe", action="store_true", help="Run in safe mode")
@@ -770,7 +803,6 @@ def main():
         else:
             sys.stdout.flush()  # Ensure all output has been flushed to the console
             stop_event.set()  # Signal the thread to stop
-            sys.stdout.flush()  # Ensure all output has been flushed to the console
             if user_input.upper() == 'CMD':
                 command_mode = True 
             if user_input.lower() == 'safe':

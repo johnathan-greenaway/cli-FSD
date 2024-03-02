@@ -10,7 +10,7 @@ from .main import  cleanup_previous_assembled_scripts
 from .main import execute_script_with_repl_and_consultation
 from .main import extract_script_from_response
 
-from .assembler import AssemblyAssist
+from .resources.assembler import AssemblyAssist
 
 
 
