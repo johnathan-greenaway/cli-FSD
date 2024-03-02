@@ -94,9 +94,14 @@ If you don't want to run it locally:
 [![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@wazacraft/cli-FSD)
 
 ## Project Progress
-### To Do
+v0.75
+- [x] - overhauled and refactored error resolution function to address a bug that sometimes prevented the resolution from executing
+- [x] - fixed niche text handling errors and submodule implementation for an upcoming feature
+   - [ ] for v0.8 - route requests to a custom gpt-4-turbo assistant with code interpreter access using OpenAI's Assistants API 
+v0.52
 - [x] - implement LLM error handling and resolution flows 
 - [x] - refactor flags for SafeMode, Autopilot
+### To Do
 - [ ] - implement restricted commands parser
 - [ ] - refactor and expand CMD module. 
 - [ ] - finish OpenAI Assistants integration
