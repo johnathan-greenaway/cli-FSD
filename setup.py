@@ -20,7 +20,6 @@ setup(
         'flask-cors',
         'python-dotenv',
         'requests',
-        'json',
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
