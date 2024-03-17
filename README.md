@@ -94,18 +94,22 @@ If you don't want to run it locally:
 [![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@wazacraft/cli-FSD)
 
 ## Project Progress
+
+v0.87
+- [x] - finish OpenAI Assistants integration (done but but needs to be made accessible in main.py)
+- [x] - integrate other LLM providers with http request APIs similar to /v1/completions (pass -c with your query to use Anthropic API's Claude 3 Opus)\
+- [x] - improved error handling 
+
 v0.75
 - [x] - overhauled and refactored error resolution function to address a bug that sometimes prevented the resolution from executing
-- [x] - fixed niche text handling errors and submodule implementation for an upcoming feature
-   - [ ] for v0.8 - route requests to a custom gpt-4-turbo assistant with code interpreter access using OpenAI's Assistants API 
+- [x] - fixed niche text handling errors and submodule implementation for upcoming OpenAI AssistantsAPI integration
 v0.52
 - [x] - implement LLM error handling and resolution flows 
 - [x] - refactor flags for SafeMode, Autopilot
+
 ### To Do
-- [ ] - implement restricted commands parser
-- [ ] - refactor and expand CMD module. 
-- [ ] - finish OpenAI Assistants integration
-- [ ] - integrate other LLM providers with http request APIs similar to /v1/completions
+- [ ] - refactor and expand CMD module
+- [] for v0.8 - route requests to a custom gpt-4-turbo assistant with code interpreter access using OpenAI's Assistants API 
 - [ ] - build advanced menu and config options
 
 ## Considering
