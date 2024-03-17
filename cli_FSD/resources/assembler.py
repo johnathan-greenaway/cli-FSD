@@ -1,9 +1,12 @@
 import requests
+import os
 import time
 
 class AssemblyAssist:
-    def __init__(self, api_key, instructions="You are a helpful assistant.", name="Helpful Assistant"):
-        self.api_key = api_key
+    def __init__(self, instructions="You are a helpful assistant.", name="Helpful Assistant"):
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            raise ValueError("OPENAI_API_KEY environment variable not set.")
         self.instructions = instructions
         self.name = name
         self.headers = {
@@ -119,7 +122,7 @@ class AssemblyAssist:
     def start_conversation(self):
         self.assistant_id = self.create_assistant()
         if not self.assistant_id:
-            print("Failed to create assistant.")
+            print("Failed to create assistant.") 
             return False
         self.thread_id = self.create_thread()
         if not self.thread_id:
@@ -130,9 +133,9 @@ class AssemblyAssist:
     
 # Testing block
 if __name__ == "__main__":
-    # api_key = YOUR OPENAI-API-KEY# Replace with your actual OpenAI API key
+#    api_key = *YOUR OPENAI_API_KEY*
     instructions = "You are a code debugging assistant. Provide debugging advice."  # Example instructions
-    chatbot = AssemblyAssist(api_key, instructions)
+    chatbot = AssemblyAssist(instructions)
 
     try:
         chatbot.start_conversation()

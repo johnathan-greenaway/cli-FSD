@@ -1,6 +1,9 @@
+#0.87
 
-#0.75 - Refactored resolution process 
-#to-do: clean up old resolution flow, fix CMD mode, fixed assembly assist import
+# Added claude-3-opus mode and flag (-c)
+# added foundation for OpenAI assistants api routing but it's not working yet 
+   
+#to-do: resolve response threadID error, fix flag for assistants api (ci) reimplement replicate flow, robust CMD mode and help log           
 
 import os
 import requests
@@ -159,7 +162,7 @@ def process_pending_suggestions():
         suggestions_queue.task_done()
 
 
-def execute_shell_command(command, api_key, stream_output=True, safe_mode=False):
+def execute_shell_command(command, api_key, stream_output=True, safe_mode=False, scriptreviewer_on=False):
     global llm_suggestions
     
     if command.startswith('./'):
@@ -187,7 +190,10 @@ def execute_shell_command(command, api_key, stream_output=True, safe_mode=False)
         if return_code != 0:
             error_context = "\n".join(output_lines)  # Combine all output lines to form the error context
             print(f"{RED}Error encountered executing command: {error_context}{RESET}")
-            resolution = consult_llm_for_error_resolution(error_context, api_key)
+            if scriptreviewer_on:
+                resolution = consult_openai_for_error_resolution(error_context, get_system_info())
+            else:
+                resolution = consult_llm_for_error_resolution(error_context, api_key)
             scripts = extract_script_from_response(resolution)
             for script in scripts:
                 execute_resolution_script(script)
@@ -213,35 +219,66 @@ def parse_resolution_for_command(resolution):
     # Add more parsing rules as needed based on the format of resolutions
     return None
 
-def chat_with_model(message, autopilot=False):
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
-    data = {
-        "model": models[current_model],
-        "messages": [
-            {"role": "system", "content": "Generate bash commands for tasks. Comment minimally, you are expected to produce code that is runnable. You are part of a chain."},
-            {"role": "user", "content": message}
-        ]
-    }
+def chat_with_model(message, autopilot=False, use_claude=False):
+    dotenv_path = Path('.env')
+    load_dotenv(dotenv_path=dotenv_path)
+
+    if use_claude:
+        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not anthropic_api_key:
+            print("Anthropic API key not found. Ensure it's set in your .env file.")
+            return "Anthropic API key missing."
+        # Claude-specific setup
+        headers = {
+            "x-api-key": f"{anthropic_api_key}",
+            "Content-Type": "application/json",
+            "Anthropic-Version": "2023-06-01"
+        }
+        data = {
+            "model": "claude-3-opus-20240229",
+            "system": "Generate bash commands for tasks. Comment minimally, you are expected to produce code that is runnable. You are part of a chain.",  # System prompt at the top level
+            "messages": [
+                {"role": "user", "content": message},
+            ],
+            "max_tokens": 4096,
+            "temperature": 0.7
+        }
+        endpoint = "https://api.anthropic.com/v1/messages"
+    else:
+        # Existing setup for OpenAI
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        data = {
+            "model": models[current_model],
+            "messages": [
+                {"role": "system", "content": "Generate bash commands for tasks. Comment minimally, you are expected to produce code that is runnable. You are part of a chain."},
+                {"role": "user", "content": message}
+            ]
+        }
+        endpoint = "https://api.openai.com/v1/chat/completions"
 
     try:
-        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, data=json.dumps(data))
-        response.raise_for_status()  # This will raise an exception for HTTP errors
-        model_response = response.json().get('choices', [{}])[0].get('message', {}).get('content', 'No response')
+        response = requests.post(endpoint, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+        if use_claude:
+            content_blocks = response.json().get('content', [])
+            model_response = ' '.join(block['text'] for block in content_blocks if block['type'] == 'text')
+        else:
+            model_response = response.json().get('choices', [{}])[0].get('message', {}).get('content', 'No response')
     except requests.exceptions.HTTPError as http_err:
-        model_response = f"HTTP error occurred: {http_err}"  # Provide a more graceful error message
+        model_response = f"HTTP error occurred: {http_err}"
     except Exception as err:
-        model_response = f"Other error occurred: {err}"  # Handle other possible errors
+        model_response = f"Other error occurred: {err}"
 
     if autopilot:  
         print(f"{CYAN}Generated command:{RESET} {model_response}")
     else:
-        # Append to conversation history here if needed
-        pass
+        pass  # Append to conversation history here if needed
 
     return model_response
+
 
 def extract_script_from_response(response):
     if not isinstance(response, str):
@@ -354,9 +391,9 @@ def consult_llm_for_error_resolution(error_message, api_key):
         print(f"API request error: {e}")
         return None
 
-def consult_openai_for_error_resolution(error_message, system_info="", api_key=api_key):
+def consult_openai_for_error_resolution(error_message, system_info=""):
     instructions = "You are a code debugging assistant. Provide debugging advice."
-    scriptReviewer = AssemblyAssist(api_key, instructions)  # Instance of AssemblyAssist
+    scriptReviewer = AssemblyAssist(instructions) 
     system_info = get_system_info()
 
 
@@ -365,7 +402,7 @@ def consult_openai_for_error_resolution(error_message, system_info="", api_key=a
     including system information and previous LLM suggestions.
     """
     # Ensure api_key is defined globally or passed as an argument
-    llm_suggestion = consult_llm_for_error_resolution(error_message, api_key)
+    llm_suggestion = llm_suggestions if llm_suggestions else "No previous LLM suggestion."
     if not llm_suggestion:
         print("Failed to get LLM suggestion.")
         return
@@ -635,12 +672,12 @@ def clear_line():
     sys.stdout.write("\033[K")  # ANSI escape code to clear the line
     sys.stdout.flush()
     
-def process_input_in_autopilot_mode(query, autopilot_mode):
+def process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on):
     stop_event = threading.Event()
     loading_thread = threading.Thread(target=animated_loading, args=(stop_event,))
     loading_thread.start()
     print(f"{CYAN}Sending command to LLM...{RESET}")
-    llm_response = chat_with_model(query, autopilot=autopilot_mode)
+    llm_response = chat_with_model(query, autopilot=autopilot_mode, use_claude=use_claude)
     scripts = extract_script_from_response(llm_response)
     if scripts:
         final_script = assemble_final_script(scripts, api_key)
@@ -694,8 +731,8 @@ def display_greeting():
         # Flush the output to ensure it's displayed before waiting for input
         sys.stdout.flush()
 
-def process_input_in_safe_mode(query, safe_mode):
-    llm_response = chat_with_model(query, autopilot=False)
+def process_input_in_safe_mode(query, safe_mode, use_claude,scriptreviewer_on):
+    llm_response = chat_with_model(query, autopilot=False, use_claude=use_claude)
     print_streamed_message(llm_response, CYAN)  # Ensure the LLM's response is printed
 
     scripts = extract_script_from_response(llm_response)
@@ -715,17 +752,17 @@ def process_input_in_safe_mode(query, safe_mode):
     else:
         print("No executable script found in the LLM response.")
 
-def process_input_based_on_mode(query, safe_mode, autopilot_mode):
+def process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on):
     if safe_mode:
-        process_input_in_safe_mode(query, safe_mode)
+        process_input_in_safe_mode(query, safe_mode, use_claude, scriptreviewer_on)
     elif autopilot_mode:
-        process_input_in_autopilot_mode(query, autopilot_mode)
+        process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on)
     else:
-        process_input(query)
+        process_input(query, use_claude, scriptreviewer_on)
                       
 def main():
     global llm_suggestions
-
+    global scriptreviewer_on
     last_response = ""
     command_mode = False
     cleanup_previous_assembled_scripts()
@@ -738,24 +775,29 @@ def main():
     parser.add_argument("-s", "--safe", action="store_true", help="Run in safe mode")
     parser.add_argument("-a", "--autopilot", choices=['on', 'off'], default='off',
                         help="Turn autopilot mode on or off at startup")
+    parser.add_argument("-c", "--claude", action="store_true", help="Use Claude for processing requests")
+    parser.add_argument("-ci", "--assistantsAPI", action="store_true", help="Use OpenAI for error resolution")
+
     args, unknown = parser.parse_known_args()
-    
+
     # If additional arguments are provided, join them into a single string
     query = ' '.join(unknown)
 
     # Set autopilot mode based on the -a or --autopilot argument
     autopilot_mode = args.autopilot
     safe_mode = args.safe 
-
+    use_claude = args.claude
+    scriptreviewer_on = args.assistantsAPI
 
 
     # Start the animated loading in a separate thread only if a query is present
     if query:
-        process_input_based_on_mode(query, safe_mode, autopilot_mode)            # Process the input in safe mode
+        process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on)            # Process the input in safe mode
 
     while True:
         user_input = input(f"{YELLOW}@:{RESET} ").strip()
         scripts = [] 
+    
 
         if command_mode:
             command = input("\033[92mCMD>\033[0m ").strip().lower()
@@ -820,10 +862,10 @@ def main():
 
             # If no special commands, process input based on current mode
             if not command_mode:
-                process_input_based_on_mode(user_input, safe_mode, autopilot_mode)            
+                process_input_based_on_mode(user_input, safe_mode, autopilot_mode, use_claude, scriptreviewer_on)            
                 
             elif autopilot_mode:
-                llm_response = chat_with_model(user_input, autopilot=True)
+                llm_response = chat_with_model(user_input, autopilot=True, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on)
                 scripts = extract_script_from_response(llm_response)
             if scripts:
                 for script, file_extension, _ in scripts:
@@ -838,7 +880,7 @@ def main():
                         execute_script_with_repl_and_consultation(final_script, api_key)
                     elif file_extension == "sh":
                         # Add the `safe_mode` parameter when executing the script
-                        execute_shell_command(f"bash {full_filename}", api_key, safe_mode=safe_mode)
+                        execute_shell_command(f"bash {full_filename}", api_key, safe_mode=safe_mode,  scriptreviewer_on=scriptreviewer_on)
                     else:
                         print(f"Bypassing repl test and executing in local environment: {script[:30]}...")
                         process_input_in_autopilot_mode(user_input, autopilot_mode)
@@ -851,19 +893,19 @@ def main():
         if not autopilot_mode or safe_mode:
             user_input = input(f"{YELLOW}@:{RESET} ").strip()
             # Non-autopilot mode processing
-            process_input_in_safe_mode(query, safe_mode)  # This function should handle the safe mode logic
+            process_input_in_safe_mode(query, safe_mode, use_claude, scriptreviewer_on)  # This function should handle the safe mode logic
             print_streamed_message(last_response, CYAN)
 
         elif safe_mode == True:
             user_input = input(f"{YELLOW}@:{RESET} ").strip()
             # Non-autopilot mode processing
-            process_input_in_safe_mode(query, safe_mode)  # This function should handle the safe mode logic
+            process_input_in_safe_mode(query, safe_mode, use_claude, scriptreviewer_on)  # This function should handle the safe mode logic
             print_streamed_message(last_response, CYAN)
 
         elif autopilot_mode == True:
             user_input = input(f"{YELLOW}@:{RESET} ").strip()
             # Non-autopilot mode processing
-            process_input_in_autopilot_mode(query, safe_mode)  # This function should handle the safe mode logic
+            process_input_in_autopilot_mode(query, safe_mode, use_claude, scriptreviewer_on)  # This function should handle the safe mode logic
             print_streamed_message(last_response, CYAN)
                                                                 
 
