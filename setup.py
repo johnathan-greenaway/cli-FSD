@@ -20,6 +20,7 @@ setup(
         'flask-cors',
         'python-dotenv',
         'requests',
+        'ollama'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
