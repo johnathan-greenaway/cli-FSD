@@ -1,4 +1,5 @@
-#0.87
+#0.9.4d
+# adding Ollama support
 
 # Added claude-3-opus mode and flag (-c)
 # added foundation for OpenAI assistants api routing but it's not working yet 
@@ -26,6 +27,11 @@ import sys
 import threading
 import shlex
 import queue
+import ollama
+from ollama import Client
+import httpx
+import urllib.parse
+
 
 global llm_suggestions 
 global replicate_suggestions  # This will store suggestions from Replicate
@@ -219,10 +225,42 @@ def parse_resolution_for_command(resolution):
     # Add more parsing rules as needed based on the format of resolutions
     return None
 
-def chat_with_model(message, autopilot=False, use_claude=False):
+def chat_with_model(message, autopilot=False, use_claude=False, use_ollama=False, ollama_client=None, scriptreviewer_on=False):
     dotenv_path = Path('.env')
     load_dotenv(dotenv_path=dotenv_path)
+    scriptreviewer_on=scriptreviewer_on
+    if use_ollama:
+        if not ollama_client:
+            print("Ollama client not initialized.")
+            return "Ollama client missing."
+        
+        system_prompt = ("Generate bash commands for tasks. "
+                         "Comment minimally, you are expected to produce code that is runnable. "
+                         "You are part of a chain.")
 
+        try:
+            # Use the Ollama client to chat, including the system prompt for context
+            response = ollama_client.chat(
+                model='llama3',
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message},
+                ]
+            )
+
+            # Check for the 'content' in the 'message' part of the response
+            if 'message' in response and 'content' in response['message']:
+                assistant_message = response['message']['content']
+                print(f"Ollama responded: {assistant_message}")
+                return assistant_message
+            else:
+                print(f"Unexpected response format: {response}")
+                return "Unexpected response format."
+
+        except Exception as e:
+            print(f"Error while chatting with Ollama: {e}")
+            return f"Error: {e}"
+        
     if use_claude:
         anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
@@ -672,12 +710,12 @@ def clear_line():
     sys.stdout.write("\033[K")  # ANSI escape code to clear the line
     sys.stdout.flush()
     
-def process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on):
+def process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client):
     stop_event = threading.Event()
     loading_thread = threading.Thread(target=animated_loading, args=(stop_event,))
     loading_thread.start()
     print(f"{CYAN}Sending command to LLM...{RESET}")
-    llm_response = chat_with_model(query, autopilot=autopilot_mode, use_claude=use_claude)
+    llm_response = chat_with_model(query, autopilot=autopilot_mode, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on, use_ollama=use_ollama, ollama_client=ollama_client)
     scripts = extract_script_from_response(llm_response)
     if scripts:
         final_script = assemble_final_script(scripts, api_key)
@@ -752,14 +790,32 @@ def process_input_in_safe_mode(query, safe_mode, use_claude,scriptreviewer_on):
     else:
         print("No executable script found in the LLM response.")
 
-def process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on):
+def process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client):
     if safe_mode:
-        process_input_in_safe_mode(query, safe_mode, use_claude, scriptreviewer_on)
+        process_input_in_safe_mode(query, safe_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client)
     elif autopilot_mode:
-        process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on)
+        process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client)
     else:
-        process_input(query, use_claude, scriptreviewer_on)
-                      
+        process_input(query, use_claude, scriptreviewer_on, use_ollama, ollama_client)
+
+
+def initialize_ollama_client():
+    host = 'http://localhost:11434'
+    try:
+        # Attempt to create a client to verify connectivity
+        client = ollama.Client(host=host)
+        # Attempt to fetch the list of available models as a connection test
+        response = client.list()
+        if response:
+            print(f"Connected to Ollama at {host}.")
+        else:
+            print(f"Connected to Ollama at {host}, but no models found.")
+        return client
+    except Exception as e:
+        print(f"Failed to connect to Ollama at {host}: {str(e)}")
+    return None
+
+
 def main():
     global llm_suggestions
     global scriptreviewer_on
@@ -777,22 +833,29 @@ def main():
                         help="Turn autopilot mode on or off at startup")
     parser.add_argument("-c", "--claude", action="store_true", help="Use Claude for processing requests")
     parser.add_argument("-ci", "--assistantsAPI", action="store_true", help="Use OpenAI for error resolution")
+    parser.add_argument("-o", "--ollama", action="store_true", help="Use Ollama for processing requests")
 
     args, unknown = parser.parse_known_args()
 
     # If additional arguments are provided, join them into a single string
     query = ' '.join(unknown)
-
-    # Set autopilot mode based on the -a or --autopilot argument
+    # Initialize the Ollama client if the -o flag is provided
+    ollama_client = None
+    if args.ollama:
+        ollama_client = initialize_ollama_client()
+        if ollama_client:
+            print("Ollama mode activated.")
+        else:
+            print("Ollama client could not be initialized.")
     autopilot_mode = args.autopilot
     safe_mode = args.safe 
     use_claude = args.claude
     scriptreviewer_on = args.assistantsAPI
-
+    use_ollama=args.ollama 
 
     # Start the animated loading in a separate thread only if a query is present
     if query:
-        process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on)            # Process the input in safe mode
+        process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client)            # Process the input in safe mode
 
     while True:
         user_input = input(f"{YELLOW}@:{RESET} ").strip()
@@ -862,10 +925,10 @@ def main():
 
             # If no special commands, process input based on current mode
             if not command_mode:
-                process_input_based_on_mode(user_input, safe_mode, autopilot_mode, use_claude, scriptreviewer_on)            
+                process_input_based_on_mode(user_input, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client)            
                 
             elif autopilot_mode:
-                llm_response = chat_with_model(user_input, autopilot=True, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on)
+                llm_response = chat_with_model(user_input, autopilot=True, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on, use_ollama=use_ollama, ollama_client=ollama_client)
                 scripts = extract_script_from_response(llm_response)
             if scripts:
                 for script, file_extension, _ in scripts:
