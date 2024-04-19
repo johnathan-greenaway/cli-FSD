@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='cli-FSD',
-    version='0.9.43r',
+    version='0.9.43',
     author='JG',
     author_email='wazacraftRFID@gmail.com',
     description='LLM-enabled companion utility for your terminal.',
