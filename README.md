@@ -1,7 +1,7 @@
 # cli-FSD
 Natural language interface for your command line. 
 
-A lightweight and portable autopilot utility for CLI tasks. Takes natural language as input and uses the OpenAI API to take the appropriate actions by generating and parsing shell scripts. Find answers to questions and let AI execute commands with your permission in Safe Mode or enable Autopilot to automate tasks or make script modules and microservices on the fly. 
+A lightweight and portable autopilot utility for CLI tasks that takes natural language as input and uses the LLM of your choice to take the appropriate actions by generating and parsing shell scripts. Find answers to questions and let AI execute commands with your permission in Safe Mode or enable Autopilot to automate tasks or script modules and microservices on the fly. 
 
 **Warning**: Giving LLMs shell-level access to your computer is dangerous and should only be done in sandbox or otherwise expendable environments.
 
