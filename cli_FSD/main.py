@@ -1,5 +1,6 @@
-#0.9.4d
-# adding Ollama support
+#1.0.5
+# added Groq support (-g)
+# adding Ollama support (-o) note: user must launch ollama locally before running
 
 # Added claude-3-opus mode and flag (-c)
 # added foundation for OpenAI assistants api routing but it's not working yet 
