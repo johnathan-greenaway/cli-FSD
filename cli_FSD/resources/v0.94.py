@@ -31,16 +31,11 @@ import ollama
 from ollama import Client
 import httpx
 import urllib.parse
-from groq import Groq as GroqClient
-
 
 
 global llm_suggestions 
 global replicate_suggestions  # This will store suggestions from Replicate
 replicate_suggestions = ""
-global groq_client
-
-
 
 suggestions_queue = queue.Queue()
 
@@ -213,8 +208,6 @@ def execute_shell_command(command, api_key, stream_output=True, safe_mode=False,
             print(f"{GREEN}Command executed successfully.{RESET}")
     except subprocess.CalledProcessError as e:
         print(f"{RED}Command execution failed with error: {e}{RESET}")
-    except Exception as e:
-        print(f"An error occurred while executing the command: {e}")
 
 
 def parse_resolution_for_command(resolution):
@@ -232,20 +225,18 @@ def parse_resolution_for_command(resolution):
     # Add more parsing rules as needed based on the format of resolutions
     return None
 
-def chat_with_model(system_info, message, autopilot=False, use_claude=False, use_ollama=False, ollama_client=None, use_groq=False, groq_client=None, scriptreviewer_on=False):
+def chat_with_model(message, autopilot=False, use_claude=False, use_ollama=False, ollama_client=None, scriptreviewer_on=False):
     dotenv_path = Path('.env')
     load_dotenv(dotenv_path=dotenv_path)
     scriptreviewer_on=scriptreviewer_on
-    groq_client=groq_client
-    system_info = get_system_info
     if use_ollama:
         if not ollama_client:
             print("Ollama client not initialized.")
             return "Ollama client missing."
         
-        system_prompt = (f"Generate bash commands for tasks. "
+        system_prompt = ("Generate bash commands for tasks. "
                          "Comment minimally, you are expected to produce code that is runnable. "
-                         f"You are part of a chain. System info: {system_info}")
+                         "You are part of a chain.")
 
         try:
             # Use the Ollama client to chat, including the system prompt for context
@@ -269,9 +260,6 @@ def chat_with_model(system_info, message, autopilot=False, use_claude=False, use
         except Exception as e:
             print(f"Error while chatting with Ollama: {e}")
             return f"Error: {e}"
-        
-    if use_groq:
-        model_response = chat_with_groq(message, groq_client, system_info)
         
     if use_claude:
         anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -317,11 +305,11 @@ def chat_with_model(system_info, message, autopilot=False, use_claude=False, use
             model_response = ' '.join(block['text'] for block in content_blocks if block['type'] == 'text')
         else:
             model_response = response.json().get('choices', [{}])[0].get('message', {}).get('content', 'No response')
-
     except requests.exceptions.HTTPError as http_err:
         model_response = f"HTTP error occurred: {http_err}"
     except Exception as err:
         model_response = f"Other error occurred: {err}"
+
     if autopilot:  
         print(f"{CYAN}Generated command:{RESET} {model_response}")
     else:
@@ -722,12 +710,12 @@ def clear_line():
     sys.stdout.write("\033[K")  # ANSI escape code to clear the line
     sys.stdout.flush()
     
-def process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, groq_client, use_groq):
+def process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client):
     stop_event = threading.Event()
     loading_thread = threading.Thread(target=animated_loading, args=(stop_event,))
     loading_thread.start()
     print(f"{CYAN}Sending command to LLM...{RESET}")
-    llm_response = chat_with_model(query, message=query, autopilot=autopilot_mode, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on, use_ollama=use_ollama, ollama_client=ollama_client, groq_client=groq_client, use_groq=use_groq)
+    llm_response = chat_with_model(query, autopilot=autopilot_mode, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on, use_ollama=use_ollama, ollama_client=ollama_client)
     scripts = extract_script_from_response(llm_response)
     if scripts:
         final_script = assemble_final_script(scripts, api_key)
@@ -781,8 +769,8 @@ def display_greeting():
         # Flush the output to ensure it's displayed before waiting for input
         sys.stdout.flush()
 
-def process_input_in_safe_mode(query, safe_mode, use_claude,scriptreviewer_on, use_groq, use_ollama, groq_client, ollama_client):
-    llm_response = chat_with_model(query, message=query autopilot=False, use_claude=use_claude, message=query)
+def process_input_in_safe_mode(query, safe_mode, use_claude,scriptreviewer_on):
+    llm_response = chat_with_model(query, autopilot=False, use_claude=use_claude)
     print_streamed_message(llm_response, CYAN)  # Ensure the LLM's response is printed
 
     scripts = extract_script_from_response(llm_response)
@@ -802,14 +790,13 @@ def process_input_in_safe_mode(query, safe_mode, use_claude,scriptreviewer_on, u
     else:
         print("No executable script found in the LLM response.")
 
-def process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client):
+def process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client):
     if safe_mode:
-        process_input_in_safe_mode(query, safe_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client)
+        process_input_in_safe_mode(query, safe_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client)
     elif autopilot_mode:
-        process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client)
+        process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client)
     else:
-        process_input(query, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client)
-                                         
+        process_input(query, use_claude, scriptreviewer_on, use_ollama, ollama_client)
 
 
 def initialize_ollama_client():
@@ -828,37 +815,10 @@ def initialize_ollama_client():
         print(f"Failed to connect to Ollama at {host}: {str(e)}")
     return None
 
-def initialize_groq_client():
-    groq_api_key = os.getenv("GROQ_API_KEY")
-    if groq_api_key:
-        try:
-            groq_client = GroqClient(api_key=groq_api_key)
-            print("Groq client initialized successfully.")
-            return groq_client
-        except Exception as e:
-            print(f"Failed to initialize Groq client: {e}")
-    else:
-        print("Groq API key not found.")
-    return None
 
-def chat_with_groq(message, groq_client, system_info):
-    system_prompt = (f"Generate bash commands for terminal tasks. "
-                     "Comment minimally, you are expected to produce code that is runnable. "
-                     f"You are part of a chain. System info: {system_info}")
-    try:
-        chat_completion = groq_client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message}
-            ],
-            model="mixtral-8x7b-32768",
-        )
-        return chat_completion.choices[0].message.content
-    except Exception as e:
-        return f"Error while chatting with Groq: {e}"
-    
 def main():
-    global llm_suggestions, scriptreviewer_on, groq_client
+    global llm_suggestions
+    global scriptreviewer_on
     last_response = ""
     command_mode = False
     cleanup_previous_assembled_scripts()
@@ -874,8 +834,6 @@ def main():
     parser.add_argument("-c", "--claude", action="store_true", help="Use Claude for processing requests")
     parser.add_argument("-ci", "--assistantsAPI", action="store_true", help="Use OpenAI for error resolution")
     parser.add_argument("-o", "--ollama", action="store_true", help="Use Ollama for processing requests")
-    parser.add_argument("-g", "--groq", action="store_true", help="Use Groq for processing requests")
- 
 
     args, unknown = parser.parse_known_args()
 
@@ -893,21 +851,16 @@ def main():
     safe_mode = args.safe 
     use_claude = args.claude
     scriptreviewer_on = args.assistantsAPI
-    use_ollama=args.ollama
-    use_groq = args.groq
-    groq_client = initialize_groq_client() if use_groq else None
-    
+    use_ollama=args.ollama 
+
+    # Start the animated loading in a separate thread only if a query is present
     if query:
-        process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, groq_client, use_groq)            # Process the input in safe mode
+        process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client)            # Process the input in safe mode
 
     while True:
         user_input = input(f"{YELLOW}@:{RESET} ").strip()
         scripts = [] 
     
-        if args.groq:
-            print("Processing with Groq...")
-            response = chat_with_model(user_input, use_groq=True, groq_client=groq_client)
-            print(f"Response: {response}")
 
         if command_mode:
             command = input("\033[92mCMD>\033[0m ").strip().lower()
@@ -972,10 +925,10 @@ def main():
 
             # If no special commands, process input based on current mode
             if not command_mode:
-                process_input_based_on_mode(user_input, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client)            
+                process_input_based_on_mode(user_input, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client)            
                 
             elif autopilot_mode:
-                llm_response = chat_with_model(user_input, autopilot=True, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on, use_ollama=use_ollama, ollama_client=ollama_client, use_groq=use_groq, groq_client=groq_client)
+                llm_response = chat_with_model(user_input, autopilot=True, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on, use_ollama=use_ollama, ollama_client=ollama_client)
                 scripts = extract_script_from_response(llm_response)
             if scripts:
                 for script, file_extension, _ in scripts:
@@ -1015,7 +968,7 @@ def main():
         elif autopilot_mode == True:
             user_input = input(f"{YELLOW}@:{RESET} ").strip()
             # Non-autopilot mode processing
-            process_input_in_autopilot_mode(query, safe_mode, use_claude, scriptreviewer_on, use_groq, groq_client, ollama_client, use_ollama)  # This function should handle the safe mode logic
+            process_input_in_autopilot_mode(query, safe_mode, use_claude, scriptreviewer_on)  # This function should handle the safe mode logic
             print_streamed_message(last_response, CYAN)
                                                                 
 
