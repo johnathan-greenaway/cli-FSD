@@ -782,7 +782,7 @@ def display_greeting():
         sys.stdout.flush()
 
 def process_input_in_safe_mode(query, safe_mode, use_claude,scriptreviewer_on, use_groq, use_ollama, groq_client, ollama_client):
-    llm_response = chat_with_model(query, message=query, autopilot=False, use_claude=use_claude, message=query)
+    llm_response = chat_with_model(query, message=query, autopilot=False, use_claude=use_claude, use_ollama=use_ollama)
     print_streamed_message(llm_response, CYAN)  # Ensure the LLM's response is printed
 
     scripts = extract_script_from_response(llm_response)
