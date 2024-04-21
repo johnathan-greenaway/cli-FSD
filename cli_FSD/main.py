@@ -906,7 +906,7 @@ def main():
     
         if args.groq:
             print("Processing with Groq...")
-            response = chat_with_model(user_input, use_groq=True, groq_client=groq_client)
+            response = chat_with_model(user_input, use_groq=True, groq_client=groq_client, message=query)
             print(f"Response: {response}")
 
         if command_mode:
