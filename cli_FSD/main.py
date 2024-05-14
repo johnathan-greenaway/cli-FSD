@@ -1,4 +1,4 @@
-#0.9.4d
+#1.2
 # adding Ollama support
 
 # Added claude-3-opus mode and flag (-c)
@@ -32,6 +32,8 @@ from ollama import Client
 import httpx
 import urllib.parse
 from groq import Groq as GroqClient
+import base64
+
 
 
 
