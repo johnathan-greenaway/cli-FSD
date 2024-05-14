@@ -1,5 +1,5 @@
-#1.2
-# adding Ollama support
+#1.3
+# added gpt-4o as default model
 
 # Added claude-3-opus mode and flag (-c)
 # added foundation for OpenAI assistants api routing but it's not working yet 
@@ -74,6 +74,7 @@ dotenv_path = Path('.env')
 load_dotenv(dotenv_path=dotenv_path)
 
 models = {
+    "gpt-4o": "gpt-4o",
     "gpt4": "gpt-4",
     "gpt40613": "gpt-4-0613",
     "gpt432k0613": "gpt-4-32k-0613",
@@ -87,7 +88,7 @@ models = {
 }
 
 
-current_model = os.getenv("DEFAULT_MODEL", "gpt-4-turbo-preview")
+current_model = os.getenv("DEFAULT_MODEL", "gpt-4o")
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     api_key = input("Please enter your OpenAI API key: ")
