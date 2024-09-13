@@ -1,4 +1,6 @@
-#1.3
+#1.4
+
+#fixed command mode
 # added gpt-4o as default model
 
 # Added claude-3-opus mode and flag (-c)
@@ -84,6 +86,7 @@ models = {
     "gpt-4-turbo-preview": "gpt-4-turbo-preview",
     "gpt-4-vision-preview": "gpt-4-vision-preview",
     "dall-e-3":"dall-e-3",
+    "o1-preview":"o1-preview"
     
 }
 
@@ -240,7 +243,7 @@ def chat_with_model(system_info, message, autopilot=False, use_claude=False, use
     load_dotenv(dotenv_path=dotenv_path)
     scriptreviewer_on=scriptreviewer_on
     groq_client=groq_client
-    system_info = get_system_info
+    system_info = get_system_info()
     if use_ollama:
         if not ollama_client:
             print("Ollama client not initialized.")
@@ -548,7 +551,7 @@ def assemble_final_script(scripts, api_key):
     #system_info = get_system_info()
     
     #Create a detailed description of the system info to include in the prompt.
-    info_details = get_system_info
+    info_details = get_system_info()
 
     #Join all scripts into one, assuming they're compatible or sequential.
     final_script_prompt = "\n\n".join(script for script, _, _ in scripts)
@@ -811,8 +814,16 @@ def process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, sc
     elif autopilot_mode:
         process_input_in_autopilot_mode(query, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client)
     else:
-        process_input(query, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client)
-                                         
+        # Normal mode processing
+        llm_response = chat_with_model(query, message=query, autopilot=False, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on, use_ollama=use_ollama, ollama_client=ollama_client, groq_client=groq_client, use_groq=use_groq)
+        print_streamed_message(llm_response, CYAN)
+        
+        scripts = extract_script_from_response(llm_response)
+        if scripts:
+            for script, file_extension, _ in scripts:
+                user_decide_and_act(script, file_extension)
+        else:
+            print("No executable script found in the LLM response.")                                         
 
 
 def initialize_ollama_client():
@@ -861,7 +872,7 @@ def chat_with_groq(message, groq_client, system_info):
         return f"Error while chatting with Groq: {e}"
     
 def main():
-    global llm_suggestions, scriptreviewer_on, groq_client
+    global llm_suggestions, scriptreviewer_on, groq_client, current_model, server_port
     last_response = ""
     command_mode = False
     cleanup_previous_assembled_scripts()
@@ -878,47 +889,36 @@ def main():
     parser.add_argument("-ci", "--assistantsAPI", action="store_true", help="Use OpenAI for error resolution")
     parser.add_argument("-o", "--ollama", action="store_true", help="Use Ollama for processing requests")
     parser.add_argument("-g", "--groq", action="store_true", help="Use Groq for processing requests")
- 
 
     args, unknown = parser.parse_known_args()
 
     # If additional arguments are provided, join them into a single string
     query = ' '.join(unknown)
-    # Initialize the Ollama client if the -o flag is provided
-    ollama_client = None
-    if args.ollama:
-        ollama_client = initialize_ollama_client()
-        if ollama_client:
-            print("Ollama mode activated.")
-        else:
-            print("Ollama client could not be initialized.")
-    autopilot_mode = args.autopilot
-    safe_mode = args.safe 
+    
+    # Initialize clients and set modes
+    ollama_client = initialize_ollama_client() if args.ollama else None
+    groq_client = initialize_groq_client() if args.groq else None
+    autopilot_mode = args.autopilot == 'on'
+    safe_mode = args.safe
     use_claude = args.claude
     scriptreviewer_on = args.assistantsAPI
-    use_ollama=args.ollama
+    use_ollama = args.ollama
     use_groq = args.groq
-    groq_client = initialize_groq_client() if use_groq else None
-    
+
     if query:
-        process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, groq_client, use_groq)            # Process the input in safe mode
+        process_input_based_on_mode(query, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, groq_client, use_groq)
 
     while True:
-        user_input = input(f"{YELLOW}@:{RESET} ").strip()
-        scripts = [] 
-    
-        if args.groq:
-            print("Processing with Groq...")
-            response = chat_with_model(user_input, use_groq=True, groq_client=groq_client, message=query)
-            print(f"Response: {response}")
-
         if command_mode:
-            command = input("\033[92mCMD>\033[0m ").strip().lower()
+            command = input(f"{GREEN}CMD>{RESET} ").strip().lower()
             if command == 'quit':
                 break
+            elif command == 'exit':
+                command_mode = False
+                print(f"{CYAN}Exited command mode.{RESET}")
             elif command == 'reset':
                 reset_conversation()
-                print("\033[94mThe conversation has been reset.\033[0m")
+                print(f"{CYAN}The conversation has been reset.{RESET}")
             elif command == 'save':
                 file_path = input("Enter the file path to save the last response: ")
                 with open(file_path, "w") as file:
@@ -931,8 +931,8 @@ def main():
                 if last_response:
                     scripts = extract_script_from_response(last_response)
                     if scripts:
-                        final_script = assemble_final_script(scripts)
-                        auto_handle_script_execution(final_script)  # Call the revised function here
+                        final_script = assemble_final_script(scripts, api_key)
+                        auto_handle_script_execution(final_script, autopilot=autopilot_mode)
                     else:
                         print("No script found in the last response.")
                 else:
@@ -950,16 +950,16 @@ def main():
                     print(model)
             elif command == 'config':
                 print(f"Current configuration: Model = {current_model}, Server Port = {server_port}")
-        elif llm_suggestions:
-            # Process the LLM suggestions
-            print(f"{CYAN}Processing LLM suggestion:{RESET} {llm_suggestions}")
-            user_input = llm_suggestions  # Treat the suggestion as user input
-            llm_suggestions = None  # Reset the suggestions to ensure it's processed only once                 
+            else:
+                print(f"{YELLOW}Unknown command. Type 'exit' to return to normal mode.{RESET}")
         else:
-            sys.stdout.flush()  # Ensure all output has been flushed to the console
-            stop_event.set()  # Signal the thread to stop
+            user_input = input(f"{YELLOW}@:{RESET} ").strip()
+
             if user_input.upper() == 'CMD':
-                command_mode = True 
+                command_mode = True
+                print(f"{CYAN}Entered command mode. Type 'exit' to return to normal mode.{RESET}")
+                continue
+
             if user_input.lower() == 'safe':
                 safe_mode = True
                 autopilot_mode = False
@@ -972,60 +972,16 @@ def main():
                 safe_mode = False
                 autopilot_mode = False
                 print("Switched to normal mode.")
-
-            # If no special commands, process input based on current mode
-            if not command_mode:
-                process_input_based_on_mode(user_input, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client)            
-                
-            elif autopilot_mode:
-                llm_response = chat_with_model(user_input, autopilot=True, use_claude=use_claude, scriptreviewer_on=scriptreviewer_on, use_ollama=use_ollama, ollama_client=ollama_client, use_groq=use_groq, groq_client=groq_client)
-                scripts = extract_script_from_response(llm_response)
-            if scripts:
-                for script, file_extension, _ in scripts:
-                    filename = input("Enter a filename for the script (without extension): ")   
-                    full_filename = f"{filename}.{file_extension}"
-                    with open(full_filename, "w") as file:
-                        file.write(script)
-            
-                    if file_extension == "py":
-                        final_script = assemble_final_script([(script, file_extension, "python")], api_key)
-                        # Execute only Python scripts with error handling and consultation
-                        execute_script_with_repl_and_consultation(final_script, api_key)
-                    elif file_extension == "sh":
-                        # Add the `safe_mode` parameter when executing the script
-                        execute_shell_command(f"bash {full_filename}", api_key, safe_mode=safe_mode,  scriptreviewer_on=scriptreviewer_on)
-                    else:
-                        print(f"Bypassing repl test and executing in local environment: {script[:30]}...")
-                        process_input_in_autopilot_mode(user_input, autopilot_mode)
-                        stop_event.set()
-
-                        print("Enter another task or press ctrl+z to quit.")
-                        
             else:
-                    print("No executable script found in the LLM response.")
-        if not autopilot_mode or safe_mode:
-            user_input = input(f"{YELLOW}@:{RESET} ").strip()
-            # Non-autopilot mode processing
-            process_input_in_safe_mode(query, safe_mode, use_claude, scriptreviewer_on)  # This function should handle the safe mode logic
-            print_streamed_message(last_response, CYAN)
+                process_input_based_on_mode(user_input, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client)
 
-        elif safe_mode == True:
-            user_input = input(f"{YELLOW}@:{RESET} ").strip()
-            # Non-autopilot mode processing
-            process_input_in_safe_mode(query, safe_mode, use_claude, scriptreviewer_on)  # This function should handle the safe mode logic
-            print_streamed_message(last_response, CYAN)
-
-        elif autopilot_mode == True:
-            user_input = input(f"{YELLOW}@:{RESET} ").strip()
-            # Non-autopilot mode processing
-            process_input_in_autopilot_mode(query, safe_mode, use_claude, scriptreviewer_on, use_groq, groq_client, ollama_client, use_ollama)  # This function should handle the safe mode logic
-            print_streamed_message(last_response, CYAN)
-                                                                
-
+        if llm_suggestions:
+            print(f"{CYAN}Processing LLM suggestion:{RESET} {llm_suggestions}")
+            process_input_based_on_mode(llm_suggestions, safe_mode, autopilot_mode, use_claude, scriptreviewer_on, use_ollama, ollama_client, use_groq, groq_client)
+            llm_suggestions = None
 
     print("Operation completed.")
     stop_event.set()
-
 
 if __name__ == "__main__":
     main()
