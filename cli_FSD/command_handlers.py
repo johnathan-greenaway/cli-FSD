@@ -1,5 +1,5 @@
-from utils import print_streamed_message
-from script_handlers import extract_script_from_response, assemble_final_script, auto_handle_script_execution
+from .utils import print_streamed_message
+from .script_handlers import extract_script_from_response, assemble_final_script, auto_handle_script_execution
 
 
 

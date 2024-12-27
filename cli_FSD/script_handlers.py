@@ -3,11 +3,11 @@ import os
 import subprocess
 import tempfile
 from datetime import datetime
-from utils import print_streamed_message, get_system_info, animated_loading
-from chat_models import chat_with_model
+from .utils import print_streamed_message, get_system_info, animated_loading
+from .chat_models import chat_with_model
 import threading
 import requests
-from config import Config
+from .config import Config
 
 
 def process_input_based_on_mode(query, config, chat_models):

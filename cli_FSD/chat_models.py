@@ -3,7 +3,7 @@ import requests
 import json
 from ollama import Client as OllamaClient
 from groq import Groq as GroqClient
-from utils import get_system_info
+from .utils import get_system_info
 
 def initialize_chat_models(config):
     chat_models = {}
