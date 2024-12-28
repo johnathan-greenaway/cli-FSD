@@ -1,14 +1,15 @@
+# script_handlers.py
+
 import re
 import os
 import subprocess
 import tempfile
 from datetime import datetime
-from .utils import print_streamed_message, get_system_info, animated_loading
+from .utils import print_streamed_message, get_system_info, animated_loading, save_script
 from .chat_models import chat_with_model
 import threading
 import requests
 from .config import Config
-
 
 def process_input_based_on_mode(query, config, chat_models):
     if config.safe_mode:
@@ -22,7 +23,7 @@ def process_input_based_on_mode(query, config, chat_models):
         scripts = extract_script_from_response(llm_response)
         if scripts:
             for script, file_extension, _ in scripts:
-                user_decide_and_act(script, file_extension, config)
+                user_decide_and_act(query, script, file_extension, config)
         else:
             print("No executable script found in the LLM response.")
 
@@ -36,26 +37,19 @@ def process_input_in_safe_mode(query, config, chat_models):
             print(f"Found a {file_extension} script:")
             print(script)
             
-            save = input("Would you like to save this script? (yes/no): ").lower()
-            if save == 'yes':
-                full_filename = save_script(script, file_extension)
+            # Pass the correct parameters: query, script, file_extension, auto_save=False
+            full_filename = save_script(query, script, file_extension=file_extension, auto_save=False, config=config)
+            if full_filename:
                 print(f"Script extracted and saved as {full_filename}.")
+                
                 if config.safe_mode:
-                    user_confirmation = input(f"Do you want to execute the saved script {full_filename}? (yes/no): ").lower()
+                    user_confirmation = input(f"Do you want to execute the saved script {full_filename}? (yes/no): ").strip().lower()
                     if user_confirmation == "yes":
                         execute_shell_command(f"bash {full_filename}", config)
                     else:
                         print("Script execution aborted by the user.")
-                else:
-                    execute_shell_command(f"bash {full_filename}", config)
-            elif save == 'no':
-                run = input("Would you like to run this script without saving? (yes/no): ").lower()
-                if run == 'yes':
-                    execute_script_directly(script, file_extension, config)
-                else:
-                    print("Script execution aborted by the user.")
             else:
-                print("Invalid input. Script not saved or executed.")
+                print("Failed to save the script.")
     else:
         print("No executable script found in the LLM response.")
 
@@ -68,8 +62,8 @@ def process_input_in_autopilot_mode(query, config, chat_models):
     scripts = extract_script_from_response(llm_response)
     if scripts:
         final_script = assemble_final_script(scripts, config.api_key)
-        auto_handle_script_execution(final_script, config)
-        stop_event.set()
+        if final_script:
+            auto_handle_script_execution(final_script, config)
     else:
         print("No executable script found in the LLM response.")
     stop_event.set()
@@ -122,23 +116,26 @@ def auto_handle_script_execution(final_script, config):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f".assembled_script_{timestamp}.sh"
 
-    with open(filename, "w") as file:
-        file.write(final_script)
-    print(f"{config.CYAN}Final script assembled and saved as {filename}.{config.RESET}")
-    
-    os.chmod(filename, 0o755)
+    try:
+        with open(filename, "w") as file:
+            file.write(final_script)
+        print(f"{config.CYAN}Final script assembled and saved as {filename}.{config.RESET}")
+        
+        os.chmod(filename, 0o755)
 
-    print(f"{config.CYAN}Executing {filename}...{config.RESET}")
-    execute_shell_command(f"./{filename}", config)
-    print(f"{config.CYAN}Complete. {filename}...{config.RESET}")
+        print(f"{config.CYAN}Executing {filename}...{config.RESET}")
+        execute_shell_command(f"./{filename}", config)
+        print(f"{config.CYAN}Complete. {filename}...{config.RESET}")
+    except Exception as e:
+        print(f"{config.RED}Failed to handle script execution: {e}{config.RESET}")
 
 def execute_shell_command(command, config, stream_output=True):
     if command.startswith('./'):
         os.chmod(command[2:], 0o755)  # Ensure the script is executable
 
     if config.safe_mode:
-        user_confirmation = input(f"Do you want to execute the following command: {command}? (yes/no): ").strip()
-        if user_confirmation.lower() != "yes":
+        user_confirmation = input(f"Do you want to execute the following command: {command}? (yes/no): ").strip().lower()
+        if user_confirmation != "yes":
             print("Command execution aborted by the user.")
             return
 
@@ -173,7 +170,6 @@ def execute_shell_command(command, config, stream_output=True):
     except Exception as e:
         print(f"An error occurred while executing the command: {e}")
 
-
 def clean_up_llm_response(llm_response):
     script_blocks = re.findall(r"```(?:bash|sh)\n(.*?)\n```", llm_response, re.DOTALL)
     if script_blocks:
@@ -183,32 +179,32 @@ def clean_up_llm_response(llm_response):
         print("No executable script blocks found in the response.")
         return llm_response.strip()
 
-def save_script(script, file_extension):
-    filename = input("Enter a filename for the script (without extension): ").strip()
-    full_filename = f"{filename}.{file_extension}"
-    with open(full_filename, "w") as file:
-        file.write(script)
-    print(f"Script saved as {full_filename}.")
-    return full_filename
-
 def execute_script(filename, file_extension, config):
-    if file_extension == "py":
-        subprocess.run(["python", filename], check=True)
-    elif file_extension == "sh":
-        subprocess.run(["bash", filename], check=True)
-    else:
-        print(f"Running scripts with .{file_extension} extension is not supported.")
+    try:
+        if file_extension == "py":
+            subprocess.run(["python", filename], check=True)
+        elif file_extension == "sh":
+            subprocess.run(["bash", filename], check=True)
+        else:
+            print(f"Running scripts with .{file_extension} extension is not supported.")
+    except subprocess.CalledProcessError as e:
+        print(f"{config.RED}Script execution failed with error: {e}{config.RESET}")
+    except Exception as e:
+        print(f"An error occurred while executing the script: {e}")
 
 def execute_script_directly(script, file_extension, config):
     if file_extension == "py":
-        exec(script, {'__builtins__': None}, {})
+        try:
+            exec(script, {'__builtins__': None}, {})
+        except Exception as e:
+            print(f"{config.RED}Error executing script: {e}{config.RESET}")
     elif file_extension in ["sh", "bash"]:
         with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
             temp_file.write(script)
             temp_file_path = temp_file.name
         try:
             if config.safe_mode:
-                user_confirmation = input(f"Do you want to execute this script? (yes/no): ").lower()
+                user_confirmation = input(f"Do you want to execute this script? (yes/no): ").strip().lower()
                 if user_confirmation == "yes":
                     execute_shell_command(f"bash {temp_file_path}", config)
                 else:
@@ -220,21 +216,27 @@ def execute_script_directly(script, file_extension, config):
     else:
         print(f"Running scripts with .{file_extension} extension is not supported.")
 
-
-
-def user_decide_and_act(script, file_extension, config):
-    save = input("Would you like to save this script? (yes/no): ").lower()
-    if save == 'yes':
-        full_filename = save_script(script, file_extension)
-        run = input("Would you like to run this script? (yes/no): ").lower()
-        if run == 'yes':
-            execute_script(full_filename, file_extension, config)
-    elif save == 'no':
-        run = input("Would you like to run this script without saving? (yes/no): ").lower()
+def user_decide_and_act(query, script, file_extension, config):
+    # Determine if autopilot mode is enabled
+    auto_save = config.autopilot_mode
+    full_filename = save_script(query, script, file_extension=file_extension, auto_save=auto_save, config=config)
+    
+    if full_filename:
+        if auto_save:
+            print(f"Script saved automatically to {full_filename}.")
+            # Optionally execute the script immediately if in autopilot mode
+            execute_shell_command(f"bash {full_filename}", config)
+        else:
+            print(f"Script saved to {full_filename}.")
+            run = input("Would you like to run this script? (yes/no): ").strip().lower()
+            if run == 'yes':
+                execute_script(full_filename, file_extension, config)
+    else:
+        run = input("Would you like to run this script without saving? (yes/no): ").strip().lower()
         if run == 'yes':
             execute_script_directly(script, file_extension, config)
-    else:
-        print("Invalid input. Script not saved or executed.")
+        else:
+            print("Script execution aborted by the user.")
 
 def execute_resolution_script(resolution, config):
     print(f"{config.CYAN}Executing resolution:{config.RESET}\n{resolution}")
@@ -245,7 +247,6 @@ def execute_resolution_script(resolution, config):
         print(f"{config.RED}Resolution execution failed with error: {e}{config.RESET}")
     except Exception as e:
         print(f"An error occurred while executing the resolution: {e}")
-
 
 def consult_llm_for_error_resolution(error_message, config):
     system_info = get_system_info()
@@ -278,7 +279,6 @@ def consult_llm_for_error_resolution(error_message, config):
     except requests.exceptions.RequestException as e:
         print(f"API request error: {e}")
         return None
-
 
 def consult_openai_for_error_resolution(error_message, system_info=""):
     instructions = "You are a code debugging assistant. Provide debugging advice."
