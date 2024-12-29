@@ -136,6 +136,64 @@ def print_message(sender, message):
     print(f"{prefix}{message}")
 
 
+def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
+    """Use an MCP tool with the specified parameters.
+    
+    Args:
+        server_name: Name of the MCP server
+        tool_name: Name of the tool to use
+        arguments: Tool arguments as a dictionary
+        
+    Returns:
+        Tool execution result as a string
+    """
+    try:
+        import json
+        import subprocess
+        
+        # Format the MCP command
+        mcp_command = {
+            "jsonrpc": "2.0",
+            "method": "callTool",
+            "params": {
+                "name": tool_name,
+                "arguments": arguments
+            },
+            "id": 1
+        }
+        
+        # Write command to stdin and read response from stdout
+        process = subprocess.Popen(
+            ["node", f"/home/icarus/Documents/Cline/MCP/{server_name}/build/index.js"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        # Send command and get response
+        stdout, stderr = process.communicate(input=json.dumps(mcp_command) + "\n")
+        
+        if stderr:
+            print(f"MCP server error: {stderr}", file=sys.stderr)
+            return f"Error: {stderr}"
+            
+        try:
+            response = json.loads(stdout)
+            if "error" in response:
+                return f"Error: {response['error']['message']}"
+            if "result" in response and "content" in response["result"]:
+                return "\n".join(
+                    block["text"] for block in response["result"]["content"]
+                    if block["type"] == "text"
+                )
+            return "No content in response"
+        except json.JSONDecodeError:
+            return f"Error: Invalid JSON response from MCP server"
+            
+    except Exception as e:
+        return f"Error using MCP tool: {str(e)}"
+
 def save_script(query, script, file_extension="sh", auto_save=False, config=None):
     scripts_dir = "scripts"
     os.makedirs(scripts_dir, exist_ok=True)
