@@ -12,6 +12,11 @@ import requests
 from .config import Config
 
 def process_input_based_on_mode(query, config, chat_models):
+    # Print current configuration for debugging
+    if config.session_model:
+        print(f"{config.CYAN}Using model: {config.session_model}{config.RESET}")
+    
+    # Handle based on mode
     if config.safe_mode:
         process_input_in_safe_mode(query, config, chat_models)
     elif config.autopilot_mode:
