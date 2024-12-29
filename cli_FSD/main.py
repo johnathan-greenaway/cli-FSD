@@ -54,21 +54,78 @@ def main():
             if not user_input:
                 continue  # Skip empty inputs
 
+            # Parse model selection flags if command starts with @
+            if user_input.startswith("@"):
+                parts = user_input.split()
+                i = 1  # Skip the @ symbol
+                
+                # Process all flags first
+                flags_changed = False
+                while i < len(parts) and parts[i].startswith("-"):
+                    if parts[i] == "-o":
+                        config.session_model = "ollama"
+                        config.use_ollama = True
+                        config.use_claude = False
+                        config.use_groq = False
+                        flags_changed = True
+                        i += 1
+                    elif parts[i] == "-c":
+                        config.session_model = "claude"
+                        config.use_claude = True
+                        config.use_ollama = False
+                        config.use_groq = False
+                        flags_changed = True
+                        i += 1
+                    elif parts[i] == "-g":
+                        config.session_model = "groq"
+                        config.use_groq = True
+                        config.use_claude = False
+                        config.use_ollama = False
+                        flags_changed = True
+                        i += 1
+                    elif parts[i] == "-a":
+                        config.autopilot_mode = True
+                        flags_changed = True
+                        i += 1
+                    elif parts[i] == "-ci":
+                        config.scriptreviewer_on = True
+                        flags_changed = True
+                        i += 1
+                    else:
+                        break
+
+                # Save preferences if flags were changed
+                if flags_changed:
+                    config.save_preferences()
+                    chat_models = initialize_chat_models(config)
+                    print(f"Using model: {config.session_model}")
+                    if config.autopilot_mode:
+                        print("Autopilot mode enabled")
+
+                # Reconstruct the actual query without @ and flags
+                user_input = " ".join(parts[i:])
+                
+                if not user_input:
+                    continue
+
             if user_input.upper() == 'CMD':
                 handle_command_mode(config, chat_models)
             elif user_input.lower() == 'safe':
                 config.safe_mode = True
                 config.autopilot_mode = False
+                config.save_preferences()
                 print("Switched to safe mode. You will be prompted before executing any commands.")
                 logging.info("Switched to safe mode.")
             elif user_input.lower() == 'autopilot':
                 config.safe_mode = False
                 config.autopilot_mode = True
+                config.save_preferences()
                 print("Switched to autopilot mode.")
                 logging.info("Switched to autopilot mode.")
             elif user_input.lower() == 'normal':
                 config.safe_mode = False
                 config.autopilot_mode = False
+                config.save_preferences()
                 print("Switched to normal mode.")
                 logging.info("Switched to normal mode.")
             else:

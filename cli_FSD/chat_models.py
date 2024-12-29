@@ -7,15 +7,12 @@ from .utils import get_system_info
 
 def initialize_chat_models(config):
     chat_models = {}
-    # Use a mapping to make model initialization more maintainable
-    model_configs = {
-        'ollama': (config.use_ollama, initialize_ollama_client),
-        'groq': (config.use_groq, initialize_groq_client)
-    }
-    
-    for model_name, (is_enabled, init_func) in model_configs.items():
-        if is_enabled:
-            chat_models[model_name] = init_func()
+    # Initialize based on session model preference
+    if config.session_model == 'ollama':
+        chat_models['model'] = initialize_ollama_client()
+    elif config.session_model == 'groq':
+        chat_models['model'] = initialize_groq_client()
+    # Claude doesn't need initialization, handled in chat_with_claude
     
     return chat_models
 
@@ -58,26 +55,37 @@ def initialize_groq_client():
 def chat_with_model(message, config, chat_models):
     system_info = get_system_info()
     
-    # Define model handlers with their conditions
+    # Use model based on session preference
+    if config.session_model:
+        try:
+            if config.session_model == 'ollama' and 'model' in chat_models:
+                return chat_with_ollama(message, chat_models['model'], system_info)
+            elif config.session_model == 'groq' and 'model' in chat_models:
+                return chat_with_groq(message, chat_models['model'], system_info)
+            elif config.session_model == 'claude':
+                return chat_with_claude(message, config)
+        except Exception as e:
+            print(f"Error using {config.session_model}: {e}")
+    
+    # Fallback to default model handlers if no session preference
     model_handlers = [
-        ('ollama', lambda: config.use_ollama and 'ollama' in chat_models,
-         lambda: chat_with_ollama(message, chat_models['ollama'], system_info)),
-        ('groq', lambda: config.use_groq and 'groq' in chat_models,
-         lambda: chat_with_groq(message, chat_models['groq'], system_info)),
+        ('ollama', lambda: config.use_ollama and 'model' in chat_models,
+         lambda: chat_with_ollama(message, chat_models['model'], system_info)),
+        ('groq', lambda: config.use_groq and 'model' in chat_models,
+         lambda: chat_with_groq(message, chat_models['model'], system_info)),
         ('claude', lambda: config.use_claude,
          lambda: chat_with_claude(message, config))
     ]
     
-    # Try each model in order of preference
     for model_name, check_enabled, handler in model_handlers:
         if check_enabled():
             try:
                 return handler()
             except Exception as e:
                 print(f"Error using {model_name}: {e}")
-                continue  # Try next model if current one fails
+                continue
     
-    # Fallback to OpenAI
+    # Final fallback to OpenAI
     return chat_with_openai(message, config)
 
 def chat_with_ollama(message, ollama_client, system_info):

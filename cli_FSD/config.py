@@ -1,4 +1,5 @@
 import os
+import json
 from dotenv import load_dotenv, set_key
 from pathlib import Path
 
@@ -11,19 +12,19 @@ class Config:
         self.RED = "\033[31m"
         self.GREEN = "\033[32m"
 
+        self.config_dir = os.path.expanduser("~/.config/cli-FSD")
+        self.config_file = os.path.join(self.config_dir, "config.json")
+        self.preferences_file = os.path.join(self.config_dir, "preferences.json")
+        
+        # Create config directory if it doesn't exist
+        os.makedirs(self.config_dir, exist_ok=True)
+
         self.current_model = os.getenv("DEFAULT_MODEL", "gpt-4o")
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.server_port = int(os.getenv("SERVER_PORT", 5000))
         
-        # Add these new attributes
-        self.safe_mode = False
-        self.autopilot_mode = False
-        self.use_claude = False
-        self.use_ollama = False
-        self.use_groq = False
-        self.scriptreviewer_on = False
-        self.llm_suggestions = None
-        self.last_response = None
+        # Load saved preferences or use defaults
+        self.load_preferences()
 
         # Models dictionary with latest text-only models
         self.models = {
@@ -47,12 +48,86 @@ class Config:
             "claude-3-haiku": "claude-3-haiku-20240307"
         }
 
+    def load_preferences(self):
+        """Load preferences from file or set defaults"""
+        try:
+            if os.path.exists(self.preferences_file):
+                with open(self.preferences_file, 'r') as f:
+                    prefs = json.load(f)
+                    self.session_model = prefs.get('model')
+                    self.safe_mode = prefs.get('safe_mode', False)
+                    self.autopilot_mode = prefs.get('autopilot_mode', False)
+                    self.use_claude = prefs.get('use_claude', False)
+                    self.use_ollama = prefs.get('use_ollama', False)
+                    self.use_groq = prefs.get('use_groq', False)
+                    self.scriptreviewer_on = prefs.get('scriptreviewer_on', False)
+            else:
+                self.session_model = None
+                self.safe_mode = False
+                self.autopilot_mode = False
+                self.use_claude = False
+                self.use_ollama = False
+                self.use_groq = False
+                self.scriptreviewer_on = False
+        except Exception as e:
+            print(f"Error loading preferences: {e}")
+            # Use defaults if loading fails
+            self.session_model = None
+            self.safe_mode = False
+            self.autopilot_mode = False
+            self.use_claude = False
+            self.use_ollama = False
+            self.use_groq = False
+            self.scriptreviewer_on = False
+        
+        # These don't persist between sessions
+        self.llm_suggestions = None
+        self.last_response = None
+
+    def save_preferences(self):
+        """Save current preferences to file"""
+        try:
+            prefs = {
+                'model': self.session_model,
+                'safe_mode': self.safe_mode,
+                'autopilot_mode': self.autopilot_mode,
+                'use_claude': self.use_claude,
+                'use_ollama': self.use_ollama,
+                'use_groq': self.use_groq,
+                'scriptreviewer_on': self.scriptreviewer_on
+            }
+            with open(self.preferences_file, 'w') as f:
+                json.dump(prefs, f)
+        except Exception as e:
+            print(f"Error saving preferences: {e}")
+
 def initialize_config(args):
     config = Config()
-    config.safe_mode = args.safe
-    config.autopilot_mode = args.autopilot  # Corrected line
-    config.use_claude = args.claude
-    config.scriptreviewer_on = args.assistantsAPI
-    config.use_ollama = args.ollama
-    config.use_groq = args.groq
+    
+    # Update config with command line args
+    if args.safe:
+        config.safe_mode = args.safe
+    if args.autopilot:
+        config.autopilot_mode = args.autopilot
+    if args.claude:
+        config.session_model = "claude"
+        config.use_claude = True
+        config.use_ollama = False
+        config.use_groq = False
+    if args.ollama:
+        config.session_model = "ollama"
+        config.use_ollama = True
+        config.use_claude = False
+        config.use_groq = False
+    if args.groq:
+        config.session_model = "groq"
+        config.use_groq = True
+        config.use_claude = False
+        config.use_ollama = False
+    if args.assistantsAPI:
+        config.scriptreviewer_on = True
+    
+    # Save any changes from command line args
+    config.save_preferences()
+    
     return config
