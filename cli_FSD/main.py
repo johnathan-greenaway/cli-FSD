@@ -91,6 +91,15 @@ def main():
                         config.scriptreviewer_on = True
                         flags_changed = True
                         i += 1
+                    elif parts[i] == "-d":
+                        config.session_model = None
+                        config.use_ollama = False
+                        config.use_claude = False
+                        config.use_groq = False
+                        config.autopilot_mode = False
+                        config.scriptreviewer_on = False
+                        flags_changed = True
+                        i += 1
                     else:
                         break
 
@@ -98,7 +107,10 @@ def main():
                 if flags_changed:
                     config.save_preferences()
                     chat_models = initialize_chat_models(config)
-                    print(f"Using model: {config.session_model}")
+                    if config.session_model:
+                        print(f"Using model: {config.session_model}")
+                    else:
+                        print("Using default model settings")
                     if config.autopilot_mode:
                         print("Autopilot mode enabled")
 
@@ -167,5 +179,6 @@ def parse_arguments():
     parser.add_argument("-ci", "--assistantsAPI", action="store_true", help="Use OpenAI for error resolution")
     parser.add_argument("-o", "--ollama", action="store_true", help="Use Ollama for processing requests")
     parser.add_argument("-g", "--groq", action="store_true", help="Use Groq for processing requests")
+    parser.add_argument("-d", "--default", action="store_true", help="Reset to default model settings")
     parser.add_argument("query", nargs=argparse.REMAINDER, help="User query to process directly")
     return parser.parse_args()

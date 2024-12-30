@@ -104,28 +104,38 @@ class Config:
 def initialize_config(args):
     config = Config()
     
-    # Update config with command line args
-    if args.safe:
-        config.safe_mode = args.safe
-    if args.autopilot:
-        config.autopilot_mode = args.autopilot
-    if args.claude:
-        config.session_model = "claude"
-        config.use_claude = True
+    # Handle default flag first
+    if args.default:
+        config.session_model = None
         config.use_ollama = False
-        config.use_groq = False
-    if args.ollama:
-        config.session_model = "ollama"
-        config.use_ollama = True
         config.use_claude = False
         config.use_groq = False
-    if args.groq:
-        config.session_model = "groq"
-        config.use_groq = True
-        config.use_claude = False
-        config.use_ollama = False
-    if args.assistantsAPI:
-        config.scriptreviewer_on = True
+        config.autopilot_mode = False
+        config.scriptreviewer_on = False
+        config.safe_mode = False
+    else:
+        # Update config with command line args
+        if args.safe:
+            config.safe_mode = args.safe
+        if args.autopilot:
+            config.autopilot_mode = args.autopilot
+        if args.claude:
+            config.session_model = "claude"
+            config.use_claude = True
+            config.use_ollama = False
+            config.use_groq = False
+        if args.ollama:
+            config.session_model = "ollama"
+            config.use_ollama = True
+            config.use_claude = False
+            config.use_groq = False
+        if args.groq:
+            config.session_model = "groq"
+            config.use_groq = True
+            config.use_claude = False
+            config.use_ollama = False
+        if args.assistantsAPI:
+            config.scriptreviewer_on = True
     
     # Save any changes from command line args
     config.save_preferences()
