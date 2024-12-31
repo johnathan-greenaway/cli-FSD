@@ -4,6 +4,7 @@ import re
 import os
 import subprocess
 import tempfile
+import json
 from datetime import datetime
 from .utils import print_streamed_message, get_system_info, animated_loading, save_script
 from .chat_models import chat_with_model
@@ -11,20 +12,102 @@ import threading
 import requests
 from .config import Config
 
+from .agents.context_agent import ContextAgent
+
+# Ensure query is not empty before processing
+def _validate_query(query: str) -> bool:
+    """Validate that the query is not empty and contains actual content."""
+    return bool(query and query.strip())
+
 def process_input_based_on_mode(query, config, chat_models):
+    # Validate query
+    if not _validate_query(query):
+        print(f"{config.YELLOW}Please provide a command or question.{config.RESET}")
+        return None
+        
     # Print current configuration for debugging
     if config.session_model:
         print(f"{config.CYAN}Using model: {config.session_model}{config.RESET}")
     
-    # Handle based on mode
+    # Try standard LLM processing first
+    llm_response = chat_with_model(query, config, chat_models)
+    
+    # If no response, try context agent
+    if not llm_response or llm_response.strip() == "":
+        try:
+            # Get context agent's analysis
+            agent = ContextAgent()
+            analysis = agent.analyze_request(query)
+            
+            # Get LLM's tool selection decision with the analysis prompt
+            llm_analysis = chat_with_model(
+                message=analysis["prompt"],
+                config=config,
+                chat_models=chat_models,
+                system_prompt=(
+                    "You are a tool selection expert. Analyze the user's request and determine "
+                    "which tool would be most effective. Respond with a JSON object containing "
+                    "your analysis and selection. Be precise and follow the specified format."
+                )
+            )
+            print(f"{config.CYAN}Tool selection analysis:{config.RESET}\n{llm_analysis}")
+            
+            # Parse LLM response
+            try:
+                tool_selection = json.loads(llm_analysis)
+                
+                # Get response using selected tool
+                if tool_selection["selected_tool"] == "small_context":
+                    result = agent.execute_tool_selection(tool_selection)
+                    if result.get("tool") == "use_mcp_tool":
+                        from .utils import use_mcp_tool
+                        llm_response = use_mcp_tool(
+                            server_name=result["server"],
+                            tool_name=result["operation"],
+                            arguments=result["arguments"]
+                        )
+                    else:
+                        llm_response = f"Error: {result.get('error', 'Unknown error')}"
+                else:
+                    # Use standard LLM processing
+                    llm_response = chat_with_model(query, config, chat_models)
+            except json.JSONDecodeError:
+                print(f"{config.RED}Failed to parse tool selection response{config.RESET}")
+                return llm_response
+        except Exception as e:
+            print(f"{config.RED}Error in context agent processing: {str(e)}{config.RESET}")
+            return llm_response
+    
+    # Handle response based on mode
     if config.safe_mode:
-        process_input_in_safe_mode(query, config, chat_models)
-    elif config.autopilot_mode:
-        process_input_in_autopilot_mode(query, config, chat_models)
-    else:
-        llm_response = chat_with_model(query, config, chat_models)
         print_streamed_message(llm_response, config.CYAN)
-        
+        scripts = extract_script_from_response(llm_response)
+        if scripts:
+            for script, file_extension, _ in scripts:
+                print(f"Found a {file_extension} script:")
+                print(script)
+                full_filename = save_script(query, script, file_extension=file_extension, auto_save=False, config=config)
+                if full_filename:
+                    print(f"Script saved as {full_filename}.")
+                    user_confirmation = input(f"Do you want to execute the saved script {full_filename}? (yes/no): ").strip().lower()
+                    if user_confirmation == "yes":
+                        execute_shell_command(f"bash {full_filename}", config)
+                    else:
+                        print("Script execution aborted by the user.")
+                else:
+                    print("Failed to save the script.")
+        else:
+            print("No executable script found in the LLM response.")
+    elif config.autopilot_mode:
+        scripts = extract_script_from_response(llm_response)
+        if scripts:
+            final_script = assemble_final_script(scripts, config.api_key)
+            if final_script:
+                auto_handle_script_execution(final_script, config)
+        else:
+            print("No executable script found in the LLM response.")
+    else:
+        print_streamed_message(llm_response, config.CYAN)
         scripts = extract_script_from_response(llm_response)
         if scripts:
             for script, file_extension, _ in scripts:
@@ -206,6 +289,12 @@ def auto_handle_script_execution(final_script, config):
     except Exception as e:
         print(f"{config.RED}Failed to handle script execution: {e}{config.RESET}")
         return False
+
+def get_user_confirmation(command: str) -> bool:
+    """Get user confirmation before executing a command."""
+    print(f"\nAbout to execute command:\n{command}")
+    response = input("Do you want to proceed? (yes/no): ").strip().lower()
+    return response in ['yes', 'y']
 
 def execute_shell_command(command, config, stream_output=True):
     """Execute a shell command with proper error handling and output management."""

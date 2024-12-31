@@ -56,68 +56,78 @@ def main():
 
             # Parse model selection flags if command starts with @
             if user_input.startswith("@"):
-                parts = user_input.split()
-                i = 1  # Skip the @ symbol
-                
-                # Process all flags first
-                flags_changed = False
-                while i < len(parts) and parts[i].startswith("-"):
-                    if parts[i] == "-o":
-                        config.session_model = "ollama"
-                        config.use_ollama = True
-                        config.use_claude = False
-                        config.use_groq = False
-                        flags_changed = True
+                try:
+                    # Split into parts but preserve quoted strings
+                    parts = []
+                    current = []
+                    in_quotes = False
+                    for char in user_input[1:].strip():  # Skip @ and leading space
+                        if char == '"':
+                            in_quotes = not in_quotes
+                        elif char.isspace() and not in_quotes:
+                            if current:
+                                parts.append(''.join(current))
+                                current = []
+                        else:
+                            current.append(char)
+                    if current:
+                        parts.append(''.join(current))
+                    
+                    # Process flags
+                    i = 0
+                    flags_changed = False
+                    while i < len(parts) and parts[i].startswith("-"):
+                        flag = parts[i]
+                        if flag == "-o":
+                            config.session_model = "ollama"
+                            config.use_ollama = True
+                            config.use_claude = config.use_groq = False
+                            flags_changed = True
+                        elif flag == "-c":
+                            config.session_model = "claude"
+                            config.use_claude = True
+                            config.use_ollama = config.use_groq = False
+                            flags_changed = True
+                        elif flag == "-g":
+                            config.session_model = "groq"
+                            config.use_groq = True
+                            config.use_claude = config.use_ollama = False
+                            flags_changed = True
+                        elif flag == "-a":
+                            config.autopilot_mode = True
+                            flags_changed = True
+                        elif flag == "-ci":
+                            config.scriptreviewer_on = True
+                            flags_changed = True
+                        elif flag == "-d":
+                            # Reset all settings to default
+                            config.session_model = None
+                            config.use_ollama = config.use_claude = config.use_groq = False
+                            config.autopilot_mode = config.scriptreviewer_on = False
+                            flags_changed = True
+                        else:
+                            break
                         i += 1
-                    elif parts[i] == "-c":
-                        config.session_model = "claude"
-                        config.use_claude = True
-                        config.use_ollama = False
-                        config.use_groq = False
-                        flags_changed = True
-                        i += 1
-                    elif parts[i] == "-g":
-                        config.session_model = "groq"
-                        config.use_groq = True
-                        config.use_claude = False
-                        config.use_ollama = False
-                        flags_changed = True
-                        i += 1
-                    elif parts[i] == "-a":
-                        config.autopilot_mode = True
-                        flags_changed = True
-                        i += 1
-                    elif parts[i] == "-ci":
-                        config.scriptreviewer_on = True
-                        flags_changed = True
-                        i += 1
-                    elif parts[i] == "-d":
-                        config.session_model = None
-                        config.use_ollama = False
-                        config.use_claude = False
-                        config.use_groq = False
-                        config.autopilot_mode = False
-                        config.scriptreviewer_on = False
-                        flags_changed = True
-                        i += 1
-                    else:
-                        break
 
-                # Save preferences if flags were changed
-                if flags_changed:
-                    config.save_preferences()
-                    chat_models = initialize_chat_models(config)
-                    if config.session_model:
-                        print(f"Using model: {config.session_model}")
-                    else:
-                        print("Using default model settings")
-                    if config.autopilot_mode:
-                        print("Autopilot mode enabled")
+                    # Save preferences if flags were changed
+                    if flags_changed:
+                        config.save_preferences()
+                        chat_models = initialize_chat_models(config)
+                        if config.session_model:
+                            print(f"Using model: {config.session_model}")
+                        else:
+                            print("Using default model settings")
+                        if config.autopilot_mode:
+                            print("Autopilot mode enabled")
 
-                # Reconstruct the actual query without @ and flags
-                user_input = " ".join(parts[i:])
-                
-                if not user_input:
+                    # Reconstruct query preserving quotes
+                    user_input = " ".join(parts[i:])
+                    
+                    if not user_input:
+                        continue
+                        
+                except Exception as e:
+                    print(f"{config.RED}Error parsing command: {str(e)}{config.RESET}")
                     continue
 
             if user_input.upper() == 'CMD':

@@ -52,29 +52,43 @@ def initialize_groq_client():
         print("Groq API key not found.")
     return None
 
-def chat_with_model(message, config, chat_models):
-    system_info = get_system_info()
+def chat_with_model(message, config, chat_models, system_prompt=None):
+    """Chat with the selected model.
+    
+    Args:
+        message: The user's message
+        config: Configuration object
+        chat_models: Dictionary of initialized model clients
+        system_prompt: Optional system prompt to override default
+    """
+    # Use provided system prompt or default
+    if system_prompt is None:
+        system_prompt = (
+            "Generate bash commands for tasks. "
+            "Comment minimally, you are expected to produce code that is runnable. "
+            f"You are part of a chain. System info: {get_system_info()}"
+        )
     
     # Use model based on session preference
     if config.session_model:
         try:
             if config.session_model == 'ollama' and 'model' in chat_models:
-                return chat_with_ollama(message, chat_models['model'], system_info)
+                return chat_with_ollama(message, chat_models['model'], system_prompt)
             elif config.session_model == 'groq' and 'model' in chat_models:
-                return chat_with_groq(message, chat_models['model'], system_info)
+                return chat_with_groq(message, chat_models['model'], system_prompt)
             elif config.session_model == 'claude':
-                return chat_with_claude(message, config)
+                return chat_with_claude(message, config, system_prompt)
         except Exception as e:
             print(f"Error using {config.session_model}: {e}")
     
     # Fallback to default model handlers if no session preference
     model_handlers = [
         ('ollama', lambda: config.use_ollama and 'model' in chat_models,
-         lambda: chat_with_ollama(message, chat_models['model'], system_info)),
+         lambda: chat_with_ollama(message, chat_models['model'], system_prompt)),
         ('groq', lambda: config.use_groq and 'model' in chat_models,
-         lambda: chat_with_groq(message, chat_models['model'], system_info)),
+         lambda: chat_with_groq(message, chat_models['model'], system_prompt)),
         ('claude', lambda: config.use_claude,
-         lambda: chat_with_claude(message, config))
+         lambda: chat_with_claude(message, config, system_prompt))
     ]
     
     for model_name, check_enabled, handler in model_handlers:
@@ -86,12 +100,9 @@ def chat_with_model(message, config, chat_models):
                 continue
     
     # Final fallback to OpenAI
-    return chat_with_openai(message, config)
+    return chat_with_openai(message, config, system_prompt)
 
-def chat_with_ollama(message, ollama_client, system_info):
-    system_prompt = (f"Generate bash commands for tasks. "
-                     "Comment minimally, you are expected to produce code that is runnable. "
-                     f"You are part of a chain. System info: {system_info}")
+def chat_with_ollama(message, ollama_client, system_prompt):
     try:
         # Use the running model if available, otherwise fallback to a default
         model = getattr(ollama_client, 'running_model', 'llama3.1:8b')
@@ -109,10 +120,7 @@ def chat_with_ollama(message, ollama_client, system_info):
     except Exception as e:
         return f"Error while chatting with Ollama: {e}"
 
-def chat_with_groq(message, groq_client, system_info):
-    system_prompt = (f"Generate bash commands for terminal tasks. "
-                     "Comment minimally, you are expected to produce code that is runnable. "
-                     f"You are part of a chain. System info: {system_info}")
+def chat_with_groq(message, groq_client, system_prompt):
     try:
         chat_completion = groq_client.chat.completions.create(
             messages=[
@@ -125,7 +133,7 @@ def chat_with_groq(message, groq_client, system_info):
     except Exception as e:
         return f"Error while chatting with Groq: {e}"
 
-def chat_with_claude(message, config):
+def chat_with_claude(message, config, system_prompt):
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
     if not anthropic_api_key:
         return "Anthropic API key missing."
@@ -145,6 +153,7 @@ def chat_with_claude(message, config):
         "model": model,
         "max_tokens": 1024,
         "messages": [
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": message}
         ]
     }
@@ -158,7 +167,7 @@ def chat_with_claude(message, config):
     except requests.exceptions.RequestException as e:
         return f"Error while chatting with Claude: {e}"
 
-def chat_with_openai(message, config):
+def chat_with_openai(message, config, system_prompt=None):
     if not config.api_key:
         return "OpenAI API key missing."
 
@@ -167,25 +176,33 @@ def chat_with_openai(message, config):
         "Authorization": f"Bearer {config.api_key}"
     }
 
-    model = config.models.get(config.current_model)
-    if not model:
-        return f"Unknown model: {config.current_model}"
-
-    # Base request data
+    # Get model from config's models dictionary, fallback to gpt-4-turbo-preview
+    model = config.models.get(config.current_model, "gpt-4-turbo-preview")
+    
+    # Use provided system prompt or default
+    if system_prompt is None:
+        system_prompt = (
+            "Generate bash commands for tasks. "
+            "Comment minimally, you are expected to produce code that is runnable. "
+            f"You are part of a chain. System info: {get_system_info()}"
+        )
+    
     data = {
         "model": model,
         "messages": [
-            {"role": "system", "content": "Generate bash commands for tasks. Comment minimally, you are expected to produce code that is runnable. You are part of a chain."},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": message}
-        ]
+        ],
+        "temperature": 0.7,
+        "max_tokens": 4096  # Default token limit
     }
 
     # Add model-specific configurations
-    if model.startswith("gpt-4o"):
-        data["max_tokens"] = 16384  # Higher token limit for GPT-4o models
-    elif model.startswith("o1"):
-        data["max_tokens"] = 32768  # Higher token limit for o1 models
-        data["reasoning_steps"] = "auto"  # Enable reasoning for o1 models
+    if model.startswith("gpt-4"):
+        data["max_tokens"] = 8192  # Higher token limit for GPT-4 models
+    elif model.startswith("claude-"):
+        # Claude models are handled by chat_with_claude
+        return chat_with_claude(message, config, system_prompt)
 
     endpoint = "https://api.openai.com/v1/chat/completions"
 
