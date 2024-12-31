@@ -40,26 +40,43 @@ class ContextAgent:
     
     def _generate_analysis_prompt(self, request: str) -> str:
         """Generate prompt for LLM analysis of the request."""
+        # Define the JSON template separately
+        json_template = '''{
+    "selected_tool": "default",
+    "reasoning": "Explanation of why this tool was selected",
+    "parameters": {
+        "operation": "process_command",
+        "content": "user_request"
+    },
+    "context_management": {
+        "required": false,
+        "priority_level": "normal",
+        "entities": [],
+        "relationships": []
+    }
+}'''
+
+        # Combine the prompt with the user request
         return f"""Analyze the following user request and determine the optimal tool selection:
 
 User Request: {request}
 
 Available Tools:
-1. Small Context Protocol
-   - Best for: Managing conversation context, multi-step reasoning, information synthesis
-   - Features: Priority-based context management, token optimization, entity tracking
+1. Default
+   - Best for: Simple commands, basic queries, direct responses
+   - Features: Command execution, basic text processing
 
-2. Fetch Tool
-   - Best for: Retrieving external information, web scraping, API calls
-   - Features: Clean data extraction, content processing
+2. Small Context Protocol
+   - Best for: Complex conversations, context tracking
+   - Features: Context management, token optimization
 
-3. Sequential Thinking
-   - Best for: Breaking down complex problems, step-by-step reasoning
-   - Features: Structured problem decomposition, dependency tracking
+3. Fetch Tool
+   - Best for: External data retrieval, web content
+   - Features: Data extraction, content processing
 
-4. Default Tools
-   - Best for: Simple file operations, command execution, basic tasks
-   - Features: File reading/writing, command execution, basic operations
+4. Sequential Thinking
+   - Best for: Multi-step problems, complex reasoning
+   - Features: Step-by-step analysis, dependency tracking
 
 Analysis Instructions:
 1. Evaluate if the request involves:
@@ -82,20 +99,7 @@ Analysis Instructions:
    - Integration requirements
 
 Provide your analysis in JSON format:
-{
-    "selected_tool": "tool_name",
-    "reasoning": "Detailed explanation of selection",
-    "parameters": {
-        "param1": "value1",
-        ...
-    },
-    "context_management": {
-        "required": boolean,
-        "priority_level": "critical|important|supplementary",
-        "entities": [],
-        "relationships": []
-    }
-}"""
+{json_template}"""
 
     def execute_tool_selection(self, analysis: Dict[str, any]) -> Dict[str, any]:
         """Execute the selected tool based on LLM analysis.
