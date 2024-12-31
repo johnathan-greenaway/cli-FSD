@@ -2,7 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+cli_FSD.egg-info
 # C extensions
 *.so
 .lastrun.txt

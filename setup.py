@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='cli-FSD',
-    version='0.89',
+    version='1.3.99',
     author='JG',
     author_email='wazacraftRFID@gmail.com',
     description='LLM-enabled companion utility for your terminal.',
@@ -20,6 +20,8 @@ setup(
         'flask-cors',
         'python-dotenv',
         'requests',
+        'ollama',
+        'groq'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
@@ -28,3 +30,4 @@ setup(
     ],
     python_requires='>=3.6',
 )
+  
