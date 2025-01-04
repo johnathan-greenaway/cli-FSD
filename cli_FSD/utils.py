@@ -150,11 +150,28 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     try:
         import json
         import subprocess
+        from pathlib import Path
         
+        # Get MCP settings from config directory
+        from pathlib import Path
+        try:
+            config_dir = Path(__file__).parent / "config_files"
+            mcp_settings_file = config_dir / "mcp_settings.json"
+            
+            with open(mcp_settings_file) as f:
+                mcp_settings = json.load(f)
+        except Exception as e:
+            return f"Error loading MCP settings: {str(e)}"
+            
+        # Get server config
+        server_config = mcp_settings["mcpServers"].get(server_name)
+        if not server_config:
+            return f"Error: MCP server '{server_name}' not found in settings"
+            
         # Format the MCP command
         mcp_command = {
             "jsonrpc": "2.0",
-            "method": "callTool",
+            "method": "call_tool",
             "params": {
                 "name": tool_name,
                 "arguments": arguments
@@ -162,13 +179,21 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
             "id": 1
         }
         
+        # Build command with args from config
+        cmd = [server_config["command"]] + server_config["args"]
+        
+        # Get the current working directory
+        cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
         # Write command to stdin and read response from stdout
         process = subprocess.Popen(
-            ["node", f"/home/icarus/Documents/Cline/MCP/{server_name}/build/index.js"],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            env=server_config.get("env", {}),
+            cwd=cwd  # Set the working directory
         )
         
         # Send command and get response
@@ -182,12 +207,25 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
             response = json.loads(stdout)
             if "error" in response:
                 return f"Error: {response['error']['message']}"
-            if "result" in response and "content" in response["result"]:
-                return "\n".join(
-                    block["text"] for block in response["result"]["content"]
-                    if block["type"] == "text"
-                )
-            return "No content in response"
+            if "result" in response:
+                content = response["result"].get("content")
+                if isinstance(content, list):
+                    return "\n".join(
+                        block["text"] for block in content
+                        if block["type"] == "text"
+                    )
+                elif isinstance(content, str):
+                    try:
+                        # Try to parse as JSON first
+                        parsed = json.loads(content)
+                        if isinstance(parsed, dict) and "content" in parsed:
+                            return parsed["content"]
+                        return content
+                    except json.JSONDecodeError:
+                        return content
+                else:
+                    return f"Error: Unexpected content format: {content}"
+            return "Error: No result in response"
         except json.JSONDecodeError:
             return f"Error: Invalid JSON response from MCP server"
             

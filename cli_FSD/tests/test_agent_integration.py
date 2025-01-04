@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import Mock, patch
 from ..agents.context_agent import ContextAgent
 from ..script_handlers import process_input_based_on_mode
-from ..config import Config
+from ..configuration import Config
 
 @pytest.fixture
 def mock_config():

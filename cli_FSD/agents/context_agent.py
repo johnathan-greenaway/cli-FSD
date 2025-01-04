@@ -6,6 +6,7 @@ or other tools like fetch, sequential thinking, etc. based on the nature of the 
 
 from typing import Dict, List, Optional, Union
 import json
+import time
 
 class ContextAgent:
     """Agent for context-aware tool selection."""
@@ -42,22 +43,44 @@ class ContextAgent:
         """Generate prompt for LLM analysis of the request."""
         # Define the JSON template separately
         json_template = '''{
-    "selected_tool": "default",
+    "selected_tool": "small_context",
     "reasoning": "Explanation of why this tool was selected",
     "parameters": {
-        "operation": "process_command",
+        "operation": "browse_web",
+        "url": "https://apnews.com",
         "content": "user_request"
     },
     "context_management": {
-        "required": false,
-        "priority_level": "normal",
+        "required": true,
+        "priority_level": "important",
         "entities": [],
         "relationships": []
     }
 }'''
 
-        # Combine the prompt with the user request
-        return f"""Analyze the following user request and determine the optimal tool selection:
+        # Check if this is a web browsing request
+        web_keywords = ["browse", "web", "internet", "website", "url", "news", "article"]
+        is_web_request = any(keyword in request.lower() for keyword in web_keywords)
+
+        if is_web_request:
+            # For web browsing requests, use a specific template
+            return f"""This appears to be a web browsing request: "{request}"
+
+For web browsing requests, we should use the Small Context Protocol with the browse_web operation.
+This allows us to properly handle web content extraction and context management.
+
+The response should be in this JSON format:
+{json_template}
+
+Please analyze the request and determine:
+1. The most appropriate URL to fulfill the request
+2. Any specific entities or relationships to track
+3. The appropriate priority level for the content
+
+Provide your analysis in the specified JSON format."""
+        else:
+            # For non-web requests, use the standard analysis template
+            return f"""Analyze the following user request and determine the optimal tool selection:
 
 User Request: {request}
 
@@ -68,7 +91,8 @@ Available Tools:
 
 2. Small Context Protocol
    - Best for: Complex conversations, context tracking
-   - Features: Context management, token optimization
+   - Features: Context management, token optimization, web browsing
+   - Web Features: URL processing, content extraction, context integration
 
 3. Fetch Tool
    - Best for: External data retrieval, web content
@@ -131,12 +155,29 @@ Provide your analysis in JSON format:
         context_config: Dict[str, any]
     ) -> Dict[str, any]:
         """Handle Small Context Protocol execution."""
-        if context_config.get("required", False):
-            # Use MCP tool for context management
+        operation = parameters.get("operation", "create_context")
+        
+        # Handle web browsing operation
+        if operation == "browse_web":
+            # Create a new context ID for this browsing session
+            context_id = f"web_{int(time.time())}"
             return {
                 "tool": "use_mcp_tool",
                 "server": "small-context",
-                "operation": parameters.get("operation", "create_context"),
+                "operation": "browse_web",
+                "arguments": {
+                    "url": parameters.get("url"),
+                    "priority": context_config.get("priority_level", "important"),
+                    "context_id": context_id
+                }
+            }
+            
+        # Handle standard context operations
+        if context_config.get("required", False):
+            return {
+                "tool": "use_mcp_tool",
+                "server": "small-context",
+                "operation": operation,
                 "arguments": {
                     "contextId": parameters.get("context_id"),
                     "content": parameters.get("content"),

@@ -3,15 +3,17 @@
 import argparse
 import sys
 import logging
-from .config import initialize_config
-from .utils import (
+from . import configuration
+from .configuration import initialize_config
+
+from cli_FSD.utils import (
     print_instructions_once_per_day,
     display_greeting,
     cleanup_previous_assembled_scripts
 )
-from .chat_models import initialize_chat_models
-from .command_handlers import handle_command_mode
-from .script_handlers import process_input_based_on_mode
+from cli_FSD.chat_models import initialize_chat_models
+from cli_FSD.command_handlers import handle_command_mode
+from cli_FSD.script_handlers import process_input_based_on_mode
 
 def main():
     # Configure logging
