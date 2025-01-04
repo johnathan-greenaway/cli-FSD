@@ -11,6 +11,10 @@ from urllib.parse import urlparse
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from small_context.cache import ContentCache
 
 @dataclass
 class Message:
