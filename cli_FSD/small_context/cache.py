@@ -2,6 +2,7 @@
 
 import json
 import sys
+import time
 import redis
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
@@ -102,30 +103,44 @@ class ContentCache:
         """
         content = self.get_content(url)
         if not content:
-            return {'error': 'Content not found'}
+            return {
+                "type": "error",
+                "url": url,
+                "timestamp": time.time(),
+                "error": "Content not found in cache"
+            }
             
         result = {
-            'url': content.url,
-            'title': content.title,
-            'content': []
+            "type": "webpage",
+            "url": content.url,
+            "title": content.title,
+            "timestamp": content.timestamp,
+            "content": []
         }
         
-        # Add selected headlines
+        # Add selected headlines as stories
         if 'headlines' in selection:
             for idx in selection['headlines']:
                 if 0 <= idx < len(content.headlines):
                     result['content'].append({
-                        'type': 'headline',
-                        'text': content.headlines[idx]
+                        "type": "story",
+                        "title": content.headlines[idx],
+                        "url": "",
+                        "metadata": {}
                     })
                     
-        # Add selected paragraphs
+        # Add selected paragraphs as sections
         if 'paragraphs' in selection:
             for idx in selection['paragraphs']:
                 if 0 <= idx < len(content.paragraphs):
                     result['content'].append({
-                        'type': 'paragraph',
-                        'text': content.paragraphs[idx]
+                        "type": "section",
+                        "blocks": [{
+                            "type": "content_block",
+                            "text": content.paragraphs[idx],
+                            "links": [],
+                            "metadata": {}
+                        }]
                     })
                     
         return result

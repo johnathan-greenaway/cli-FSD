@@ -15,12 +15,104 @@ from .configuration import Config
 
 from .agents.context_agent import ContextAgent
 
+# Cache for storing content from MCP tools
+_content_cache = {
+    'raw_content': None,  # Raw JSON response
+    'formatted_content': None,  # Formatted text for summaries
+    'headlines': [],  # List of headlines for easy reference
+    'paragraphs': []  # List of paragraphs for easy reference
+}
+
+def _find_matching_content(query):
+    """Find content matching a natural language query."""
+    if not _content_cache['raw_content']:
+        return None
+        
+    # Use LLM to help parse the query and find relevant content
+    try:
+        content = _content_cache['raw_content']
+        if content.get("type") == "webpage":
+            # Format content for matching
+            stories = []
+            for item in content.get("content", []):
+                if item.get("type") == "story":
+                    story_text = [
+                        f"Title: {item['title']}",
+                        f"URL: {item['url']}"
+                    ]
+                    for key, value in item.get("metadata", {}).items():
+                        story_text.append(f"{key}: {value}")
+                    stories.append({
+                        "title": item["title"],
+                        "content": "\n".join(story_text)
+                    })
+                elif item.get("type") == "section":
+                    for block in item.get("blocks", []):
+                        if block.get("text"):
+                            text = block["text"]
+                            if block.get("links"):
+                                text += "\nLinks:\n" + "\n".join(
+                                    f"- {link['text']}: {link['url']}"
+                                    for link in block["links"]
+                                )
+                            stories.append({
+                                "title": text.split("\n")[0],
+                                "content": text
+                            })
+            
+            if stories:
+                # Ask LLM to analyze and match content
+                analysis = chat_with_model(
+                    message=(
+                        "Given these content sections:\n\n" +
+                        "\n---\n".join(f"Section {i}:\n{s['content']}" for i, s in enumerate(stories)) +
+                        f"\n\nAnd this user request: '{query}'\n\n"
+                        "Analyze the content and the request to:\n"
+                        "1. Find the most relevant section(s)\n"
+                        "2. Extract specific details or quotes that answer the request\n"
+                        "3. Include any relevant links or references\n\n"
+                        "Format your response as JSON:\n"
+                        "{\n"
+                        "  \"sections\": [section_numbers],\n"
+                        "  \"details\": \"extracted details and quotes\",\n"
+                        "  \"links\": [\"relevant links\"]\n"
+                        "}"
+                    ),
+                    config=Config(),
+                    chat_models=None,
+                    system_prompt="You are a content analysis expert. Respond only with a JSON object containing the requested information."
+                )
+                
+                try:
+                    result = json.loads(analysis.strip())
+                    if result.get("sections"):
+                        matched_content = []
+                        for section_num in result["sections"]:
+                            if 0 <= section_num < len(stories):
+                                matched_content.append(stories[section_num]["content"])
+                        
+                        return {
+                            'headline': stories[result["sections"][0]]["title"],
+                            'content': "\n\n".join(matched_content),
+                            'details': result.get("details", ""),
+                            'links': result.get("links", [])
+                        }
+                except (ValueError, json.JSONDecodeError):
+                    pass
+            
+    except Exception:
+        pass
+    
+    return None
+
 # Ensure query is not empty before processing
 def _validate_query(query: str) -> bool:
     """Validate that the query is not empty and contains actual content."""
     return bool(query and query.strip())
 
 def process_input_based_on_mode(query, config, chat_models):
+    global _content_cache
+    
     # Validate query
     if not _validate_query(query):
         print(f"{config.YELLOW}Please provide a command or question.{config.RESET}")
@@ -29,6 +121,39 @@ def process_input_based_on_mode(query, config, chat_models):
     # Print current configuration for debugging
     if config.session_model:
         print(f"{config.CYAN}Using model: {config.session_model}{config.RESET}")
+    
+    # Check if this is a request to view specific cached content
+    if _content_cache['raw_content'] and any(word in query.lower() for word in ['show', 'view', 'read', 'tell', 'about']):
+        matching_content = _find_matching_content(query)
+        if matching_content:
+            print(f"\n{config.CYAN}Found relevant content:{config.RESET}")
+            print(f"\nHeadline: {matching_content['headline']}")
+            if matching_content['content']:
+                print(f"\nContent: {matching_content['content']}")
+            if matching_content.get('details'):
+                print(f"\nDetails: {matching_content['details']}")
+            if matching_content.get('links'):
+                print("\nRelevant links:")
+                for link in matching_content['links']:
+                    print(f"- {link}")
+            return None
+    
+    # Check if this is a follow-up question about cached content
+    if _content_cache['formatted_content'] and not query.lower().startswith(("get", "fetch", "find")):
+        # Process as a question about the cached content
+        llm_response = chat_with_model(
+            message=(
+                f"Based on this content:\n\n{_content_cache['formatted_content']}\n\n"
+                f"User question: {query}\n\n"
+                "Provide a clear and focused answer. If the question is about a specific topic or article, "
+                "include relevant quotes and links from the content. After your answer, suggest 2-3 relevant "
+                "follow-up questions the user might want to ask about this topic."
+            ),
+            config=config,
+            chat_models=chat_models
+        )
+        print_streamed_message(llm_response, config.CYAN)
+        return None
     
     # Always use context agent first for tool selection
     try:
@@ -43,13 +168,13 @@ def process_input_based_on_mode(query, config, chat_models):
             system_prompt=(
                 "You are a tool selection expert. Analyze the user's request and determine "
                 "which tool would be most effective. For web browsing requests, always select "
-                "the small_context tool with browse_web operation. Respond with a JSON object "
-                "containing your analysis and selection. Be precise and follow the specified format."
+                "the small_context tool with browse_web operation. When using browse_web, "
+                "ensure the response excludes technical details about servers, responses, or parsing. "
+                "Focus only on the actual content. Respond with a JSON object containing your "
+                "analysis and selection. Be precise and follow the specified format."
             )
         )
-        print(f"{config.CYAN}Tool selection analysis:{config.RESET}\n{llm_analysis}")
-        
-        # Parse LLM response
+        # Parse LLM response quietly
         try:
             # Extract JSON from the response
             json_start = llm_analysis.find('{')
@@ -57,111 +182,133 @@ def process_input_based_on_mode(query, config, chat_models):
             if json_start >= 0 and json_end > json_start:
                 json_str = llm_analysis[json_start:json_end]
                 tool_selection = json.loads(json_str)
-            print(f"{config.CYAN}Tool selection parsed successfully{config.RESET}")
             
             # Get response using selected tool
             if tool_selection["selected_tool"].lower() == "small_context":
+                # Extract URL from tool selection
+                parameters = tool_selection.get("parameters", {})
+                url = parameters.get("url")
+                if not url or url == "[URL will be determined based on request]":
+                    print(f"{config.RED}No valid URL provided in tool selection{config.RESET}")
+                    return None
+
+                # Update the request with the LLM-selected URL
                 result = agent.execute_tool_selection(tool_selection)
                 if result.get("tool") == "use_mcp_tool":
                     from .utils import use_mcp_tool
+                    # Execute MCP tool with debug output
                     print(f"{config.CYAN}Executing MCP tool: {result['operation']}{config.RESET}")
-                    llm_response = use_mcp_tool(
+                    print(f"{config.CYAN}Using URL: {url}{config.RESET}")
+                    
+                    # Create arguments with the URL
+                    arguments = {
+                        **result["arguments"],
+                        "url": url  # Ensure URL is included in arguments
+                    }
+                    
+                    response = use_mcp_tool(
                         server_name=result["server"],
                         tool_name=result["operation"],
-                        arguments=result["arguments"]
+                        arguments=arguments
                     )
-                    print(f"{config.CYAN}MCP tool response:{config.RESET}")
-                    if "Error:" in llm_response:
-                        # If MCP tool failed, fall back to standard LLM processing
-                        print(f"{config.YELLOW}MCP tool failed: {llm_response}{config.RESET}")
-                        print(f"{config.YELLOW}Falling back to standard processing{config.RESET}")
-                        llm_response = chat_with_model(query, config, chat_models)
-                    else:
-                        # Parse the response
-                        try:
-                            content = json.loads(llm_response)
-                            
-                            # If it's a browse result, show content overview
-                            if isinstance(content, dict) and "headline_count" in content:
-                                print(f"{config.CYAN}Found {content['headline_count']} headlines and {content['paragraph_count']} paragraphs{config.RESET}")
+                    print(f"{config.CYAN}MCP tool response received{config.RESET}")
+                    
+                    try:
+                        # Handle both string and list responses
+                        if isinstance(response, str):
+                            content = json.loads(response)
+                        elif isinstance(response, (list, dict)):
+                            content = response
+                        else:
+                            raise ValueError(f"Unexpected response type: {type(response)}")
+                        
+                        # Format content for processing
+                        if isinstance(content, dict):
+                            if content.get("type") == "webpage":
+                                # Process structured content
+                                _content_cache['raw_content'] = content
                                 
-                                # Print headlines with numbers
-                                print("\nHeadlines:")
-                                for i, headline in enumerate(content.get("headlines", [])):
-                                    print(f"{i}: {headline}")
+                                # Format content for LLM processing
+                                formatted_content = []
                                 
-                                # Print first few paragraphs with numbers
-                                print("\nFirst few paragraphs:")
-                                paragraphs = content.get("paragraphs", [])
-                                for i, para in enumerate(paragraphs[:5]):
-                                    print(f"{i}: {para[:100]}...")
-                                if len(paragraphs) > 5:
-                                    print(f"...and {len(paragraphs) - 5} more paragraphs")
+                                # Process each content block
+                                for item in content.get("content", []):
+                                    if item.get("type") == "story":
+                                        # Format story with metadata
+                                        story_text = [
+                                            f"Title: {item['title']}",
+                                            f"URL: {item['url']}"
+                                        ]
+                                        # Add metadata if present
+                                        for key, value in item.get("metadata", {}).items():
+                                            story_text.append(f"{key}: {value}")
+                                        formatted_content.append("\n".join(story_text))
+                                    elif item.get("type") == "section":
+                                        # Process section blocks
+                                        for block in item.get("blocks", []):
+                                            if block.get("text"):
+                                                text = block["text"]
+                                                # Add links if present
+                                                if block.get("links"):
+                                                    text += "\nLinks:\n" + "\n".join(
+                                                        f"- {link['text']}: {link['url']}"
+                                                        for link in block["links"]
+                                                    )
+                                                formatted_content.append(text)
                                 
-                                # Ask user if they want to select specific content
-                                user_input = input("\nWould you like to select specific headlines/paragraphs? (yes/no): ").strip().lower()
-                                if user_input == 'yes':
-                                    # Get selection from user
-                                    print("\nEnter headline numbers to include (comma-separated, e.g. 0,1,3):")
-                                    headlines = input("> ").strip()
-                                    print("\nEnter paragraph numbers to include (comma-separated, e.g. 0,2,5):")
-                                    paragraphs = input("> ").strip()
-                                    
-                                    # Parse selections
-                                    headline_indices = [int(i) for i in headlines.split(',') if i.strip()]
-                                    paragraph_indices = [int(i) for i in paragraphs.split(',') if i.strip()]
-                                    
-                                    # Use select_content tool
-                                    selection_result = use_mcp_tool(
-                                        server_name="small-context",
-                                        tool_name="select_content",
-                                        arguments={
-                                            "url": content["url"],
-                                            "selection": {
-                                                "headlines": headline_indices,
-                                                "paragraphs": paragraph_indices
-                                            }
-                                        }
-                                    )
-                                    
-                                    try:
-                                        # Parse the selection result
-                                        result = json.loads(selection_result)
-                                        if "content" in result:
-                                            # Send selected content to LLM for processing
-                                            llm_response = chat_with_model(
-                                                message=f"Please summarize this content:\n\n{result['content']}",
-                                                config=config,
-                                                chat_models=chat_models
-                                            )
-                                            print_streamed_message(llm_response, config.CYAN)
-                                            return None
-                                    except json.JSONDecodeError:
-                                        print(f"{config.YELLOW}Error parsing selection result{config.RESET}")
-                                    
-                            # Otherwise format and summarize as before
-                            if isinstance(content, str):
-                                formatted_response = f"Here's what I found:\n\n{content}"
+                                # Cache formatted content
+                                _content_cache['formatted_content'] = "\n\n".join(formatted_content)
+                                
+                                # Let LLM analyze and present the content
+                                llm_response = chat_with_model(
+                                    message=(
+                                        "You are a content analyzer. Given this content:\n\n"
+                                        f"{_content_cache['formatted_content']}\n\n"
+                                        "1. Provide a clear overview of the main points\n"
+                                        "2. Format each point as a bullet\n"
+                                        "3. Include relevant links when available\n"
+                                        "4. Focus on the actual content\n"
+                                        "5. If there are multiple stories/sections, organize them clearly\n"
+                                        "6. Highlight any particularly interesting or important information\n\n"
+                                        "After your summary, provide a list of suggested interactions like:\n"
+                                        "- 'Tell me more about [topic]'\n"
+                                        "- 'Show me the full article about [headline]'\n"
+                                        "- 'What are the key points about [subject]'\n"
+                                        "Choose topics/headlines/subjects from the actual content."
+                                    ),
+                                    config=config,
+                                    chat_models=chat_models
+                                )
+                                print_streamed_message(llm_response, config.CYAN)
+                                
+                                # Print interaction hint
+                                print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
                             else:
-                                formatted_response = f"Here's what I found:\n\n{json.dumps(content, indent=2)}"
-                                
+                                formatted_response = json.dumps(content, indent=2)
+                                llm_response = chat_with_model(
+                                    message=f"Please summarize this content:\n\n{formatted_response}",
+                                    config=config,
+                                    chat_models=chat_models
+                                )
+                                print_streamed_message(llm_response, config.CYAN)
+                        else:
+                            formatted_response = str(content)
                             llm_response = chat_with_model(
-                                message=f"Please summarize this content in a clear and concise way:\n\n{formatted_response}",
+                                message=f"Please summarize this content:\n\n{formatted_response}",
                                 config=config,
                                 chat_models=chat_models
                             )
                             print_streamed_message(llm_response, config.CYAN)
-                            return None
                             
-                        except json.JSONDecodeError:
-                            formatted_response = f"Here's what I found:\n\n{llm_response}"
-                            llm_response = chat_with_model(
-                                message=f"Please summarize this content in a clear and concise way:\n\n{formatted_response}",
-                                config=config,
-                                chat_models=chat_models
-                            )
-                            print_streamed_message(llm_response, config.CYAN)
-                            return None
+                    except json.JSONDecodeError:
+                        formatted_response = f"Here's what I found:\n\n{llm_response}"
+                        llm_response = chat_with_model(
+                            message=f"Please summarize this content in a clear and concise way:\n\n{formatted_response}",
+                            config=config,
+                            chat_models=chat_models
+                        )
+                        print_streamed_message(llm_response, config.CYAN)
+                    return None
                 else:
                     llm_response = f"Error: {result.get('error', 'Unknown error')}"
             else:
@@ -562,9 +709,6 @@ def execute_resolution_script(resolution, config):
         print(f"{config.RED}Resolution execution failed with error: {e}{config.RESET}")
     except Exception as e:
         print(f"An error occurred while executing the resolution: {e}")
-
-# Cache system info
-_system_info_cache = None
 
 def get_cached_system_info():
     global _system_info_cache
