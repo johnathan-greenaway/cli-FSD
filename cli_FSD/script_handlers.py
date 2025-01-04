@@ -301,9 +301,9 @@ def process_input_based_on_mode(query, config, chat_models):
                             print_streamed_message(llm_response, config.CYAN)
                             
                     except json.JSONDecodeError:
-                        formatted_response = f"Here's what I found:\n\n{llm_response}"
+                        # Handle raw response directly
                         llm_response = chat_with_model(
-                            message=f"Please summarize this content in a clear and concise way:\n\n{formatted_response}",
+                            message=f"Please summarize this content in a clear and concise way:\n\n{response}",
                             config=config,
                             chat_models=chat_models
                         )
@@ -481,8 +481,53 @@ def assemble_final_script(scripts, api_key):
 # Track assembled scripts for cleanup
 _assembled_scripts = set()
 
+def handle_script_cleanup(config):
+    """Handle cleanup of assembled scripts with option to save."""
+    global _assembled_scripts
+    
+    if not _assembled_scripts:
+        return
+        
+    print(f"\n{config.CYAN}Found {len(_assembled_scripts)} unnamed script(s) from this session.{config.RESET}")
+    save_all = input("Would you like to review and save any scripts before cleanup? (yes/no): ").strip().lower()
+    
+    if save_all == 'yes':
+        for script_path in _assembled_scripts.copy():
+            try:
+                if os.path.exists(script_path):
+                    with open(script_path, 'r') as f:
+                        content = f.read()
+                    
+                    print(f"\n{config.CYAN}Script content:{config.RESET}\n{content}")
+                    save = input(f"Save this script? (yes/no): ").strip().lower()
+                    
+                    if save == 'yes':
+                        name = input("Enter name for the script (without extension): ").strip()
+                        if name:
+                            new_path = f"{name}.sh"
+                            os.rename(script_path, new_path)
+                            print(f"Script saved as {new_path}")
+                            _assembled_scripts.remove(script_path)
+                            continue
+                    
+                    # If not saving or no name provided, delete the script
+                    os.unlink(script_path)
+                    _assembled_scripts.remove(script_path)
+                    
+            except OSError as e:
+                print(f"{config.RED}Warning: Failed to handle script {script_path}: {e}{config.RESET}")
+    else:
+        # Clean up all scripts without saving
+        for script in _assembled_scripts.copy():
+            try:
+                if os.path.exists(script):
+                    os.unlink(script)
+                    _assembled_scripts.remove(script)
+            except OSError as e:
+                print(f"{config.RED}Warning: Failed to clean up script {script}: {e}{config.RESET}")
+
 def cleanup_assembled_scripts():
-    """Clean up any remaining assembled scripts."""
+    """Clean up any remaining assembled scripts without prompting."""
     global _assembled_scripts
     for script in _assembled_scripts.copy():
         try:
@@ -559,8 +604,9 @@ def execute_shell_command(command, config, stream_output=True):
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            bufsize=1
+            bufsize=1,
+            encoding='utf-8',
+            errors='replace'  # Handle encoding errors by replacing invalid characters
         ) as process:
             output_lines = []
             
@@ -709,6 +755,9 @@ def execute_resolution_script(resolution, config):
         print(f"{config.RED}Resolution execution failed with error: {e}{config.RESET}")
     except Exception as e:
         print(f"An error occurred while executing the resolution: {e}")
+
+# Initialize system info cache
+_system_info_cache = None
 
 def get_cached_system_info():
     global _system_info_cache
