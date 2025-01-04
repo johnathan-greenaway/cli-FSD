@@ -4,27 +4,206 @@ import re
 import os
 import subprocess
 import tempfile
+import json
 from datetime import datetime
-from .utils import print_streamed_message, get_system_info, animated_loading, save_script
+from .utils import print_streamed_message, get_system_info, animated_loading, save_script, use_mcp_tool
 from .chat_models import chat_with_model
+from .resources.assembler import AssemblyAssist
 import threading
 import requests
-from .config import Config
+from .configuration import Config
+
+from .agents.context_agent import ContextAgent
+
+# Ensure query is not empty before processing
+def _validate_query(query: str) -> bool:
+    """Validate that the query is not empty and contains actual content."""
+    return bool(query and query.strip())
 
 def process_input_based_on_mode(query, config, chat_models):
+    # Validate query
+    if not _validate_query(query):
+        print(f"{config.YELLOW}Please provide a command or question.{config.RESET}")
+        return None
+        
     # Print current configuration for debugging
     if config.session_model:
         print(f"{config.CYAN}Using model: {config.session_model}{config.RESET}")
     
-    # Handle based on mode
-    if config.safe_mode:
-        process_input_in_safe_mode(query, config, chat_models)
-    elif config.autopilot_mode:
-        process_input_in_autopilot_mode(query, config, chat_models)
-    else:
-        llm_response = chat_with_model(query, config, chat_models)
-        print_streamed_message(llm_response, config.CYAN)
+    # Always use context agent first for tool selection
+    try:
+        agent = ContextAgent()
+        analysis = agent.analyze_request(query)
+            
+        # Get LLM's tool selection decision with the analysis prompt
+        llm_analysis = chat_with_model(
+            message=analysis["prompt"],
+            config=config,
+            chat_models=chat_models,
+            system_prompt=(
+                "You are a tool selection expert. Analyze the user's request and determine "
+                "which tool would be most effective. For web browsing requests, always select "
+                "the small_context tool with browse_web operation. Respond with a JSON object "
+                "containing your analysis and selection. Be precise and follow the specified format."
+            )
+        )
+        print(f"{config.CYAN}Tool selection analysis:{config.RESET}\n{llm_analysis}")
         
+        # Parse LLM response
+        try:
+            # Extract JSON from the response
+            json_start = llm_analysis.find('{')
+            json_end = llm_analysis.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                json_str = llm_analysis[json_start:json_end]
+                tool_selection = json.loads(json_str)
+            print(f"{config.CYAN}Tool selection parsed successfully{config.RESET}")
+            
+            # Get response using selected tool
+            if tool_selection["selected_tool"].lower() == "small_context":
+                result = agent.execute_tool_selection(tool_selection)
+                if result.get("tool") == "use_mcp_tool":
+                    from .utils import use_mcp_tool
+                    print(f"{config.CYAN}Executing MCP tool: {result['operation']}{config.RESET}")
+                    llm_response = use_mcp_tool(
+                        server_name=result["server"],
+                        tool_name=result["operation"],
+                        arguments=result["arguments"]
+                    )
+                    print(f"{config.CYAN}MCP tool response:{config.RESET}")
+                    if "Error:" in llm_response:
+                        # If MCP tool failed, fall back to standard LLM processing
+                        print(f"{config.YELLOW}MCP tool failed: {llm_response}{config.RESET}")
+                        print(f"{config.YELLOW}Falling back to standard processing{config.RESET}")
+                        llm_response = chat_with_model(query, config, chat_models)
+                    else:
+                        # Parse the response
+                        try:
+                            content = json.loads(llm_response)
+                            
+                            # If it's a browse result, show content overview
+                            if isinstance(content, dict) and "headline_count" in content:
+                                print(f"{config.CYAN}Found {content['headline_count']} headlines and {content['paragraph_count']} paragraphs{config.RESET}")
+                                
+                                # Print headlines with numbers
+                                print("\nHeadlines:")
+                                for i, headline in enumerate(content.get("headlines", [])):
+                                    print(f"{i}: {headline}")
+                                
+                                # Print first few paragraphs with numbers
+                                print("\nFirst few paragraphs:")
+                                paragraphs = content.get("paragraphs", [])
+                                for i, para in enumerate(paragraphs[:5]):
+                                    print(f"{i}: {para[:100]}...")
+                                if len(paragraphs) > 5:
+                                    print(f"...and {len(paragraphs) - 5} more paragraphs")
+                                
+                                # Ask user if they want to select specific content
+                                user_input = input("\nWould you like to select specific headlines/paragraphs? (yes/no): ").strip().lower()
+                                if user_input == 'yes':
+                                    # Get selection from user
+                                    print("\nEnter headline numbers to include (comma-separated, e.g. 0,1,3):")
+                                    headlines = input("> ").strip()
+                                    print("\nEnter paragraph numbers to include (comma-separated, e.g. 0,2,5):")
+                                    paragraphs = input("> ").strip()
+                                    
+                                    # Parse selections
+                                    headline_indices = [int(i) for i in headlines.split(',') if i.strip()]
+                                    paragraph_indices = [int(i) for i in paragraphs.split(',') if i.strip()]
+                                    
+                                    # Use select_content tool
+                                    selection_result = use_mcp_tool(
+                                        server_name="small-context",
+                                        tool_name="select_content",
+                                        arguments={
+                                            "url": content["url"],
+                                            "selection": {
+                                                "headlines": headline_indices,
+                                                "paragraphs": paragraph_indices
+                                            }
+                                        }
+                                    )
+                                    
+                                    try:
+                                        # Parse the selection result
+                                        result = json.loads(selection_result)
+                                        if "content" in result:
+                                            # Send selected content to LLM for processing
+                                            llm_response = chat_with_model(
+                                                message=f"Please summarize this content:\n\n{result['content']}",
+                                                config=config,
+                                                chat_models=chat_models
+                                            )
+                                            print_streamed_message(llm_response, config.CYAN)
+                                            return None
+                                    except json.JSONDecodeError:
+                                        print(f"{config.YELLOW}Error parsing selection result{config.RESET}")
+                                    
+                            # Otherwise format and summarize as before
+                            if isinstance(content, str):
+                                formatted_response = f"Here's what I found:\n\n{content}"
+                            else:
+                                formatted_response = f"Here's what I found:\n\n{json.dumps(content, indent=2)}"
+                                
+                            llm_response = chat_with_model(
+                                message=f"Please summarize this content in a clear and concise way:\n\n{formatted_response}",
+                                config=config,
+                                chat_models=chat_models
+                            )
+                            print_streamed_message(llm_response, config.CYAN)
+                            return None
+                            
+                        except json.JSONDecodeError:
+                            formatted_response = f"Here's what I found:\n\n{llm_response}"
+                            llm_response = chat_with_model(
+                                message=f"Please summarize this content in a clear and concise way:\n\n{formatted_response}",
+                                config=config,
+                                chat_models=chat_models
+                            )
+                            print_streamed_message(llm_response, config.CYAN)
+                            return None
+                else:
+                    llm_response = f"Error: {result.get('error', 'Unknown error')}"
+            else:
+                # Use standard LLM processing
+                llm_response = chat_with_model(query, config, chat_models)
+        except json.JSONDecodeError as e:
+            print(f"{config.RED}Failed to parse tool selection response: {str(e)}{config.RESET}")
+            llm_response = chat_with_model(query, config, chat_models)
+    except Exception as e:
+        print(f"{config.RED}Error in context agent processing: {str(e)}{config.RESET}")
+        llm_response = chat_with_model(query, config, chat_models)
+    
+    # Handle response based on mode
+    if config.safe_mode:
+        print_streamed_message(llm_response, config.CYAN)
+        scripts = extract_script_from_response(llm_response)
+        if scripts:
+            for script, file_extension, _ in scripts:
+                print(f"Found a {file_extension} script:")
+                print(script)
+                full_filename = save_script(query, script, file_extension=file_extension, auto_save=False, config=config)
+                if full_filename:
+                    print(f"Script saved as {full_filename}.")
+                    user_confirmation = input(f"Do you want to execute the saved script {full_filename}? (yes/no): ").strip().lower()
+                    if user_confirmation == "yes":
+                        execute_shell_command(f"bash {full_filename}", config)
+                    else:
+                        print("Script execution aborted by the user.")
+                else:
+                    print("Failed to save the script.")
+        else:
+            print("No executable script found in the LLM response.")
+    elif config.autopilot_mode:
+        scripts = extract_script_from_response(llm_response)
+        if scripts:
+            final_script = assemble_final_script(scripts, config.api_key)
+            if final_script:
+                auto_handle_script_execution(final_script, config)
+        else:
+            print("No executable script found in the LLM response.")
+    else:
+        print_streamed_message(llm_response, config.CYAN)
         scripts = extract_script_from_response(llm_response)
         if scripts:
             for script, file_extension, _ in scripts:
@@ -206,6 +385,12 @@ def auto_handle_script_execution(final_script, config):
     except Exception as e:
         print(f"{config.RED}Failed to handle script execution: {e}{config.RESET}")
         return False
+
+def get_user_confirmation(command: str) -> bool:
+    """Get user confirmation before executing a command."""
+    print(f"\nAbout to execute command:\n{command}")
+    response = input("Do you want to proceed? (yes/no): ").strip().lower()
+    return response in ['yes', 'y']
 
 def execute_shell_command(command, config, stream_output=True):
     """Execute a shell command with proper error handling and output management."""
@@ -430,56 +615,35 @@ def consult_llm_for_error_resolution(error_message, config):
         print(f"API request error: {e}")
         return None
 
-def consult_openai_for_error_resolution(error_message, system_info=""):
+def consult_openai_for_error_resolution(error_message, config):
     """Consult OpenAI for error resolution with improved error handling and caching."""
     try:
         # Use cached system info
         system_info = get_cached_system_info()
         
-        # Get current LLM suggestion with proper fallback
-        llm_suggestion = getattr(config, 'llm_suggestions', None) or "No previous LLM suggestion."
-        
-        instructions = {
-            "role": "system",
-            "content": "You are a code debugging assistant specializing in shell scripts and system commands. Provide concise, practical solutions."
-        }
-        
-        message = {
-            "role": "user",
-            "content": f"""
-Error: {error_message}
-System: {system_info}
-Previous Suggestion: {llm_suggestion}
-Provide a solution command or script.
-"""
-        }
-        
+        instructions = "You are a code debugging assistant specializing in shell scripts and system commands. Provide concise, practical solutions."
         scriptReviewer = AssemblyAssist(instructions)
         
-        if not scriptReviewer.add_message_to_thread(message["content"]):
+        if not scriptReviewer.start_conversation():
             print(f"{config.RED}Failed to initialize error resolution.{config.RESET}")
             return None
             
-        scriptReviewer.run_assistant()
-        response_texts = scriptReviewer.get_messages()
+        message = f"""
+Error: {error_message}
+System: {system_info}
+Provide a solution command or script.
+"""
+        response = scriptReviewer.send_message(message)
         
-        if not response_texts:
-            print(f"{config.RED}No response received from error resolution.{config.RESET}")
-            return None
-            
-        # Extract and format the solution
-        solution = " ".join(
-            msg['content']['text']['value']
-            for msg in response_texts
-            if msg.get('content', {}).get('text', {}).get('value')
-        )
-        
-        if solution:
-            print(f"{config.CYAN}Suggested solution:{config.RESET}\n{solution}")
-            return solution.strip()
+        if response:
+            print(f"{config.CYAN}Suggested solution:{config.RESET}\n{response}")
+            return response.strip()
             
         return None
         
     except Exception as e:
         print(f"{config.RED}Error resolution failed: {e}{config.RESET}")
         return None
+    finally:
+        if 'scriptReviewer' in locals():
+            scriptReviewer.end_conversation()

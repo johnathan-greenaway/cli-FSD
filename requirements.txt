@@ -3,3 +3,6 @@ flask-cors
 python-dotenv
 requests
 ollama
+beautifulsoup4
+aiohttp
+redis

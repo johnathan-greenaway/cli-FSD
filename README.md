@@ -110,7 +110,8 @@ v0.52
 - [x] - refactor flags for SafeMode, Autopilot
 
 ### To Do
-- [ ] - refactor and expand CMD module 
+- [ ] - refactor and expand CMD module
+- [x] for v0.8 - route requests to a custom gpt-4-turbo assistant with code interpreter access using OpenAI's Assistants API 
 - [ ] - build advanced menu and config options
 
 ## Considering

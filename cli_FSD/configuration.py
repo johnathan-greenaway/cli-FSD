@@ -12,6 +12,11 @@ class Config:
         self.RED = "\033[31m"
         self.GREEN = "\033[32m"
 
+        # Project config files
+        self.project_root = Path(__file__).parent.parent
+        self.mcp_settings_file = self.project_root / "cli_FSD" / "config_files" / "mcp_settings.json"
+
+        # User config files
         self.config_dir = os.path.expanduser("~/.config/cli-FSD")
         self.config_file = os.path.join(self.config_dir, "config.json")
         self.preferences_file = os.path.join(self.config_dir, "preferences.json")
@@ -23,8 +28,9 @@ class Config:
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.server_port = int(os.getenv("SERVER_PORT", 5000))
         
-        # Load saved preferences or use defaults
+        # Load configurations
         self.load_preferences()
+        self.load_mcp_settings()
 
         # Models dictionary with latest text-only models
         self.models = {
@@ -100,6 +106,19 @@ class Config:
                 json.dump(prefs, f)
         except Exception as e:
             print(f"Error saving preferences: {e}")
+
+    def load_mcp_settings(self):
+        """Load MCP server settings from project config"""
+        try:
+            if self.mcp_settings_file.exists():
+                with open(self.mcp_settings_file) as f:
+                    self.mcp_settings = json.load(f)
+            else:
+                print(f"{self.RED}Warning: MCP settings file not found at {self.mcp_settings_file}{self.RESET}")
+                self.mcp_settings = {"mcpServers": {}}
+        except Exception as e:
+            print(f"{self.RED}Error loading MCP settings: {e}{self.RESET}")
+            self.mcp_settings = {"mcpServers": {}}
 
 def initialize_config(args):
     config = Config()

@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from .chat_models import chat_with_model
-from .config import Config
+from .configuration import Config
 
 app = Flask(__name__)
 CORS(app)

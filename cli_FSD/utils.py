@@ -136,6 +136,102 @@ def print_message(sender, message):
     print(f"{prefix}{message}")
 
 
+def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
+    """Use an MCP tool with the specified parameters.
+    
+    Args:
+        server_name: Name of the MCP server
+        tool_name: Name of the tool to use
+        arguments: Tool arguments as a dictionary
+        
+    Returns:
+        Tool execution result as a string
+    """
+    try:
+        import json
+        import subprocess
+        from pathlib import Path
+        
+        # Get MCP settings from config directory
+        from pathlib import Path
+        try:
+            config_dir = Path(__file__).parent / "config_files"
+            mcp_settings_file = config_dir / "mcp_settings.json"
+            
+            with open(mcp_settings_file) as f:
+                mcp_settings = json.load(f)
+        except Exception as e:
+            return f"Error loading MCP settings: {str(e)}"
+            
+        # Get server config
+        server_config = mcp_settings["mcpServers"].get(server_name)
+        if not server_config:
+            return f"Error: MCP server '{server_name}' not found in settings"
+            
+        # Format the MCP command
+        mcp_command = {
+            "jsonrpc": "2.0",
+            "method": "call_tool",
+            "params": {
+                "name": tool_name,
+                "arguments": arguments
+            },
+            "id": 1
+        }
+        
+        # Build command with args from config
+        cmd = [server_config["command"]] + server_config["args"]
+        
+        # Get the current working directory
+        cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # Write command to stdin and read response from stdout
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=server_config.get("env", {}),
+            cwd=cwd  # Set the working directory
+        )
+        
+        # Send command and get response
+        stdout, stderr = process.communicate(input=json.dumps(mcp_command) + "\n")
+        
+        if stderr:
+            print(f"MCP server error: {stderr}", file=sys.stderr)
+            return f"Error: {stderr}"
+            
+        try:
+            response = json.loads(stdout)
+            if "error" in response:
+                return f"Error: {response['error']['message']}"
+            if "result" in response:
+                content = response["result"].get("content")
+                if isinstance(content, list):
+                    return "\n".join(
+                        block["text"] for block in content
+                        if block["type"] == "text"
+                    )
+                elif isinstance(content, str):
+                    try:
+                        # Try to parse as JSON first
+                        parsed = json.loads(content)
+                        if isinstance(parsed, dict) and "content" in parsed:
+                            return parsed["content"]
+                        return content
+                    except json.JSONDecodeError:
+                        return content
+                else:
+                    return f"Error: Unexpected content format: {content}"
+            return "Error: No result in response"
+        except json.JSONDecodeError:
+            return f"Error: Invalid JSON response from MCP server"
+            
+    except Exception as e:
+        return f"Error using MCP tool: {str(e)}"
+
 def save_script(query, script, file_extension="sh", auto_save=False, config=None):
     scripts_dir = "scripts"
     os.makedirs(scripts_dir, exist_ok=True)
