@@ -64,9 +64,10 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
     # Use provided system prompt or default
     if system_prompt is None:
         system_prompt = (
-            "Generate bash commands for tasks. "
-            "Comment minimally, you are expected to produce code that is runnable. "
-            f"You are part of a chain. System info: {get_system_info()}"
+            "You are a helpful assistant that can either generate bash commands for tasks "
+            "or provide direct responses. For web browsing or information requests, provide "
+            "a direct response. For system operations, generate runnable bash commands. "
+            f"System info: {get_system_info()}"
         )
     
     # Use model based on session preference
@@ -182,9 +183,10 @@ def chat_with_openai(message, config, system_prompt=None):
     # Use provided system prompt or default
     if system_prompt is None:
         system_prompt = (
-            "Generate bash commands for tasks. "
-            "Comment minimally, you are expected to produce code that is runnable. "
-            f"You are part of a chain. System info: {get_system_info()}"
+            "You are a helpful assistant that can either generate bash commands for tasks "
+            "or provide direct responses. For web browsing or information requests, provide "
+            "a direct response. For system operations, generate runnable bash commands. "
+            f"System info: {get_system_info()}"
         )
     
     data = {

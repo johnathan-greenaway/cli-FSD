@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "small-context": {
+      "command": "python3",
+      "args": ["cli_FSD/small_context/server.py"],
+      "env": {}
+    }
+  }
+}

@@ -8,9 +8,75 @@ context management.
 
 import json
 import time
+import requests
 from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+
+class WebBrowser:
+    """Handles web browsing and content extraction."""
+    
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+    
+    def browse(self, url: str) -> Dict[str, str]:
+        """Browse a webpage and extract relevant content.
+        
+        Args:
+            url: The URL to browse
+            
+        Returns:
+            Dict containing extracted title and main content
+        """
+        try:
+            # Validate URL
+            parsed = urlparse(url)
+            if not parsed.scheme or not parsed.netloc:
+                raise ValueError("Invalid URL format")
+                
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Extract title
+            title = soup.title.string if soup.title else ''
+            
+            # Extract main content (p tags)
+            paragraphs = []
+            for p in soup.find_all('p'):
+                text = p.get_text().strip()
+                if text and len(text) > 20:  # Filter out short/empty paragraphs
+                    paragraphs.append(text)
+            
+            content = ' '.join(paragraphs)
+            
+            # Extract key entities (h1, h2, h3 tags)
+            entities = []
+            for h in soup.find_all(['h1', 'h2', 'h3']):
+                text = h.get_text().strip()
+                if text:
+                    entities.append(text)
+            
+            return {
+                'title': title,
+                'content': content,
+                'url': url,
+                'entities': entities
+            }
+            
+        except (requests.RequestException, ValueError) as e:
+            return {
+                'title': 'Error',
+                'content': f'Failed to fetch {url}: {str(e)}',
+                'url': url,
+                'entities': []
+            }
 
 class MessageType(str, Enum):
     """Message type indicators."""
@@ -196,6 +262,7 @@ class SmallContextProtocol:
     
     def __init__(self, max_tokens: int = 4096):
         self.context_manager = ContextManager(max_tokens)
+        self.web_browser = WebBrowser()
         
     def process_input(
         self,
@@ -218,6 +285,38 @@ class SmallContextProtocol:
             
         # Handle chunking for large messages
         return self._chunk_message(message)
+    
+    def browse_web(self, url: str, priority: Priority = Priority.IMPORTANT) -> Message:
+        """Browse a webpage and process its content into the context.
+        
+        Args:
+            url: The URL to browse
+            priority: Priority level for the web content
+            
+        Returns:
+            Message object containing the processed web content
+        """
+        # Fetch and extract web content
+        web_data = self.web_browser.browse(url)
+        
+        # Create relationships for the web content
+        relationships = [{
+            'type': 'source',
+            'url': web_data['url']
+        }]
+        
+        # Process the content into a message
+        message = Message.create(
+            core_data=web_data['content'],
+            priority=priority,
+            entities=web_data['entities'],
+            relationships=relationships,
+            summary=web_data['title']
+        )
+        
+        # Add to context
+        self.context_manager.add_message(message)
+        return message
     
     def get_context(self) -> List[Dict]:
         """Get current context in dictionary format."""
