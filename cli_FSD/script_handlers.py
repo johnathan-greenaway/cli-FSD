@@ -84,10 +84,22 @@ def process_input_based_on_mode(query, config, chat_models):
                             # If it's a browse result, show content overview
                             if isinstance(content, dict) and "headline_count" in content:
                                 print(f"{config.CYAN}Found {content['headline_count']} headlines and {content['paragraph_count']} paragraphs{config.RESET}")
-                                print(f"\nPreview:\n{content['preview']}\n")
+                                
+                                # Print headlines with numbers
+                                print("\nHeadlines:")
+                                for i, headline in enumerate(content.get("headlines", [])):
+                                    print(f"{i}: {headline}")
+                                
+                                # Print first few paragraphs with numbers
+                                print("\nFirst few paragraphs:")
+                                paragraphs = content.get("paragraphs", [])
+                                for i, para in enumerate(paragraphs[:5]):
+                                    print(f"{i}: {para[:100]}...")
+                                if len(paragraphs) > 5:
+                                    print(f"...and {len(paragraphs) - 5} more paragraphs")
                                 
                                 # Ask user if they want to select specific content
-                                user_input = input("Would you like to select specific headlines/paragraphs? (yes/no): ").strip().lower()
+                                user_input = input("\nWould you like to select specific headlines/paragraphs? (yes/no): ").strip().lower()
                                 if user_input == 'yes':
                                     # Get selection from user
                                     print("\nEnter headline numbers to include (comma-separated, e.g. 0,1,3):")
@@ -112,14 +124,20 @@ def process_input_based_on_mode(query, config, chat_models):
                                         }
                                     )
                                     
-                                    # Send selected content to LLM for processing
-                                    llm_response = chat_with_model(
-                                        message=f"Please summarize this content:\n\n{selection_result}",
-                                        config=config,
-                                        chat_models=chat_models
-                                    )
-                                    print_streamed_message(llm_response, config.CYAN)
-                                    return None
+                                    try:
+                                        # Parse the selection result
+                                        result = json.loads(selection_result)
+                                        if "content" in result:
+                                            # Send selected content to LLM for processing
+                                            llm_response = chat_with_model(
+                                                message=f"Please summarize this content:\n\n{result['content']}",
+                                                config=config,
+                                                chat_models=chat_models
+                                            )
+                                            print_streamed_message(llm_response, config.CYAN)
+                                            return None
+                                    except json.JSONDecodeError:
+                                        print(f"{config.YELLOW}Error parsing selection result{config.RESET}")
                                     
                             # Otherwise format and summarize as before
                             if isinstance(content, str):
