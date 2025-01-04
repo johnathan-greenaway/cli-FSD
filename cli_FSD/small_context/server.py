@@ -8,9 +8,9 @@ import os
 import time
 import socket
 import subprocess
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse
-from typing import Dict, List, Any, Optional
+from bs4 import BeautifulSoup, NavigableString
+from urllib.parse import urlparse, urljoin
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 import os
@@ -267,80 +267,170 @@ class SmallContextServer:
             
             soup = BeautifulSoup(html, 'html.parser')
             
+            # Remove unwanted elements
             for selector in [
                 '#cookie-consent', '.cookie-banner', '.cookie-notice',
                 '.consent-overlay', '.modal', '.popup', '.overlay',
                 '#gdpr', '.gdpr', '.subscription-overlay', '.paywall',
-                '.ad-overlay'
+                '.ad-overlay', 'script', 'style', 'meta', 'link',
+                'iframe', 'noscript', 'svg', 'footer', 'nav',
+                '[role="complementary"]', '[role="navigation"]',
+                '.sidebar', '.comments', '.related-articles',
+                '.advertisement', '.social-share', '.newsletter'
             ]:
                 for element in soup.select(selector):
                     element.decompose()
             
+            # Extract title
             title = soup.title.string.strip() if soup.title else ''
             
-            paragraphs = []
-            content_selectors = [
-                '.Page-content', '.Article', '.RichTextStoryBody',
-                'article', '[role="article"]', '.article', '.story',
-                '.post', 'main', '[role="main"]', '#main', '.main',
-                '#content', '.content', '.entry-content', '.post-content',
-                '.article-body', '.article-content', '.story-body',
-                '.story-content', '.news-article'
-            ]
+            # Extract meaningful content
+            def get_text_with_links(element) -> str:
+                """Extract text while preserving links."""
+                parts = []
+                for child in element.children:
+                    if isinstance(child, NavigableString):
+                        text = child.strip()
+                        if text:
+                            parts.append(text)
+                    elif child.name == 'a':
+                        href = child.get('href', '')
+                        if href:
+                            if not href.startswith(('http://', 'https://')):
+                                href = urljoin(url, href)
+                            text = child.get_text().strip()
+                            if text:
+                                parts.append(f"{text} ({href})")
+                    elif child.name not in ['script', 'style']:
+                        text = child.get_text().strip()
+                        if text:
+                            parts.append(text)
+                return ' '.join(parts)
+
+            def is_meaningful(text: str) -> bool:
+                """Check if text contains meaningful content."""
+                if not text or len(text) < 20:
+                    return False
+                # Avoid navigation text, copyright notices, etc.
+                skip_phrases = ['cookie', 'privacy policy', 'terms of service', 'all rights reserved',
+                              'follow us', 'sign up', 'subscribe', 'advertisement']
+                text_lower = text.lower()
+                return not any(phrase in text_lower for phrase in skip_phrases)
+
+            # Extract content into a structured format
+            content = {
+                "type": "webpage",
+                "url": url,
+                "title": soup.title.string.strip() if soup.title else '',
+                "timestamp": time.time(),
+                "content": []
+            }
+
+            # Extract main content based on common patterns
+            def extract_content_block(element):
+                """Extract content from an element into a structured format."""
+                block = {
+                    "type": "content_block",
+                    "text": "",
+                    "links": [],
+                    "metadata": {}
+                }
+                
+                # Extract text content
+                text_parts = []
+                for node in element.descendants:
+                    if isinstance(node, NavigableString):
+                        text = node.strip()
+                        if text:
+                            text_parts.append(text)
+                    elif node.name == 'a':
+                        href = node.get('href', '')
+                        if href:
+                            if not href.startswith(('http://', 'https://')):
+                                href = urljoin(url, href)
+                            text = node.get_text().strip()
+                            if text:
+                                text_parts.append(text)
+                                block["links"].append({
+                                    "text": text,
+                                    "url": href
+                                })
+                
+                block["text"] = " ".join(text_parts).strip()
+                return block if block["text"] else None
+
+            # Process content based on page structure
+            if "news.ycombinator.com" in url:
+                # Handle HN-specific structure
+                stories = soup.select('tr.athing')
+                for story in stories:
+                    title_cell = story.select_one('td.title > span.titleline')
+                    if title_cell and (title_link := title_cell.find('a')):
+                        story_block = {
+                            "type": "story",
+                            "title": title_link.get_text().strip(),
+                            "url": urljoin(url, title_link['href']) if title_link.get('href') else "",
+                            "metadata": {}
+                        }
+                        
+                        if meta_row := story.find_next_sibling('tr'):
+                            if meta := meta_row.select_one('td.subtext'):
+                                if points := meta.select_one('span.score'):
+                                    story_block["metadata"]["points"] = points.get_text()
+                                if author := meta.select_one('a.hnuser'):
+                                    story_block["metadata"]["author"] = author.get_text()
+                                if time_el := meta.select_one('span.age'):
+                                    story_block["metadata"]["time"] = time_el.get_text()
+                                if comments := meta.find_all('a')[-1]:
+                                    story_block["metadata"]["comments"] = comments.get_text()
+                        
+                        content["content"].append(story_block)
+            else:
+                # Handle generic webpage structure
+                for tag in soup.find_all(['article', 'main', '[role="main"]', '.content', '#content']):
+                    section = {
+                        "type": "section",
+                        "blocks": []
+                    }
+                    
+                    # Extract headings
+                    for heading in tag.find_all(['h1', 'h2', 'h3']):
+                        if block := extract_content_block(heading):
+                            block["type"] = "heading"
+                            section["blocks"].append(block)
+                    
+                    # Extract paragraphs and lists
+                    for element in tag.find_all(['p', 'div', 'section', 'ul', 'ol']):
+                        if block := extract_content_block(element):
+                            section["blocks"].append(block)
+                    
+                    if section["blocks"]:
+                        content["content"].append(section)
+                
+                # Fallback to any content if no structured content found
+                if not content["content"]:
+                    for tag in soup.find_all(['p', 'div', 'section']):
+                        if block := extract_content_block(tag):
+                            content["content"].append({
+                                "type": "section",
+                                "blocks": [block]
+                            })
             
-            for selector in content_selectors:
-                content_area = soup.select_one(selector)
-                if content_area:
-                    for p in content_area.find_all(['p', 'div.paragraph']):
-                        text = p.get_text().strip()
-                        if text and len(text) > 20:
-                            paragraphs.append(text)
-                    if paragraphs:
-                        break
-            
-            if not paragraphs:
-                for p in soup.find_all('p'):
-                    text = p.get_text().strip()
-                    if text and len(text) > 20:
-                        paragraphs.append(text)
-            
-            entities = []
-            headline_selectors = [
-                '.Page-headline', 'h1.headline', '.article-headline',
-                '.story-headline', '.post-headline', '.entry-title',
-                'h1.title', 'h1[itemprop="headline"]', 'h1'
-            ]
-            
-            for selector in headline_selectors:
-                headline = soup.select_one(selector)
-                if headline:
-                    text = headline.get_text().strip()
-                    if text:
-                        entities.append(text)
-                        break
-            
-            for h in soup.find_all(['h2', 'h3']):
-                text = h.get_text().strip()
-                if text:
-                    entities.append(text)
-            
+            # Cache the content
             cached_content = CachedContent(
                 url=url,
-                title=title,
-                headlines=entities,
-                paragraphs=paragraphs,
-                timestamp=time.time()
+                title=content["title"],
+                headlines=[block["title"] for block in content["content"] if block.get("type") == "story"],
+                paragraphs=[
+                    f"{block['title']}\nURL: {block['url']}\n" + 
+                    "\n".join(f"{k}: {v}" for k, v in block['metadata'].items())
+                    for block in content["content"] if block.get("type") == "story"
+                ],
+                timestamp=content["timestamp"]
             )
             self.cache.cache_content(cached_content)
             
-            return {
-                "url": url,
-                "title": title,
-                "headline_count": len(entities),
-                "paragraph_count": len(paragraphs),
-                "headlines": entities,
-                "paragraphs": paragraphs
-            }
+            return content
             
         except Exception as e:
             error_msg = str(e)
@@ -359,8 +449,10 @@ class SmallContextServer:
                 error_msg = f"Invalid URL format: {error_msg}"
             
             return {
-                "error": error_msg,
-                "url": url
+                "type": "error",
+                "url": url,
+                "timestamp": time.time(),
+                "error": error_msg
             }
     
     def _handle_select_content(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -370,20 +462,43 @@ class SmallContextServer:
         
         result = self.cache.select_content(url, selection)
         if "error" in result:
-            return result
-            
-        formatted_content = []
-        for item in result["content"]:
-            if item["type"] == "headline":
-                formatted_content.append(f"# {item['text']}")
-            else:
-                formatted_content.append(item["text"])
+            return {
+                "type": "error",
+                "url": url,
+                "timestamp": time.time(),
+                "error": result["error"]
+            }
         
-        return {
+        # Create a new webpage response with selected content
+        content = {
+            "type": "webpage",
             "url": result["url"],
             "title": result["title"],
-            "content": "\n\n".join(formatted_content)
+            "timestamp": time.time(),
+            "content": []
         }
+        
+        # Convert cached content to structured format
+        for item in result["content"]:
+            if item["type"] == "headline":
+                content["content"].append({
+                    "type": "story",
+                    "title": item["text"],
+                    "url": "",
+                    "metadata": {}
+                })
+            else:
+                content["content"].append({
+                    "type": "section",
+                    "blocks": [{
+                        "type": "content_block",
+                        "text": item["text"],
+                        "links": [],
+                        "metadata": {}
+                    }]
+                })
+        
+        return content
 
 if __name__ == "__main__":
     server = SmallContextServer()

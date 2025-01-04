@@ -30,32 +30,75 @@ def _find_matching_content(query):
         
     # Use LLM to help parse the query and find relevant content
     try:
-        content_context = {
-            'headlines': _content_cache['headlines'],
-            'paragraphs': _content_cache['paragraphs']
-        }
-        
-        analysis = chat_with_model(
-            message=(
-                f"Given these headlines and paragraphs:\n\n"
-                f"Headlines:\n{json.dumps(content_context['headlines'], indent=2)}\n\n"
-                f"And this user request: '{query}'\n\n"
-                f"Find the most relevant headline index. Only respond with the index number, nothing else."
-            ),
-            config=Config(),
-            chat_models=None,
-            system_prompt="You are a content matching expert. Only respond with the index number of the most relevant headline."
-        )
-        
-        try:
-            index = int(analysis.strip())
-            if 0 <= index < len(_content_cache['headlines']):
-                return {
-                    'headline': _content_cache['headlines'][index],
-                    'content': _content_cache['paragraphs'][index] if index < len(_content_cache['paragraphs']) else None
-                }
-        except ValueError:
-            pass
+        content = _content_cache['raw_content']
+        if content.get("type") == "webpage":
+            # Format content for matching
+            stories = []
+            for item in content.get("content", []):
+                if item.get("type") == "story":
+                    story_text = [
+                        f"Title: {item['title']}",
+                        f"URL: {item['url']}"
+                    ]
+                    for key, value in item.get("metadata", {}).items():
+                        story_text.append(f"{key}: {value}")
+                    stories.append({
+                        "title": item["title"],
+                        "content": "\n".join(story_text)
+                    })
+                elif item.get("type") == "section":
+                    for block in item.get("blocks", []):
+                        if block.get("text"):
+                            text = block["text"]
+                            if block.get("links"):
+                                text += "\nLinks:\n" + "\n".join(
+                                    f"- {link['text']}: {link['url']}"
+                                    for link in block["links"]
+                                )
+                            stories.append({
+                                "title": text.split("\n")[0],
+                                "content": text
+                            })
+            
+            if stories:
+                # Ask LLM to analyze and match content
+                analysis = chat_with_model(
+                    message=(
+                        "Given these content sections:\n\n" +
+                        "\n---\n".join(f"Section {i}:\n{s['content']}" for i, s in enumerate(stories)) +
+                        f"\n\nAnd this user request: '{query}'\n\n"
+                        "Analyze the content and the request to:\n"
+                        "1. Find the most relevant section(s)\n"
+                        "2. Extract specific details or quotes that answer the request\n"
+                        "3. Include any relevant links or references\n\n"
+                        "Format your response as JSON:\n"
+                        "{\n"
+                        "  \"sections\": [section_numbers],\n"
+                        "  \"details\": \"extracted details and quotes\",\n"
+                        "  \"links\": [\"relevant links\"]\n"
+                        "}"
+                    ),
+                    config=Config(),
+                    chat_models=None,
+                    system_prompt="You are a content analysis expert. Respond only with a JSON object containing the requested information."
+                )
+                
+                try:
+                    result = json.loads(analysis.strip())
+                    if result.get("sections"):
+                        matched_content = []
+                        for section_num in result["sections"]:
+                            if 0 <= section_num < len(stories):
+                                matched_content.append(stories[section_num]["content"])
+                        
+                        return {
+                            'headline': stories[result["sections"][0]]["title"],
+                            'content': "\n\n".join(matched_content),
+                            'details': result.get("details", ""),
+                            'links': result.get("links", [])
+                        }
+                except (ValueError, json.JSONDecodeError):
+                    pass
             
     except Exception:
         pass
@@ -87,6 +130,12 @@ def process_input_based_on_mode(query, config, chat_models):
             print(f"\nHeadline: {matching_content['headline']}")
             if matching_content['content']:
                 print(f"\nContent: {matching_content['content']}")
+            if matching_content.get('details'):
+                print(f"\nDetails: {matching_content['details']}")
+            if matching_content.get('links'):
+                print("\nRelevant links:")
+                for link in matching_content['links']:
+                    print(f"- {link}")
             return None
     
     # Check if this is a follow-up question about cached content
@@ -96,7 +145,9 @@ def process_input_based_on_mode(query, config, chat_models):
             message=(
                 f"Based on this content:\n\n{_content_cache['formatted_content']}\n\n"
                 f"User question: {query}\n\n"
-                f"Please provide a clear and focused answer."
+                "Provide a clear and focused answer. If the question is about a specific topic or article, "
+                "include relevant quotes and links from the content. After your answer, suggest 2-3 relevant "
+                "follow-up questions the user might want to ask about this topic."
             ),
             config=config,
             chat_models=chat_models
@@ -134,48 +185,104 @@ def process_input_based_on_mode(query, config, chat_models):
             
             # Get response using selected tool
             if tool_selection["selected_tool"].lower() == "small_context":
+                # Extract URL from tool selection
+                parameters = tool_selection.get("parameters", {})
+                url = parameters.get("url")
+                if not url or url == "[URL will be determined based on request]":
+                    print(f"{config.RED}No valid URL provided in tool selection{config.RESET}")
+                    return None
+
+                # Update the request with the LLM-selected URL
                 result = agent.execute_tool_selection(tool_selection)
                 if result.get("tool") == "use_mcp_tool":
                     from .utils import use_mcp_tool
-                    # Execute MCP tool quietly
-                    llm_response = use_mcp_tool(
+                    # Execute MCP tool with debug output
+                    print(f"{config.CYAN}Executing MCP tool: {result['operation']}{config.RESET}")
+                    print(f"{config.CYAN}Using URL: {url}{config.RESET}")
+                    
+                    # Create arguments with the URL
+                    arguments = {
+                        **result["arguments"],
+                        "url": url  # Ensure URL is included in arguments
+                    }
+                    
+                    response = use_mcp_tool(
                         server_name=result["server"],
                         tool_name=result["operation"],
-                        arguments=result["arguments"]
+                        arguments=arguments
                     )
+                    print(f"{config.CYAN}MCP tool response received{config.RESET}")
                     
                     try:
-                        content = json.loads(llm_response)
+                        # Handle both string and list responses
+                        if isinstance(response, str):
+                            content = json.loads(response)
+                        elif isinstance(response, (list, dict)):
+                            content = response
+                        else:
+                            raise ValueError(f"Unexpected response type: {type(response)}")
                         
                         # Format content for processing
                         if isinstance(content, dict):
-                            if "headlines" in content and "paragraphs" in content:
-                                # Cache everything for future reference
+                            if content.get("type") == "webpage":
+                                # Process structured content
                                 _content_cache['raw_content'] = content
-                                _content_cache['headlines'] = content.get("headlines", [])
-                                _content_cache['paragraphs'] = content.get("paragraphs", [])
-                                _content_cache['formatted_content'] = "\n\n".join(
-                                    content.get("headlines", []) + content.get("paragraphs", [])
-                                )
                                 
-                                # Get initial summary
+                                # Format content for LLM processing
+                                formatted_content = []
+                                
+                                # Process each content block
+                                for item in content.get("content", []):
+                                    if item.get("type") == "story":
+                                        # Format story with metadata
+                                        story_text = [
+                                            f"Title: {item['title']}",
+                                            f"URL: {item['url']}"
+                                        ]
+                                        # Add metadata if present
+                                        for key, value in item.get("metadata", {}).items():
+                                            story_text.append(f"{key}: {value}")
+                                        formatted_content.append("\n".join(story_text))
+                                    elif item.get("type") == "section":
+                                        # Process section blocks
+                                        for block in item.get("blocks", []):
+                                            if block.get("text"):
+                                                text = block["text"]
+                                                # Add links if present
+                                                if block.get("links"):
+                                                    text += "\nLinks:\n" + "\n".join(
+                                                        f"- {link['text']}: {link['url']}"
+                                                        for link in block["links"]
+                                                    )
+                                                formatted_content.append(text)
+                                
+                                # Cache formatted content
+                                _content_cache['formatted_content'] = "\n\n".join(formatted_content)
+                                
+                                # Let LLM analyze and present the content
                                 llm_response = chat_with_model(
                                     message=(
-                                        "You are a news summarizer. Provide a clear overview of the main stories, "
-                                        "focusing only on the actual news content. Format each story as a bullet point. "
-                                        "Do not include any technical details about servers, responses, or parsing.\n\n"
-                                        f"Content to summarize:\n{_content_cache['formatted_content']}"
+                                        "You are a content analyzer. Given this content:\n\n"
+                                        f"{_content_cache['formatted_content']}\n\n"
+                                        "1. Provide a clear overview of the main points\n"
+                                        "2. Format each point as a bullet\n"
+                                        "3. Include relevant links when available\n"
+                                        "4. Focus on the actual content\n"
+                                        "5. If there are multiple stories/sections, organize them clearly\n"
+                                        "6. Highlight any particularly interesting or important information\n\n"
+                                        "After your summary, provide a list of suggested interactions like:\n"
+                                        "- 'Tell me more about [topic]'\n"
+                                        "- 'Show me the full article about [headline]'\n"
+                                        "- 'What are the key points about [subject]'\n"
+                                        "Choose topics/headlines/subjects from the actual content."
                                     ),
                                     config=config,
                                     chat_models=chat_models
                                 )
                                 print_streamed_message(llm_response, config.CYAN)
                                 
-                                # Print available headlines for reference
-                                print(f"\n{config.CYAN}Available articles:{config.RESET}")
-                                for i, headline in enumerate(content.get("headlines", [])):
-                                    print(f"{i}: {headline}")
-                                print(f"\n{config.CYAN}You can ask to see any of these articles in detail (e.g. 'show me the article about...'){config.RESET}")
+                                # Print interaction hint
+                                print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
                             else:
                                 formatted_response = json.dumps(content, indent=2)
                                 llm_response = chat_with_model(
