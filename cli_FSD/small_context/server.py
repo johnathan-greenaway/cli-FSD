@@ -6,6 +6,8 @@ import asyncio
 import aiohttp
 import os
 import time
+import socket
+import subprocess
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from typing import Dict, List, Any, Optional
@@ -14,7 +16,7 @@ from datetime import datetime
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from small_context.cache import ContentCache
+from small_context.cache import ContentCache, CachedContent
 
 @dataclass
 class Message:
@@ -77,10 +79,36 @@ class SmallContextServer:
     def __init__(self):
         self.contexts: Dict[str, ContextState] = {}
         self.session: Optional[aiohttp.ClientSession] = None
-        self.cache = ContentCache()
+        self.redis_process = None
+        self.cache = None
+        
+    async def _start_redis(self):
+        """Start Redis server on a dynamic port."""
+        # Find an available port
+        with socket.socket() as s:
+            s.bind(('', 0))
+            port = s.getsockname()[1]
+        
+        # Start Redis server
+        self.redis_process = subprocess.Popen(
+            ['redis-server', '--port', str(port), '--daemonize', 'no'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        # Wait for Redis to start
+        await asyncio.sleep(1)
+        
+        # Initialize cache with the dynamic port
+        self.cache = ContentCache(port=port)
+        print(f"Redis server started on port {port}", file=sys.stderr)
     
     async def start(self):
-        """Start the server and initialize HTTP session."""
+        """Start the server and initialize services."""
+        # Start Redis first
+        await self._start_redis()
+        
+        # Then initialize HTTP session
         self.session = aiohttp.ClientSession(headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -90,12 +118,17 @@ class SmallContextServer:
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1'
         })
+        
+        # Start processing requests
         await self._process_stdin()
     
     async def stop(self):
         """Stop the server and cleanup resources."""
         if self.session:
             await self.session.close()
+        if self.redis_process:
+            self.redis_process.terminate()
+            self.redis_process.wait()
     
     async def _process_stdin(self):
         """Process MCP protocol messages from stdin."""
@@ -615,13 +648,15 @@ class SmallContextServer:
             )
             self.cache.cache_content(cached_content)
             
-            # Return preview
+            # Return content with headlines and paragraphs
             return {
                 "context_id": context_id,
                 "url": url,
                 "title": title,
                 "headline_count": len(entities),
                 "paragraph_count": len(paragraphs),
+                "headlines": entities,
+                "paragraphs": paragraphs,
                 "preview": content[:500] + "..." if len(content) > 500 else content
             }
             

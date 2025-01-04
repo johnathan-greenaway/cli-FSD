@@ -1,6 +1,7 @@
 """Redis cache implementation for Small Context Protocol."""
 
 import json
+import sys
 import redis
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
@@ -17,8 +18,24 @@ class CachedContent:
 class ContentCache:
     """Redis-based cache for webpage content."""
     
-    def __init__(self, host='localhost', port=6379, db=0):
-        self.redis = redis.Redis(host=host, port=port, db=db, decode_responses=True)
+    def __init__(self, host='localhost', port=None, db=0):
+        # Try ports starting from 6379 until we find an available one
+        if port is None:
+            port = 6379
+            while port < 6479:  # Try up to port 6479
+                try:
+                    self.redis = redis.Redis(host=host, port=port, db=db, decode_responses=True)
+                    # Test connection
+                    self.redis.ping()
+                    print(f"Connected to Redis on port {port}", file=sys.stderr)
+                    break
+                except redis.ConnectionError:
+                    port += 1
+                    continue
+            else:
+                raise redis.ConnectionError("Could not find an available Redis port")
+        else:
+            self.redis = redis.Redis(host=host, port=port, db=db, decode_responses=True)
         self.content_key = "small_context:content:{url}"
         self.index_key = "small_context:content_index"
     
