@@ -240,7 +240,7 @@ def save_script(query, script, file_extension="sh", auto_save=False, config=None
     filename = re.sub(r'[^a-zA-Z0-9_-]', '_', query.lower()) + f".{file_extension}"
     filepath = os.path.join(scripts_dir, filename)
 
-    if auto_save:
+    if auto_save or (config and config.autopilot_mode):
         # Automatically save the script without prompting
         try:
             with open(filepath, 'w') as f:
