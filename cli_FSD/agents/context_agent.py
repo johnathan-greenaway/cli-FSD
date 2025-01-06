@@ -4,14 +4,15 @@ This agent analyzes user requests and determines whether to use the Small Contex
 or other tools like fetch, sequential thinking, etc. based on the nature of the task.
 """
 
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 import json
 import time
+
 
 class ContextAgent:
     """Agent for context-aware tool selection."""
     
-    def analyze_request(self, request: str) -> Dict[str, any]:
+    def analyze_request(self, request: str) -> Dict[str, Any]:
         """Analyze user request to determine optimal tool selection.
         
         This method generates a prompt for the LLM to analyze the request and
@@ -22,110 +23,61 @@ class ContextAgent:
             
         Returns:
             Dict containing:
-            - tool_selection: Selected tool/approach
-            - context_id: Context ID if using small context protocol
-            - reasoning: Explanation of the selection
-            - parameters: Tool-specific parameters
+            - prompt: The generated prompt for LLM analysis
+            - requires_llm_processing: Whether LLM processing is needed
         """
-        prompt = self._generate_analysis_prompt(request)
-        
-        # This will be processed by the LLM to determine:
-        # 1. If the task benefits from context management (e.g. multi-step reasoning,
-        #    information synthesis, maintaining conversation state)
-        # 2. If other tools like fetch or sequential thinking are more appropriate
-        # 3. What parameters/approach to use
         return {
-            "prompt": prompt,
-            "requires_llm_processing": True
-        }
-    
-    def _generate_analysis_prompt(self, request: str) -> str:
-        """Generate prompt for LLM analysis of the request."""
-        # Define the JSON template separately
-        json_template = '''{
-    "selected_tool": "small_context",
+            "prompt": f"""Analyze this request: "{request}"
+
+You are an expert in tool selection and content analysis. Your task is to determine the best way to handle this request.
+
+Respond with a JSON object in this format:
+{{
+    "selected_tool": "tool_name",
     "reasoning": "Explanation of why this tool was selected",
-    "parameters": {
-        "operation": "browse_web",
-        "url": "https://apnews.com",
-        "content": "user_request"
-    },
-    "context_management": {
+    "parameters": {{
+        "operation": "operation_name",
+        "url": "url_if_needed",
+        "content": "{request}"
+    }},
+    "context_management": {{
         "required": true,
         "priority_level": "important",
         "entities": [],
         "relationships": []
-    }
-}'''
+    }}
+}}
 
-        # Check if this is a web browsing request
-        web_keywords = ["browse", "web", "internet", "website", "url", "news", "article"]
-        is_web_request = any(keyword in request.lower() for keyword in web_keywords)
+Available tools and operations:
+1. small_context
+   - browse_web: For web browsing and content extraction
+   - create_context: For managing conversation context
+2. fetch: For data retrieval
+3. sequential_thinking: For complex reasoning
+4. default: For simple commands. USE THIS FOR WEATHER REQUESTS.
 
-        if is_web_request:
-            # For web browsing requests, use a specific template
-            return f"""This appears to be a web browsing request: "{request}"
 
-For web browsing requests, we should use the Small Context Protocol with the browse_web operation.
-This allows us to properly handle web content extraction and context management.
-
-The response should be in this JSON format:
-{json_template}
-
-Please analyze the request and determine:
-1. The most appropriate URL to fulfill the request
-2. Any specific entities or relationships to track
-3. The appropriate priority level for the content
-
-Provide your analysis in the specified JSON format."""
-        else:
-            # For non-web requests, use the standard analysis template
-            return f"""Analyze the following user request and determine the optimal tool selection:
-
-User Request: {request}
-
-Available Tools:
-1. Default
-   - Best for: Simple commands, basic queries, direct responses
-   - Features: Command execution, basic text processing
-
-2. Small Context Protocol
-   - Best for: Complex conversations, context tracking
-   - Features: Context management, token optimization, web browsing
-   - Web Features: URL processing, content extraction, context integration
-
-3. Fetch Tool
-   - Best for: External data retrieval, web content
-   - Features: Data extraction, content processing
-
-4. Sequential Thinking
-   - Best for: Multi-step problems, complex reasoning
-   - Features: Step-by-step analysis, dependency tracking
-
-Analysis Instructions:
-1. Evaluate if the request involves:
-   - Managing conversation context
-   - Multi-step reasoning
-   - Information synthesis
-   - External data retrieval
-   - Complex problem solving
-   
-2. Consider:
-   - Token efficiency requirements
-   - Need for context preservation
-   - Information dependencies
-   - External resource needs
-
-3. Determine:
-   - Primary tool selection
-   - Required parameters
-   - Context management needs
-   - Integration requirements
-
-Provide your analysis in JSON format:
-{json_template}"""
-
-    def execute_tool_selection(self, analysis: Dict[str, any]) -> Dict[str, any]:
+Guidelines:
+1. For web browsing:
+   - Always include complete URLs with https://
+   - Choose authoritative sources
+   - Consider the type of content needed
+2. For context management:
+   - Set appropriate priority level
+   - Identify relevant entities
+   - Track relationships between concepts
+3. For tool selection:
+   - Consider the complexity of the request
+   - Evaluate need for context preservation
+   - Assess if external data is needed
+4. IMPORTANT: For specific commands:
+   - Queries that mention weather: Use 'curl wttr.in/[location]' command instead of web browsing
+   - Time queries: Use appropriate system commands
+   - File operations: Use standard Unix commands""",
+            "requires_llm_processing": True
+        }
+    
+    def execute_tool_selection(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the selected tool based on LLM analysis.
         
         Args:
@@ -134,26 +86,32 @@ Provide your analysis in JSON format:
         Returns:
             Dict containing execution results
         """
-        selected_tool = analysis.get("selected_tool")
-        parameters = analysis.get("parameters", {})
-        
-        if selected_tool == "small_context":
-            return self._handle_small_context(
-                parameters,
-                analysis.get("context_management", {})
-            )
-        elif selected_tool == "fetch":
-            return self._handle_fetch(parameters)
-        elif selected_tool == "sequential_thinking":
-            return self._handle_sequential_thinking(parameters)
-        else:
-            return self._handle_default_tools(parameters)
+        try:
+            selected_tool = analysis.get("selected_tool")
+            parameters = analysis.get("parameters", {})
+            
+            if selected_tool == "small_context":
+                return self._handle_small_context(
+                    parameters,
+                    analysis.get("context_management", {})
+                )
+            elif selected_tool == "fetch":
+                return self._handle_fetch(parameters)
+            elif selected_tool == "sequential_thinking":
+                return self._handle_sequential_thinking(parameters)
+            else:
+                return self._handle_default_tools(parameters)
+        except Exception as e:
+            return {
+                "type": "error",
+                "error": f"Tool execution failed: {str(e)}"
+            }
     
     def _handle_small_context(
         self,
-        parameters: Dict[str, any],
-        context_config: Dict[str, any]
-    ) -> Dict[str, any]:
+        parameters: Dict[str, Any],
+        context_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Handle Small Context Protocol execution."""
         operation = parameters.get("operation", "create_context")
         
@@ -161,12 +119,19 @@ Provide your analysis in JSON format:
         if operation == "browse_web":
             # Create a new context ID for this browsing session
             context_id = f"web_{int(time.time())}"
+            
+            # Get URL from parameters or use default
+            url = parameters.get("url")
+            if not url:
+                # This shouldn't happen since the LLM should always provide a URL
+                url = "https://www.google.com"  # Fallback to Google if somehow no URL was provided
+                
             return {
                 "tool": "use_mcp_tool",
                 "server": "small-context",
                 "operation": "browse_web",
                 "arguments": {
-                    "url": parameters.get("url"),
+                    "url": url,
                     "priority": context_config.get("priority_level", "important"),
                     "context_id": context_id
                 }
@@ -188,7 +153,7 @@ Provide your analysis in JSON format:
             }
         return {"error": "Context management not required"}
     
-    def _handle_fetch(self, parameters: Dict[str, any]) -> Dict[str, any]:
+    def _handle_fetch(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Handle fetch tool execution."""
         return {
             "tool": "use_mcp_tool",
@@ -199,8 +164,8 @@ Provide your analysis in JSON format:
     
     def _handle_sequential_thinking(
         self,
-        parameters: Dict[str, any]
-    ) -> Dict[str, any]:
+        parameters: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Handle sequential thinking execution."""
         return {
             "tool": "use_mcp_tool",
@@ -209,7 +174,7 @@ Provide your analysis in JSON format:
             "arguments": parameters
         }
     
-    def _handle_default_tools(self, parameters: Dict[str, any]) -> Dict[str, any]:
+    def _handle_default_tools(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Handle default tool execution."""
         return {
             "tool": parameters.get("tool", "execute_command"),

@@ -6,3 +6,6 @@ ollama
 beautifulsoup4
 aiohttp
 redis
+Copypylint>=3.0.0
+flake8>=6.0.0
+rich>=13.0.0

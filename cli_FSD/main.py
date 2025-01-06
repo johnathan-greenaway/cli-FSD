@@ -172,8 +172,14 @@ def main():
                     logging.error(error_message)
                 config.llm_suggestions = None
         except (KeyboardInterrupt, EOFError):
-            print("\nExiting cli-FSD. Goodbye!")
+            print("\nExiting cli-FSD...")
             logging.info("cli-FSD exited by user.")
+            
+            # Handle cleanup of assembled scripts
+            from .script_handlers import handle_script_cleanup
+            handle_script_cleanup(config)
+            
+            print("Goodbye!")
             break
 
     print("Operation completed.")
