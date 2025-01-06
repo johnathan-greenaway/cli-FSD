@@ -54,7 +54,8 @@ Available tools and operations:
    - create_context: For managing conversation context
 2. fetch: For data retrieval
 3. sequential_thinking: For complex reasoning
-4. default: For simple commands
+4. default: For simple commands. USE THIS FOR WEATHER REQUESTS.
+
 
 Guidelines:
 1. For web browsing:
@@ -68,7 +69,11 @@ Guidelines:
 3. For tool selection:
    - Consider the complexity of the request
    - Evaluate need for context preservation
-   - Assess if external data is needed""",
+   - Assess if external data is needed
+4. IMPORTANT: For specific commands:
+   - Queries that mention weather: Use 'curl wttr.in/[location]' command instead of web browsing
+   - Time queries: Use appropriate system commands
+   - File operations: Use standard Unix commands""",
             "requires_llm_processing": True
         }
     
