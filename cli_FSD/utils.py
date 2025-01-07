@@ -151,9 +151,9 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
         import json
         import subprocess
         from pathlib import Path
+        import os
         
         # Get MCP settings from config directory
-        from pathlib import Path
         try:
             config_dir = Path(__file__).parent / "config_files"
             mcp_settings_file = config_dir / "mcp_settings.json"
@@ -185,6 +185,20 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
         # Get the current working directory
         cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
+        # Set up environment for subprocess
+        env = os.environ.copy()  # Copy current environment
+        
+        # Add any additional env settings from server_config
+        if server_config.get("env"):
+            env.update(server_config["env"])
+            
+        # Ensure PYTHONPATH includes site-packages
+        python_path = env.get('PYTHONPATH', '').split(os.pathsep)
+        site_packages = os.path.join(os.path.dirname(os.__file__), 'site-packages')
+        if site_packages not in python_path:
+            python_path.append(site_packages)
+        env['PYTHONPATH'] = os.pathsep.join(filter(None, python_path))
+        
         # Write command to stdin and read response from stdout
         process = subprocess.Popen(
             cmd,
@@ -192,7 +206,7 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=server_config.get("env", {}),
+            env=env,  # Use our modified environment
             cwd=cwd  # Set the working directory
         )
         
@@ -231,7 +245,7 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
             
     except Exception as e:
         return f"Error using MCP tool: {str(e)}"
-
+    
 def save_script(query, script, file_extension="sh", auto_save=False, config=None):
     scripts_dir = "scripts"
     os.makedirs(scripts_dir, exist_ok=True)
