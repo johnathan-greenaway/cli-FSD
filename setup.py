@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='cli-FSD',
-    version='1.7.0',
+    version='1.7.3',
     author='JG',
     author_email='wazacraftRFID@gmail.com',
     description='LLM-enabled companion utility for your terminal.',
@@ -32,7 +32,12 @@ setup(
         'groq',
         'beautifulsoup4',
         'aiohttp',
-        'redis'
+        'redis',
+        'pylint',
+        'beautifulsoup4',
+        'flake8',
+        'rich',
+        'aiohttp'
     ],
     include_package_data=True,
     classifiers=[
