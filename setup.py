@@ -32,7 +32,13 @@ setup(
         'groq',
         'beautifulsoup4',
         'aiohttp',
-        'redis'
+        'redis',
+        'pylint',
+        'beautifulsoup4',  # for BeautifulSoup
+        'Copypylint',
+        'flake8',
+        'rich',
+        'aiohttp'
     ],
     include_package_data=True,
     classifiers=[
