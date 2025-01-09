@@ -366,10 +366,7 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 # Get response using selected tool
                 selected_tool = tool_selection.get("selected_tool", "").lower()
                 if selected_tool == "small_context":
-                    # Rest of the small_context handling code...
-                    # [Ensure that existing small_context handling code is placed here]
-
-                    # Example placeholder for small_context handling:
+                    # Handle small_context tool
                     parameters = tool_selection.get("parameters", {})
                     url = parameters.get("url")
                     if not url or url == "[URL will be determined based on request]":
@@ -552,6 +549,13 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
             )
             llm_response = await chat_with_model(query, config, chat_models)
 
+    except Exception as e:
+        print(
+            f"{config.YELLOW}Using standard processing due to error: {str(e)}"
+            f"{config.RESET}"
+        )
+        llm_response = await chat_with_model(query, config, chat_models)
+
     # After all processing, handle safe_mode and autopilot_mode
     if config.safe_mode:
         # Create a task for print_streamed_message
@@ -664,6 +668,8 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
     return llm_response
 
 
+
+
 async def process_input_in_safe_mode(query, config, chat_models):
     llm_response = await chat_with_model(query, config, chat_models)
     scripts = extract_script_from_response(llm_response)
@@ -709,7 +715,7 @@ async def process_input_in_autopilot_mode(query, config, chat_models):
             return
         
         code_checker = CodeChecker()
-                for script, file_extension, script_type in scripts:
+        for script, file_extension, script_type in scripts:
             # Display code with syntax highlighting and linting
             lint_results = code_checker.lint_code(script, file_extension)
             code_checker.display_results(lint_results, script, file_extension)
