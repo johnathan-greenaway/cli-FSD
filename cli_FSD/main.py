@@ -130,7 +130,7 @@ async def async_main():
     # If no query is provided, start the interactive loop
     cleanup_previous_assembled_scripts()
     print_instructions_once_per_day()
-    display_greeting()
+    await display_greeting()
 
     while True:
         try:

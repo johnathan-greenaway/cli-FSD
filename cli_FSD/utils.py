@@ -6,6 +6,7 @@ from datetime import datetime, date
 import glob
 import os
 import re
+import asyncio
 
 # Color constants
 CYAN = "\033[96m"
@@ -16,7 +17,7 @@ RED = "\033[31m"
 GREEN = "\033[32m"
 
 
-def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2):
+async def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2):
     frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "] if use_emojis else ["- ", "\\ ", "| ", "/ "]
     while not stop_event.is_set():
         for frame in frames:
@@ -24,7 +25,7 @@ def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.
                 break
             sys.stdout.write(f"\r{message} {frame}")
             sys.stdout.flush()
-            time.sleep(interval)
+            await asyncio.sleep(interval)
     sys.stdout.write("\r" + " " * (len(message) + 4) + "\r")  # Clear the line
 
 
@@ -71,25 +72,28 @@ def print_instructions_once_per_day():
         print_instructions()
 
 
-def print_streamed_message(message, color=CYAN):
+async def print_streamed_message(message, color=CYAN):
     for char in message:
         print(f"{color}{char}{RESET}", end='', flush=True)
-        time.sleep(0.03)
+        await asyncio.sleep(0.03)
     print()
 
 
-def get_weather():
+async def get_weather():
     try:
-        response = requests.get('http://wttr.in/?format=3')
-        if response.status_code == 200:
-            return response.text
-        else:
-            return "Weather information is currently unavailable."
+        import aiohttp
+        timeout = aiohttp.ClientTimeout(total=10)  # 10 second timeout
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get('http://wttr.in/?format=3') as response:
+                if response.status == 200:
+                    return await response.text()
+                else:
+                    return "Weather information is currently unavailable."
     except Exception as e:
         return "Failed to fetch weather information."
 
 
-def display_greeting():
+async def display_greeting():
     today = date.today()
     last_run_file = ".last_run.txt"
     last_run = None
@@ -102,7 +106,7 @@ def display_greeting():
         file.write(str(today))
 
     if str(today) != last_run:
-        weather = get_weather()
+        weather = await get_weather()
         system_info = get_system_info()
         print(f"{weather}")
         print(f"{system_info}")
@@ -136,7 +140,7 @@ def print_message(sender, message):
     print(f"{prefix}{message}")
 
 
-def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
+async def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     """Use an MCP tool with the specified parameters.
     
     Args:
@@ -200,18 +204,21 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
         env['PYTHONPATH'] = os.pathsep.join(filter(None, python_path))
         
         # Write command to stdin and read response from stdout
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        # Use asyncio.create_subprocess_exec for async subprocess
+        import asyncio
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             env=env,  # Use our modified environment
             cwd=cwd  # Set the working directory
         )
         
         # Send command and get response
-        stdout, stderr = process.communicate(input=json.dumps(mcp_command) + "\n")
+        stdout, stderr = await process.communicate(input=json.dumps(mcp_command).encode() + b"\n")
+        stdout = stdout.decode()
+        stderr = stderr.decode()
         
         if stderr:
             print(f"MCP server error: {stderr}", file=sys.stderr)

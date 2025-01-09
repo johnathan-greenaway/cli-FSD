@@ -93,25 +93,30 @@ class SmallContextServer:
     async def _start_redis(self):
         """Start Redis server on a dynamic port."""
         try:
-            # Find an available port
-            with socket.socket() as s:
-                s.bind(('', 0))
-                port = s.getsockname()[1]
+            # Find an available port using a separate thread
+            loop = asyncio.get_event_loop()
+            port = await loop.run_in_executor(None, self._get_available_port)
             
-            # Try to start Redis server
+            # Try to start Redis server asynchronously
             try:
-                self.redis_process = subprocess.Popen(
-                    ['redis-server', '--port', str(port), '--daemonize', 'no'],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                # Start Redis in a separate thread to avoid blocking
+                self.redis_process = await loop.run_in_executor(
+                    None,
+                    lambda: subprocess.Popen(
+                        ['redis-server', '--port', str(port), '--daemonize', 'no'],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE
+                    )
                 )
                 
-                # Wait briefly for Redis to start
-                await asyncio.sleep(1)
+                # Check Redis readiness asynchronously
+                for _ in range(10):  # Try for up to 1 second (10 * 0.1)
+                    if self.redis_process.poll() is not None:
+                        break
+                    await asyncio.sleep(0.1)  # Short sleep intervals
                 
-                # Check if process is still running
                 if self.redis_process.poll() is not None:
-                    stdout, stderr = self.redis_process.communicate()
+                    stdout, stderr = await loop.run_in_executor(None, self.redis_process.communicate)
                     print(json.dumps({
                         "warning": {
                             "code": "redis_start_failed",
@@ -131,22 +136,31 @@ class SmallContextServer:
                         "message": "Redis server not found. Using in-memory cache."
                     }
                 }), flush=True)
+                self.cache = InMemoryCache()
                 
         except Exception as e:
             if self.redis_process:
-                self.redis_process.terminate()
-                self.redis_process.wait()
+                await loop.run_in_executor(None, lambda: (self.redis_process.terminate(), self.redis_process.wait()))
             print(json.dumps({
                 "warning": {
                     "code": "redis_init_failed",
                     "message": f"Failed to initialize Redis: {str(e)}. Using in-memory cache."
                 }
             }), flush=True)
+            self.cache = InMemoryCache()
+
+    def _get_available_port(self):
+        """Get an available port synchronously."""
+        with socket.socket() as s:
+            s.bind(('', 0))
+            return s.getsockname()[1]
     
     async def start(self, ready_callback=None):
         """Start the server and initialize services."""
         try:
+            # Start Redis asynchronously
             await self._start_redis()
+            
             # Initialize default context
             self.contexts["default"] = ContextState()
             
@@ -154,8 +168,8 @@ class SmallContextServer:
             if ready_callback:
                 await ready_callback()
             
-            # Start processing input
-            await self._process_stdin()
+            # Start processing input in a separate task
+            asyncio.create_task(self._process_stdin())
             
         except Exception as e:
             print(json.dumps({
@@ -164,7 +178,6 @@ class SmallContextServer:
                     "message": str(e)
                 }
             }), flush=True)
-            # Still signal ready even if there's an error, so the main loop can continue
             if ready_callback:
                 await ready_callback()
     

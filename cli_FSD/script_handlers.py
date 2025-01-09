@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import json
+import asyncio
 from datetime import datetime
 from .utils import print_streamed_message, get_system_info, animated_loading, save_script, use_mcp_tool
 from .chat_models import chat_with_model
@@ -182,25 +183,34 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
             config=config,
             chat_models=chat_models
         )
-        print_streamed_message(llm_response, config.CYAN)
+        await print_streamed_message(llm_response, config.CYAN)
         return None
     
     llm_response = None
     
     try:
-        # Add timeout for context agent analysis
-        import asyncio
-        from concurrent.futures import ThreadPoolExecutor
-        
-        async def analyze_with_timeout():
-            agent = ContextAgent()
-            with ThreadPoolExecutor() as executor:
-                loop = asyncio.get_event_loop()
-                analysis = await loop.run_in_executor(executor, agent.analyze_request, query)
-                return analysis
-        
+        # For simple time/date/weather queries, bypass context agent and return immediately
+        if any(word in query.lower() for word in ['time', 'date', 'weather']):
+            llm_response = await chat_with_model(
+                query,
+                config,
+                chat_models,
+                system_prompt="You are a shell command generator. For time/date queries, use the 'date' command with appropriate format. For weather queries, use 'curl wttr.in'. Respond only with the command in a bash code block."
+            )
+            await print_streamed_message(llm_response, config.CYAN)
+            scripts = extract_script_from_response(llm_response)
+            if scripts:
+                for script, file_extension, script_type in scripts:
+                    await execute_script_directly(script, file_extension, config)
+            return None
+
+        # For other queries, use context agent with timeout
         try:
-            analysis = await asyncio.wait_for(analyze_with_timeout(), timeout=5.0)
+            agent = ContextAgent()
+            analysis = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, agent.analyze_request, query),
+                timeout=5.0
+            )
             
             # Validate analysis object
             if not analysis or not isinstance(analysis, dict) or "prompt" not in analysis:
@@ -592,27 +602,15 @@ async def process_input_in_safe_mode(query, config, chat_models):
 
 async def process_input_in_autopilot_mode(query, config, chat_models):
     """Process input in autopilot mode with dynamic code display."""
-    from contextlib import contextmanager
-    
-    @contextmanager
-    def loading_animation():
-        stop_event = threading.Event()
-        loading_thread = threading.Thread(
-            target=animated_loading,
-            args=(stop_event,),
-            daemon=True  # Ensure thread cleanup on program exit
-        )
-        try:
-            loading_thread.start()
-            yield
-        finally:
-            stop_event.set()
-            loading_thread.join(timeout=1.0)  # Prevent hanging
-    
-    with loading_animation():
+    stop_event = threading.Event()
+    loading_task = asyncio.create_task(animated_loading(stop_event))
+    try:
         print(f"{config.CYAN}Sending command to LLM...{config.RESET}")
         llm_response = await chat_with_model(query, config, chat_models)
-        print_streamed_message(llm_response, config.CYAN)
+        await print_streamed_message(llm_response, config.CYAN)
+    finally:
+        stop_event.set()
+        await loading_task
         
         scripts = extract_script_from_response(llm_response)
         if not scripts:
@@ -783,7 +781,7 @@ def cleanup_assembled_scripts():
         except OSError as e:
             print(f"Warning: Failed to clean up script {script}: {e}")
 
-def auto_handle_script_execution(final_script, config):
+async def auto_handle_script_execution(final_script, config):
     """Handle script assembly and execution with proper cleanup."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f".assembled_script_{timestamp}.sh"
@@ -803,7 +801,7 @@ def auto_handle_script_execution(final_script, config):
             os.chmod(filename, 0o755)
             
             print(f"{config.CYAN}Executing {filename}...{config.RESET}")
-            success = execute_shell_command(f"./{filename}", config)
+            success = await execute_shell_command(f"./{filename}", config)
             
             if success:
                 print(f"{config.GREEN}Script execution completed successfully.{config.RESET}")
@@ -832,7 +830,7 @@ def get_user_confirmation(command: str, config=None) -> bool:
     response = input("Do you want to proceed? (yes/no): ").strip().lower()
     return response in ['yes', 'y']
 
-def execute_shell_command(command, config, stream_output=True):
+async def execute_shell_command(command, config, stream_output=True):
     """Execute a shell command with proper error handling and output management."""
     if command.startswith('./'):
         try:
@@ -882,11 +880,11 @@ def execute_shell_command(command, config, stream_output=True):
                 error_context = "\n".join(output_lines)
                 print(f"{config.RED}Error encountered executing command: {error_context}{config.RESET}")
                 
-                if resolution := consult_llm_for_error_resolution(error_context, config):
+                if resolution := await consult_llm_for_error_resolution(error_context, config):
                     print(f"{config.CYAN}Suggested resolution:{config.RESET}\n{resolution}")
                     
                     if not config.safe_mode or get_user_confirmation("Apply suggested resolution?", config):
-                        return execute_resolution_script(resolution, config)
+                        return await execute_resolution_script(resolution, config)
                 return False
                 
             return True
@@ -951,7 +949,7 @@ async def execute_script(filename, file_extension, config):
             print(f"{config.RED}Script execution failed with return code {result.returncode}{config.RESET}")
             
             # Try to get resolution for the error
-            if resolution := consult_llm_for_error_resolution(result.stderr or result.stdout, config):
+            if resolution := await consult_llm_for_error_resolution(result.stderr or result.stdout, config):
                 if get_user_confirmation("Would you like to apply the suggested fix?", config):
                     await execute_resolution_script(resolution, config)
         else:
@@ -964,33 +962,54 @@ async def execute_script_directly(script, file_extension, config):
     """Execute a script directly with proper cleanup and error handling."""
     temp_file_path = None
     try:
-        # Add shebang line if missing for shell scripts
+        # For simple commands like 'date' or 'curl wttr.in', execute directly
+        if script.strip().startswith(('date', 'curl wttr.in')):
+            try:
+                # Execute simple command directly
+                process = await asyncio.create_subprocess_shell(
+                    script,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                
+                if stdout:
+                    print(stdout.decode())
+                if stderr:
+                    print(f"{config.RED}{stderr.decode()}{config.RESET}")
+                    
+                return process.returncode == 0
+            except Exception as e:
+                print(f"{config.RED}Error executing command: {e}{config.RESET}")
+                return False
+
+        # For other scripts, use temporary files
         if file_extension in ["sh", "bash", ""]:
             if not script.startswith("#!"):
                 script = "#!/bin/bash\n" + script
 
         if file_extension == "py":
-            # Create a temporary file for Python scripts too
+            # Create a temporary file for Python scripts
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
                 temp_file.write(script)
                 temp_file_path = temp_file.name
             
             try:
-                # Execute Python script as a subprocess for better isolation
-                result = subprocess.run(
-                    ["python", temp_file_path],
-                    capture_output=True,
-                    text=True,
-                    check=False
+                # Execute Python script asynchronously
+                process = await asyncio.create_subprocess_exec(
+                    "python",
+                    temp_file_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
                 )
-                if result.returncode != 0:
-                    print(f"{config.RED}Python script execution failed:{config.RESET}")
-                    if result.stderr:
-                        print(result.stderr)
-                    return False
-                if result.stdout:
-                    print(result.stdout)
-                return True
+                stdout, stderr = await process.communicate()
+                
+                if stdout:
+                    print(stdout.decode())
+                if stderr:
+                    print(f"{config.RED}{stderr.decode()}{config.RESET}")
+                    
+                return process.returncode == 0
             except Exception as e:
                 print(f"{config.RED}Error executing Python script: {e}{config.RESET}")
                 return False
@@ -1009,21 +1028,21 @@ async def execute_script_directly(script, file_extension, config):
                     print("Script execution aborted by the user.")
                     return False
                 
-                # Execute the shell script
-                result = subprocess.run(
-                    ["bash", temp_file_path],
-                    capture_output=True,
-                    text=True,
-                    check=False
+                # Execute the shell script asynchronously
+                process = await asyncio.create_subprocess_exec(
+                    "bash",
+                    temp_file_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
                 )
+                stdout, stderr = await process.communicate()
                 
-                # Print output regardless of success/failure
-                if result.stdout:
-                    print(result.stdout)
-                if result.stderr:
-                    print(f"{config.RED}{result.stderr}{config.RESET}")
-                
-                return result.returncode == 0
+                if stdout:
+                    print(stdout.decode())
+                if stderr:
+                    print(f"{config.RED}{stderr.decode()}{config.RESET}")
+                    
+                return process.returncode == 0
                 
             except Exception as e:
                 print(f"{config.RED}Error executing shell script: {e}{config.RESET}")
@@ -1088,7 +1107,7 @@ def get_cached_system_info():
         _system_info_cache = get_system_info()
     return _system_info_cache
 
-def consult_llm_for_error_resolution(error_message, config):
+async def consult_llm_for_error_resolution(error_message, config):
     system_info = get_cached_system_info()
     print(f"{config.CYAN}Consulting LLM for error resolution:{config.RESET} {error_message}")
     
@@ -1110,18 +1129,22 @@ def consult_llm_for_error_resolution(error_message, config):
     ]
 
     try:
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json={
-                "model": config.current_model,
-                "messages": messages,
-                "temperature": 0.3  # Lower temperature for more focused responses
-            }
-        )
-        response.raise_for_status()
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json={
+                    "model": config.current_model,
+                    "messages": messages,
+                    "temperature": 0.3  # Lower temperature for more focused responses
+                }
+            ) as response:
+                if response.status != 200:
+                    response.raise_for_status()
+                data = await response.json()
         
-        if suggestion := response.json().get('choices', [{}])[0].get('message', {}).get('content', '').strip():
+        if suggestion := data.get('choices', [{}])[0].get('message', {}).get('content', '').strip():
             config.llm_suggestions = suggestion
             return suggestion
             
