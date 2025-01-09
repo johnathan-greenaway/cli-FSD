@@ -3,8 +3,11 @@
 import argparse
 import sys
 import logging
+import asyncio
 from . import configuration
 from .configuration import initialize_config
+from .small_context.server import SmallContextServer
+from .small_context.integration import LLMIntegration
 
 from cli_FSD.utils import (
     print_instructions_once_per_day,
@@ -15,7 +18,79 @@ from cli_FSD.chat_models import initialize_chat_models
 from cli_FSD.command_handlers import handle_command_mode
 from cli_FSD.script_handlers import process_input_based_on_mode
 
-def main():
+async def initialize_services(config):
+    """Initialize required services."""
+    small_context_server = SmallContextServer()
+    llm_integration = LLMIntegration()
+    
+    # Initialize LLM integration first
+    llm_integration = LLMIntegration()
+    
+    # Start small context server
+    small_context_server = SmallContextServer()
+    
+    # Create event for server ready state
+    ready_event = asyncio.Event()
+    
+    async def server_ready_callback():
+        ready_event.set()
+    
+    # Start server with callback
+    server_task = asyncio.create_task(small_context_server.start(ready_callback=server_ready_callback))
+    
+    try:
+        # Wait for server to be ready
+        await asyncio.wait_for(ready_event.wait(), timeout=5.0)
+        print(f"{config.GREEN}Small context server initialized successfully{config.RESET}")
+    except asyncio.TimeoutError:
+        print(f"{config.YELLOW}Small context server initialization taking longer than expected...{config.RESET}")
+        # Continue anyway as the server might still initialize
+    except Exception as e:
+        print(f"{config.RED}Failed to initialize small context server: {e}{config.RESET}")
+        # Continue with degraded functionality
+    
+    return small_context_server, llm_integration
+
+async def process_with_context(user_input: str, config, chat_models, llm_integration) -> str:
+    """Process input with context management."""
+    try:
+        # Process with context
+        context_result = await llm_integration.process_conversation(
+            [{"role": "user", "content": user_input}]
+        )
+        
+        # Get context if available
+        context = context_result.get('context') if context_result else None
+        
+        # Process input with context
+        result = await process_input_based_on_mode(
+            user_input, 
+            config, 
+            chat_models,
+            context=context
+        )
+        
+        if result is None:
+            # If no result, try processing as a direct command
+            result = await process_input_based_on_mode(
+                user_input,
+                config,
+                chat_models
+            )
+        
+        return result
+        
+    except Exception as e:
+        logging.error(f"Context processing error: {e}")
+        # Fallback to direct processing
+        return await process_input_based_on_mode(
+            user_input,
+            config,
+            chat_models
+        )
+
+async def async_main():
+    """Async main function that handles the core application logic."""
     # Configure logging
     logging.basicConfig(
         filename='cli_fsd.log',
@@ -29,6 +104,14 @@ def main():
     args = parse_arguments()
     config = initialize_config(args)
     chat_models = initialize_chat_models(config)
+    
+    # Initialize services
+    try:
+        small_context_server, llm_integration = await initialize_services(config)
+    except Exception as e:
+        logging.error(f"Failed to initialize services: {e}")
+        print(f"{config.RED}Failed to initialize services: {e}{config.RESET}")
+        return
 
     # Combine the query list into a single string
     query = ' '.join(args.query).strip()
@@ -36,7 +119,7 @@ def main():
     if query:
         try:
             # Process the input, which handles saving based on mode
-            process_input_based_on_mode(query, config, chat_models)
+            await process_input_based_on_mode(query, config, chat_models)
             logging.info(f"Processed query: {query}")
         except Exception as e:
             error_message = f"Error processing query '{query}': {e}"
@@ -133,7 +216,7 @@ def main():
                     continue
 
             if user_input.upper() == 'CMD':
-                handle_command_mode(config, chat_models)
+                await handle_command_mode(config, chat_models)
             elif user_input.lower() == 'safe':
                 config.safe_mode = True
                 config.autopilot_mode = False
@@ -154,7 +237,13 @@ def main():
                 logging.info("Switched to normal mode.")
             else:
                 try:
-                    config.last_response = process_input_based_on_mode(user_input, config, chat_models)
+                    # Process input with context management
+                    config.last_response = await process_input_based_on_mode(
+                        user_input,
+                        config,
+                        chat_models,
+                        context=None
+                    )
                     logging.info(f"Processed command: {user_input}")
                 except Exception as e:
                     error_message = f"Error processing command '{user_input}': {e}"
@@ -164,7 +253,7 @@ def main():
             if hasattr(config, 'llm_suggestions') and config.llm_suggestions:
                 print(f"{config.CYAN}Processing LLM suggestion:{config.RESET} {config.llm_suggestions}")
                 try:
-                    process_input_based_on_mode(config.llm_suggestions, config, chat_models)
+                    await process_input_based_on_mode(config.llm_suggestions, config, chat_models)
                     logging.info(f"Processed LLM suggestion: {config.llm_suggestions}")
                 except Exception as e:
                     error_message = f"Error processing LLM suggestion '{config.llm_suggestions}': {e}"
@@ -182,9 +271,18 @@ def main():
             print("Goodbye!")
             break
 
+    # Cleanup services
+    await small_context_server.stop()
     print("Operation completed.")
     logging.info("cli-FSD operation completed.")
 
+def main():
+    """Synchronous entry point that runs the async main function."""
+    try:
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        print("\nExiting cli-FSD...")
+        sys.exit(0)
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
@@ -200,3 +298,6 @@ def parse_arguments():
     parser.add_argument("-d", "--default", action="store_true", help="Reset to default model settings")
     parser.add_argument("query", nargs=argparse.REMAINDER, help="User query to process directly")
     return parser.parse_args()
+
+if __name__ == "__main__":
+    main()

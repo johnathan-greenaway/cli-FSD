@@ -31,36 +31,45 @@ class LLMIntegration:
         Returns:
             Processed conversation with managed context
         """
-        # Clear previous context
-        self.protocol.clear_context()
-        
-        # Add system context if provided
-        if system_context:
-            self.protocol.process_input(
-                system_context,
-                priority=Priority.CRITICAL
-            )
-        
-        # Process each message
-        processed_messages = []
-        for msg in messages:
-            priority = (Priority.IMPORTANT if msg['role'] == 'user'
-                      else Priority.SUPPLEMENTARY)
+        try:
+            # Process each message
+            processed_messages = []
+            for msg in messages:
+                priority = (Priority.IMPORTANT if msg['role'] == 'user'
+                          else Priority.SUPPLEMENTARY)
+                
+                # Extract entities and relationships
+                entities = []
+                relationships = []
+                
+                # Process message content
+                result = self.protocol.process_input(
+                    msg['content'],
+                    priority=priority,
+                    entities=entities,
+                    relationships=relationships
+                )
+                
+                if isinstance(result, list):
+                    processed_messages.extend(result)
+                else:
+                    processed_messages.append(result)
             
-            result = self.protocol.process_input(
-                msg['content'],
-                priority=priority
-            )
+            # Get current context as string
+            context = self.protocol.get_context(format_type="string")
             
-            if isinstance(result, list):
-                processed_messages.extend(result)
-            else:
-                processed_messages.append(result)
-        
-        return {
-            'messages': [m.to_dict() for m in processed_messages],
-            'context': self.protocol.get_context()
-        }
+            # Return formatted response
+            return {
+                'messages': [m.to_dict() for m in processed_messages],
+                'context': context
+            }
+            
+        except Exception as e:
+            # Return empty context on error
+            return {
+                'messages': [],
+                'context': ''
+            }
 
 class FileProcessor:
     """Example integration for processing file content."""

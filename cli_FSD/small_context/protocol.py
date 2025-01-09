@@ -318,9 +318,41 @@ class SmallContextProtocol:
         self.context_manager.add_message(message)
         return message
     
-    def get_context(self) -> List[Dict]:
-        """Get current context in dictionary format."""
-        return [msg.to_dict() for msg in self.context_manager.get_context()]
+    def get_context(self, format_type: str = "string") -> Union[List[Dict], str]:
+        """Get current context in specified format.
+        
+        Args:
+            format_type: "string" or "dict" for output format
+            
+        Returns:
+            Context as either formatted string or list of dictionaries
+        """
+        context = self.context_manager.get_context()
+        
+        if format_type == "string":
+            # Format context as string for LLM consumption
+            parts = []
+            for msg in context:
+                # Add core content
+                parts.append(f"Content: {msg.content.core_data}")
+                
+                # Add entities if present
+                if msg.content.entities:
+                    parts.append(f"Entities: {', '.join(msg.content.entities)}")
+                
+                # Add relationships if present
+                for rel in msg.content.relationships:
+                    rel_str = []
+                    for k, v in rel.items():
+                        rel_str.append(f"{k}: {v}")
+                    parts.append(f"Relationship: {', '.join(rel_str)}")
+                
+                parts.append("")  # Add separator between messages
+            
+            return "\n".join(parts).strip()
+        else:
+            # Return as list of dictionaries
+            return [msg.to_dict() for msg in context]
     
     def clear_context(self) -> None:
         """Clear the current context."""

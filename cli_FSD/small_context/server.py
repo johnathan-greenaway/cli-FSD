@@ -17,6 +17,7 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from small_context.cache import ContentCache, CachedContent
+from small_context.memory_cache import InMemoryCache, InMemoryCachedContent
 
 @dataclass
 class Message:
@@ -91,23 +92,81 @@ class SmallContextServer:
         
     async def _start_redis(self):
         """Start Redis server on a dynamic port."""
-        with socket.socket() as s:
-            s.bind(('', 0))
-            port = s.getsockname()[1]
-        
-        self.redis_process = subprocess.Popen(
-            ['redis-server', '--port', str(port), '--daemonize', 'no'],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        
-        await asyncio.sleep(1)
-        self.cache = ContentCache(port=port)
+        try:
+            # Find an available port
+            with socket.socket() as s:
+                s.bind(('', 0))
+                port = s.getsockname()[1]
+            
+            # Try to start Redis server
+            try:
+                self.redis_process = subprocess.Popen(
+                    ['redis-server', '--port', str(port), '--daemonize', 'no'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                
+                # Wait briefly for Redis to start
+                await asyncio.sleep(1)
+                
+                # Check if process is still running
+                if self.redis_process.poll() is not None:
+                    stdout, stderr = self.redis_process.communicate()
+                    print(json.dumps({
+                        "warning": {
+                            "code": "redis_start_failed",
+                            "message": f"Redis failed to start: {stderr.decode()}. Using in-memory cache."
+                        }
+                    }), flush=True)
+                    self.cache = InMemoryCache()
+                    return
+                
+                # Initialize cache
+                self.cache = ContentCache(port=port)
+                
+            except FileNotFoundError:
+                print(json.dumps({
+                    "warning": {
+                        "code": "redis_not_found",
+                        "message": "Redis server not found. Using in-memory cache."
+                    }
+                }), flush=True)
+                
+        except Exception as e:
+            if self.redis_process:
+                self.redis_process.terminate()
+                self.redis_process.wait()
+            print(json.dumps({
+                "warning": {
+                    "code": "redis_init_failed",
+                    "message": f"Failed to initialize Redis: {str(e)}. Using in-memory cache."
+                }
+            }), flush=True)
     
-    async def start(self):
+    async def start(self, ready_callback=None):
         """Start the server and initialize services."""
-        await self._start_redis()
-        await self._process_stdin()
+        try:
+            await self._start_redis()
+            # Initialize default context
+            self.contexts["default"] = ContextState()
+            
+            # Signal ready state
+            if ready_callback:
+                await ready_callback()
+            
+            # Start processing input
+            await self._process_stdin()
+            
+        except Exception as e:
+            print(json.dumps({
+                "error": {
+                    "code": "initialization_error",
+                    "message": str(e)
+                }
+            }), flush=True)
+            # Still signal ready even if there's an error, so the main loop can continue
+            if ready_callback:
+                await ready_callback()
     
     async def stop(self):
         """Stop the server and cleanup resources."""
@@ -116,18 +175,36 @@ class SmallContextServer:
             self.redis_process.wait()
     
     async def _process_stdin(self):
-        """Process MCP protocol messages from stdin."""
+        """Process both MCP protocol messages and CLI input."""
         while True:
             try:
                 line = await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
-                if not line:
-                    break
-                    
-                request = json.loads(line)
-                response = await self._handle_request(request)
+                if not line or line.isspace():
+                    continue
                 
-                print(json.dumps(response))
-                sys.stdout.flush()
+                # Try to parse as JSON for MCP protocol
+                try:
+                    request = json.loads(line)
+                    response = await self._handle_request(request)
+                    print(json.dumps(response))
+                    sys.stdout.flush()
+                    continue
+                except json.JSONDecodeError:
+                    # Not JSON, treat as CLI input
+                    pass
+                
+                # Handle CLI input
+                user_input = line.strip()
+                if user_input.startswith("@"):
+                    # Handle CLI command
+                    response = await self._handle_cli_command(user_input[1:])
+                    if response:
+                        print(response)
+                else:
+                    # Handle regular input
+                    response = await self._handle_cli_input(user_input)
+                    if response:
+                        print(response)
                 
             except Exception as e:
                 print(json.dumps({
@@ -136,6 +213,141 @@ class SmallContextServer:
                         "message": str(e)
                     }
                 }), flush=True)
+    
+    async def _handle_cli_command(self, command: str) -> Optional[str]:
+        """Handle CLI commands."""
+        parts = command.strip().split()
+        if not parts:
+            return None
+            
+        cmd = parts[0].lower()
+        args = parts[1:]
+        
+        if cmd == "help":
+            return """
+Available commands:
+  @help           - Show this help message
+  @browse <url>   - Browse a webpage
+  @select <url>   - Select content from cached webpage
+  @clear          - Clear cached content
+"""
+        elif cmd == "browse" and args:
+            url = args[0]
+            result = await self._handle_browse_web({"url": url})
+            if "error" in result:
+                return f"Error: {result['error']}"
+            return "Content cached successfully"
+            
+        elif cmd == "select" and args:
+            url = args[0]
+            result = self._handle_select_content({
+                "url": url,
+                "selection": {
+                    "headlines": [0],
+                    "paragraphs": [0]
+                }
+            })
+            if "error" in result:
+                return f"Error: {result['error']}"
+            return "Content selected successfully"
+            
+        elif cmd == "clear":
+            if self.cache:
+                self.cache = InMemoryCache() if isinstance(self.cache, InMemoryCache) else ContentCache()
+                return "Cache cleared"
+            return "No cache available"
+            
+        return f"Unknown command: {cmd}"
+    
+    async def _handle_cli_input(self, text: str) -> Optional[str]:
+        """Handle regular CLI input."""
+        # Process as regular input, store in context
+        if not text:
+            return None
+            
+        # Get default context
+        context = self.contexts["default"]
+            
+        # Create message with content analysis
+        message = Message(
+            timestamp=time.time(),
+            priority="important",
+            token_count=len(text.split()),
+            content=text,
+            entities=self._extract_entities(text),
+            relationships=self._extract_relationships(text)
+        )
+        
+        # Add to context
+        context.add_message(message)
+        
+        # Return formatted context for display
+        return self._format_context_summary(context)
+    
+    def _extract_entities(self, text: str) -> List[str]:
+        """Extract key entities from text."""
+        # Simple entity extraction based on capitalized words and technical terms
+        entities = []
+        words = text.split()
+        for word in words:
+            # Capture capitalized words (potential proper nouns)
+            if word[0].isupper() and len(word) > 1:
+                entities.append(word)
+            # Capture technical terms
+            elif any(tech in word.lower() for tech in ['api', 'url', 'http', 'json', 'xml', 'html']):
+                entities.append(word)
+        return list(set(entities))
+    
+    def _extract_relationships(self, text: str) -> List[Dict[str, str]]:
+        """Extract relationships between entities."""
+        relationships = []
+        entities = self._extract_entities(text)
+        
+        # Look for relationships between entities
+        for i, entity1 in enumerate(entities):
+            for entity2 in entities[i+1:]:
+                # Find text between entities that might indicate a relationship
+                try:
+                    start = text.index(entity1) + len(entity1)
+                    end = text.index(entity2)
+                    between = text[start:end].strip()
+                    if between:
+                        relationships.append({
+                            "source": entity1,
+                            "target": entity2,
+                            "relation": between
+                        })
+                except ValueError:
+                    continue
+        
+        return relationships
+    
+    def _format_context_summary(self, context: ContextState) -> str:
+        """Format context state for display."""
+        if not context.messages:
+            return None
+            
+        # Get most recent messages
+        recent_messages = sorted(
+            context.messages,
+            key=lambda m: m.timestamp,
+            reverse=True
+        )[:5]
+        
+        # Format summary
+        summary = []
+        for msg in recent_messages:
+            summary.append(f"Content: {msg.content}")
+            if msg.entities:
+                summary.append(f"Entities: {', '.join(msg.entities)}")
+            if msg.relationships:
+                for rel in msg.relationships:
+                    summary.append(
+                        f"Relationship: {rel['source']} {rel['relation']} {rel['target']}"
+                    )
+            summary.append("")
+        
+        return "\n".join(summary) if summary else None
     
     async def _handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Handle incoming MCP requests."""
@@ -417,7 +629,9 @@ class SmallContextServer:
                             })
             
             # Cache the content
-            cached_content = CachedContent(
+            # Create appropriate cache content based on cache type
+            cache_content = InMemoryCachedContent if isinstance(self.cache, InMemoryCache) else CachedContent
+            cached_content = cache_content(
                 url=url,
                 title=content["title"],
                 headlines=[block["title"] for block in content["content"] if block.get("type") == "story"],
