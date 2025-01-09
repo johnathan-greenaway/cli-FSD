@@ -139,116 +139,230 @@ async def async_main():
             if not user_input:
                 continue  # Skip empty inputs
 
+            # Check for bare @ command first
+            if user_input == '@':
+                # Use the new interactive mode handler for bare @ command
+                from .script_handlers import handle_interactive_mode
+                await handle_interactive_mode(config, chat_models)
+                break  # Exit the main loop as handle_interactive_mode has its own loop
+
             # Parse model selection flags if command starts with @
-            if user_input.startswith("@"):
-                try:
-                    # Split into parts but preserve quoted strings
-                    parts = []
-                    current = []
-                    in_quotes = False
-                    for char in user_input[1:].strip():  # Skip @ and leading space
-                        if char == '"':
-                            in_quotes = not in_quotes
-                        elif char.isspace() and not in_quotes:
-                            if current:
-                                parts.append(''.join(current))
-                                current = []
-                        else:
-                            current.append(char)
-                    if current:
-                        parts.append(''.join(current))
-                    
-                    # Process flags
-                    i = 0
-                    flags_changed = False
-                    while i < len(parts) and parts[i].startswith("-"):
-                        flag = parts[i]
-                        if flag == "-o":
-                            config.session_model = "ollama"
-                            config.use_ollama = True
-                            config.use_claude = config.use_groq = False
-                            flags_changed = True
-                        elif flag == "-c":
-                            config.session_model = "claude"
-                            config.use_claude = True
-                            config.use_ollama = config.use_groq = False
-                            flags_changed = True
-                        elif flag == "-g":
-                            config.session_model = "groq"
-                            config.use_groq = True
-                            config.use_claude = config.use_ollama = False
-                            flags_changed = True
-                        elif flag == "-a":
-                            config.autopilot_mode = True
-                            flags_changed = True
-                        elif flag == "-ci":
-                            config.scriptreviewer_on = True
-                            flags_changed = True
-                        elif flag == "-d":
-                            # Reset all settings to default
-                            config.session_model = None
-                            config.use_ollama = config.use_claude = config.use_groq = False
-                            config.autopilot_mode = config.scriptreviewer_on = False
-                            flags_changed = True
-                        else:
-                            break
-                        i += 1
-
-                    # Save preferences if flags were changed
-                    if flags_changed:
-                        config.save_preferences()
-                        chat_models = initialize_chat_models(config)
-                        if config.session_model:
-                            print(f"Using model: {config.session_model}")
-                        else:
-                            print("Using default model settings")
-                        if config.autopilot_mode:
-                            print("Autopilot mode enabled")
-
-                    # Reconstruct query preserving quotes
-                    user_input = " ".join(parts[i:])
-                    
-                    if not user_input:
-                        continue
+            elif user_input.startswith("@"):
+                # Get the command part after @
+                command = user_input[1:].strip()
+                
+                # If command is empty or just whitespace, treat it like bare @
+                if not command:
+                    from .script_handlers import handle_interactive_mode
+                    await handle_interactive_mode(config, chat_models)
+                    break  # Exit the main loop as handle_interactive_mode has its own loop
+                # If command starts with a flag
+                elif command.startswith("-"):
+                    try:
+                        # Split into parts but preserve quoted strings
+                        parts = []
+                        current = []
+                        in_quotes = False
+                        for char in command:
+                            if char == '"':
+                                in_quotes = not in_quotes
+                            elif char.isspace() and not in_quotes:
+                                if current:
+                                    parts.append(''.join(current))
+                                    current = []
+                            else:
+                                current.append(char)
+                        if current:
+                            parts.append(''.join(current))
                         
-                except Exception as e:
-                    print(f"{config.RED}Error parsing command: {str(e)}{config.RESET}")
-                    continue
+                        # Process flags
+                        i = 0
+                        flags_changed = False
+                        while i < len(parts) and parts[i].startswith("-"):
+                            flag = parts[i]
+                            if flag == "-o":
+                                config.session_model = "ollama"
+                                config.use_ollama = True
+                                config.use_claude = config.use_groq = False
+                                flags_changed = True
+                            elif flag == "-c":
+                                config.session_model = "claude"
+                                config.use_claude = True
+                                config.use_ollama = config.use_groq = False
+                                flags_changed = True
+                            elif flag == "-g":
+                                config.session_model = "groq"
+                                config.use_groq = True
+                                config.use_claude = config.use_ollama = False
+                                flags_changed = True
+                            elif flag == "-a":
+                                config.autopilot_mode = True
+                                flags_changed = True
+                            elif flag == "-ci":
+                                config.scriptreviewer_on = True
+                                flags_changed = True
+                            elif flag == "-d":
+                                # Reset all settings to default
+                                config.session_model = None
+                                config.use_ollama = config.use_claude = config.use_groq = False
+                                config.autopilot_mode = config.scriptreviewer_on = False
+                                flags_changed = True
+                            else:
+                                break
+                            i += 1
 
-            if user_input.upper() == 'CMD':
-                await handle_command_mode(config, chat_models)
-            elif user_input.lower() == 'safe':
-                config.safe_mode = True
-                config.autopilot_mode = False
-                config.save_preferences()
-                print("Switched to safe mode. You will be prompted before executing any commands.")
-                logging.info("Switched to safe mode.")
-            elif user_input.lower() == 'autopilot':
-                config.safe_mode = False
-                config.autopilot_mode = True
-                config.save_preferences()
-                print("Switched to autopilot mode.")
-                logging.info("Switched to autopilot mode.")
-            elif user_input.lower() == 'normal':
-                config.safe_mode = False
-                config.autopilot_mode = False
-                config.save_preferences()
-                print("Switched to normal mode.")
-                logging.info("Switched to normal mode.")
-            else:
+                        # Save preferences if flags were changed
+                        if flags_changed:
+                            config.save_preferences()
+                            chat_models = initialize_chat_models(config)
+                            if config.session_model:
+                                print(f"Using model: {config.session_model}")
+                            else:
+                                print("Using default model settings")
+                            if config.autopilot_mode:
+                                print("Autopilot mode enabled")
+
+                        # Reconstruct query preserving quotes
+                        command = " ".join(parts[i:])
+                        
+                        # If no command after flags, enter interactive mode
+                        if not command:
+                            from .script_handlers import handle_interactive_mode
+                            await handle_interactive_mode(config, chat_models)
+                            break  # Exit the main loop as handle_interactive_mode has its own loop
+                        
+                    except Exception as e:
+                        print(f"{config.RED}Error parsing command: {str(e)}{config.RESET}")
+                        continue
+
+                # Process the command (we know it's not empty at this point)
+                if command.startswith("-"):
+                    try:
+                        # Split into parts but preserve quoted strings
+                        parts = []
+                        current = []
+                        in_quotes = False
+                        for char in command:
+                            if char == '"':
+                                in_quotes = not in_quotes
+                            elif char.isspace() and not in_quotes:
+                                if current:
+                                    parts.append(''.join(current))
+                                    current = []
+                            else:
+                                current.append(char)
+                        if current:
+                            parts.append(''.join(current))
+                        
+                        # Process flags
+                        i = 0
+                        flags_changed = False
+                        while i < len(parts) and parts[i].startswith("-"):
+                            flag = parts[i]
+                            if flag == "-o":
+                                config.session_model = "ollama"
+                                config.use_ollama = True
+                                config.use_claude = config.use_groq = False
+                                flags_changed = True
+                            elif flag == "-c":
+                                config.session_model = "claude"
+                                config.use_claude = True
+                                config.use_ollama = config.use_groq = False
+                                flags_changed = True
+                            elif flag == "-g":
+                                config.session_model = "groq"
+                                config.use_groq = True
+                                config.use_claude = config.use_ollama = False
+                                flags_changed = True
+                            elif flag == "-a":
+                                config.autopilot_mode = True
+                                flags_changed = True
+                            elif flag == "-ci":
+                                config.scriptreviewer_on = True
+                                flags_changed = True
+                            elif flag == "-d":
+                                # Reset all settings to default
+                                config.session_model = None
+                                config.use_ollama = config.use_claude = config.use_groq = False
+                                config.autopilot_mode = config.scriptreviewer_on = False
+                                flags_changed = True
+                            else:
+                                break
+                            i += 1
+
+                        # Save preferences if flags were changed
+                        if flags_changed:
+                            config.save_preferences()
+                            chat_models = initialize_chat_models(config)
+                            if config.session_model:
+                                print(f"Using model: {config.session_model}")
+                            else:
+                                print("Using default model settings")
+                            if config.autopilot_mode:
+                                print("Autopilot mode enabled")
+
+                        # Reconstruct query preserving quotes
+                        command = " ".join(parts[i:])
+                        
+                        # If no command after flags, enter interactive mode
+                        if not command:
+                            from .script_handlers import handle_interactive_mode
+                            await handle_interactive_mode(config, chat_models)
+                            break  # Exit the main loop as handle_interactive_mode has its own loop
+                        
+                    except Exception as e:
+                        print(f"{config.RED}Error parsing command: {str(e)}{config.RESET}")
+                        continue
+
+                # Process the command
                 try:
-                    # Process input with context management
                     config.last_response = await process_input_based_on_mode(
-                        user_input,
+                        command,
                         config,
                         chat_models,
                         context=None
                     )
-                    logging.info(f"Processed command: {user_input}")
+                    logging.info(f"Processed command: {command}")
                 except Exception as e:
-                    error_message = f"Error processing command '{user_input}': {e}"
+                    error_message = f"Error processing command '{command}': {e}"
                     print(f"{config.RED}Error processing command: {e}{config.RESET}")
                     logging.error(error_message)
+
+            else:
+                if user_input.upper() == 'CMD':
+                    await handle_command_mode(config, chat_models)
+                elif user_input.lower() == 'safe':
+                    config.safe_mode = True
+                    config.autopilot_mode = False
+                    config.save_preferences()
+                    print("Switched to safe mode. You will be prompted before executing any commands.")
+                    logging.info("Switched to safe mode.")
+                elif user_input.lower() == 'autopilot':
+                    config.safe_mode = False
+                    config.autopilot_mode = True
+                    config.save_preferences()
+                    print("Switched to autopilot mode.")
+                    logging.info("Switched to autopilot mode.")
+                elif user_input.lower() == 'normal':
+                    config.safe_mode = False
+                    config.autopilot_mode = False
+                    config.save_preferences()
+                    print("Switched to normal mode.")
+                    logging.info("Switched to normal mode.")
+                else:
+                    try:
+                        # Process input with context management
+                        config.last_response = await process_input_based_on_mode(
+                            user_input,
+                            config,
+                            chat_models,
+                            context=None
+                        )
+                        logging.info(f"Processed command: {user_input}")
+                    except Exception as e:
+                        error_message = f"Error processing command '{user_input}': {e}"
+                        print(f"{config.RED}Error processing command: {e}{config.RESET}")
+                        logging.error(error_message)
 
             if hasattr(config, 'llm_suggestions') and config.llm_suggestions:
                 print(f"{config.CYAN}Processing LLM suggestion:{config.RESET} {config.llm_suggestions}")

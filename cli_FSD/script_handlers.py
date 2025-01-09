@@ -25,6 +25,71 @@ _content_cache = {
     'paragraphs': []  # List of paragraphs for easy reference
 }
 
+async def handle_interactive_mode(config, chat_models=None):
+    """Handle interactive mode where user can input multiple commands."""
+    if chat_models is None:
+        from .chat_models import initialize_chat_models
+        chat_models = initialize_chat_models(config)
+        
+    print("\nSmall context server initialized successfully")
+    while True:
+        try:
+            # Get user input
+            user_input = input(config.PROMPT).strip()
+            if user_input.lower() in ['exit', 'quit', 'q']:
+                break
+                
+            if not user_input:
+                continue
+                
+            print(f"Content: {user_input}\n")
+            
+            try:
+                # Process the input and get LLM response
+                llm_response = await process_input_based_on_mode(user_input, config, chat_models)
+                
+                # Handle the response if we got one
+                if llm_response:
+                    # Create a task for print_streamed_message
+                    print_task = asyncio.create_task(print_streamed_message(llm_response, config.CYAN))
+                    try:
+                        # Wait for the print task to complete
+                        await print_task
+                    except Exception as e:
+                        print(f"Error printing response: {e}")
+                    
+                    # Extract and handle any scripts
+                    scripts = extract_script_from_response(llm_response)
+                    if scripts:
+                        for script, file_extension, script_type in scripts:
+                            print(f"\nFound a {script_type} script:")
+                            print(script)
+                            
+                            try:
+                                # Execute script based on mode
+                                if config.autopilot_mode:
+                                    await execute_script_directly(script, file_extension, config)
+                                else:
+                                    await user_decide_and_act(user_input, script, file_extension, config)
+                            except Exception as e:
+                                print(f"Error executing script: {e}")
+                                continue
+                
+                # Always continue the loop after processing
+                await asyncio.sleep(0)  # Give other tasks a chance to run
+                
+            except asyncio.CancelledError:
+                raise  # Re-raise cancellation
+            except Exception as e:
+                print(f"Error processing command: {e}")
+                await asyncio.sleep(0)  # Give other tasks a chance to run
+                    
+        except KeyboardInterrupt:
+            print("\nExiting interactive mode...")
+            break
+        except Exception as e:
+            print(f"Error: {str(e)}")
+
 async def _find_matching_content(query):
     """Find content matching a natural language query."""
     if not _content_cache['raw_content']:
@@ -111,22 +176,31 @@ def _validate_query(query: str) -> bool:
     """Validate that the query is not empty and contains actual content."""
     return bool(query and query.strip())
 
+async def get_llm_response(prompt, config, chat_models):
+    """Get response from LLM."""
+    try:
+        response = await chat_with_model(prompt, config, chat_models)
+        return response
+    except Exception as e:
+        print(f"Error getting LLM response: {str(e)}")
+        return None
+
 async def process_input_based_on_mode(query, config, chat_models, context=None):
     """Process input with context management and tool selection."""
     global _content_cache
-    
+
     # Validate query
     if not _validate_query(query):
         print(f"{config.YELLOW}Please provide a command or question.{config.RESET}")
         return None
-        
+
     # Print current configuration for debugging
     if config.session_model:
         print(f"{config.CYAN}Using model: {config.session_model}{config.RESET}")
-    
+
     # Build system prompt with context and cached content
     system_prompt = []
-    
+
     # Add context if available
     if context:
         system_prompt.append(
@@ -134,7 +208,7 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
             f"{context}\n\n"
             "Consider this context while processing the following request."
         )
-    
+
     # Add cached content if available
     if _content_cache['formatted_content']:
         system_prompt.append(
@@ -142,17 +216,17 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
             f"{_content_cache['formatted_content']}\n\n"
             "Consider this content if relevant to the request."
         )
-    
+
     # Add task instruction
     system_prompt.append(
         f"Request: {query}\n\n"
         "If generating code, wrap it in appropriate markdown code blocks:\n"
         "```language\ncode\n```"
     )
-    
+
     # Combine prompts
     final_prompt = "\n\n".join(system_prompt)
-    
+
     # Check if this is a request to view specific cached content
     if _content_cache['raw_content'] and any(word in query.lower() for word in ['show', 'view', 'read', 'tell', 'about']):
         matching_content = await _find_matching_content(query)
@@ -168,7 +242,7 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 for link in matching_content['links']:
                     print(f"- {link}")
             return None
-    
+
     # Check if this is a follow-up question about cached content
     if _content_cache['formatted_content'] and not query.lower().startswith(("get", "fetch", "find")):
         # Process as a question about the cached content
@@ -183,11 +257,14 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
             config=config,
             chat_models=chat_models
         )
-        await print_streamed_message(llm_response, config.CYAN)
-        return None
-    
+        # Create a task for print_streamed_message
+        print_task = asyncio.create_task(print_streamed_message(llm_response, config.CYAN))
+        # Wait for the print task to complete
+        await print_task
+        return llm_response
+
     llm_response = None
-    
+
     try:
         # For simple time/date/weather queries, bypass context agent and return immediately
         if any(word in query.lower() for word in ['time', 'date', 'weather']):
@@ -197,12 +274,11 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 chat_models,
                 system_prompt="You are a shell command generator. For time/date queries, use the 'date' command with appropriate format. For weather queries, use 'curl wttr.in'. Respond only with the command in a bash code block."
             )
-            await print_streamed_message(llm_response, config.CYAN)
             scripts = extract_script_from_response(llm_response)
             if scripts:
                 for script, file_extension, script_type in scripts:
                     await execute_script_directly(script, file_extension, config)
-            return None
+            return llm_response
 
         # For other queries, use context agent with timeout
         try:
@@ -211,19 +287,19 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 asyncio.get_event_loop().run_in_executor(None, agent.analyze_request, query),
                 timeout=5.0
             )
-            
+
             # Validate analysis object
             if not analysis or not isinstance(analysis, dict) or "prompt" not in analysis:
                 # Fall back to direct LLM processing if analysis fails
                 print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
                 llm_response = await chat_with_model(
-                    query, 
-                    config, 
+                    query,
+                    config,
                     chat_models,
                     system_prompt=system_prompt if system_prompt else None
                 )
                 return llm_response
-                
+
         except asyncio.TimeoutError:
             print(f"{config.YELLOW}Context analysis timed out, falling back to direct processing.{config.RESET}")
             llm_response = await chat_with_model(
@@ -233,7 +309,7 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 system_prompt=system_prompt if system_prompt else None
             )
             return llm_response
-        
+
         # Get LLM's tool selection decision with timeout
         try:
             async def get_tool_selection():
@@ -250,7 +326,7 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                         "analysis and selection. Be precise and follow the specified format."
                     )
                 )
-            
+
             llm_analysis = await asyncio.wait_for(get_tool_selection(), timeout=10.0)
         except asyncio.TimeoutError:
             print(f"{config.YELLOW}Tool selection timed out, falling back to direct processing.{config.RESET}")
@@ -261,13 +337,13 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 system_prompt=system_prompt if system_prompt else None
             )
             return llm_response
-        
+
         if not llm_analysis:
             print(f"{config.YELLOW}No response received from tool selection LLM analysis.{config.RESET}")
             try:
                 llm_response = await chat_with_model(
-                    query, 
-                    config, 
+                    query,
+                    config,
                     chat_models,
                     system_prompt=final_prompt
                 )
@@ -278,7 +354,7 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 print(f"{config.RED}Error getting LLM response: {e}{config.RESET}")
                 return None
             return llm_response
-        
+
         try:
             # Extract JSON from the LLM analysis response
             json_start = llm_analysis.find('{')
@@ -286,13 +362,13 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
             if json_start >= 0 and json_end > json_start:
                 json_str = llm_analysis[json_start:json_end]
                 tool_selection = json.loads(json_str)
-                
+
                 # Get response using selected tool
                 selected_tool = tool_selection.get("selected_tool", "").lower()
                 if selected_tool == "small_context":
                     # Rest of the small_context handling code...
                     # [Ensure that existing small_context handling code is placed here]
-                    
+
                     # Example placeholder for small_context handling:
                     parameters = tool_selection.get("parameters", {})
                     url = parameters.get("url")
@@ -307,20 +383,20 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                         # Execute MCP tool with debug output
                         print(f"{config.CYAN}Executing MCP tool: {result['operation']}{config.RESET}")
                         print(f"{config.CYAN}Using URL: {url}{config.RESET}")
-                        
+
                         # Create arguments with the URL
                         arguments = {
                             **result["arguments"],
                             "url": url  # Ensure URL is included in arguments
                         }
-                        
+
                         response = use_mcp_tool(
                             server_name=result["server"],
                             tool_name=result["operation"],
                             arguments=arguments
                         )
                         print(f"{config.CYAN}MCP tool response received.{config.RESET}")
-                        
+
                         try:
                             # Handle both string and list responses
                             if isinstance(response, str):
@@ -329,16 +405,16 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                                 content = response
                             else:
                                 raise ValueError(f"Unexpected response type: {type(response)}")
-                            
+
                             # Format content for processing
                             if isinstance(content, dict):
                                 if content.get("type") == "webpage":
                                     # Process structured content
                                     _content_cache['raw_content'] = content
-                                    
+
                                     # Format content for LLM processing
                                     formatted_content = []
-                                    
+
                                     # Process each content block
                                     for item in content.get("content", []):
                                         if item.get("type") == "story":
@@ -363,10 +439,10 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                                                             for link in block["links"]
                                                         )
                                                     formatted_content.append(text)
-                                    
+
                                     # Cache formatted content
                                     _content_cache['formatted_content'] = "\n\n".join(formatted_content)
-                                    
+
                                     # Let LLM analyze and present the content
                                     llm_response = await chat_with_model(
                                         message=(
@@ -387,8 +463,11 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
-                                    
+                                    # Create a task for print_streamed_message
+                                    print_task = asyncio.create_task(print_streamed_message(llm_response, config.CYAN))
+                                    # Wait for the print task to complete
+                                    await print_task
+
                                     # Print interaction hint
                                     print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
                                 else:
@@ -398,7 +477,10 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
+                                    # Create a task for print_streamed_message
+                                    print_task = asyncio.create_task(print_streamed_message(llm_response, config.CYAN))
+                                    # Wait for the print task to complete
+                                    await print_task
                             else:
                                 formatted_response = str(content)
                                 llm_response = await chat_with_model(
@@ -406,8 +488,11 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                                     config=config,
                                     chat_models=chat_models
                                 )
-                                print_streamed_message(llm_response, config.CYAN)
-                            
+                                # Create a task for print_streamed_message
+                                print_task = asyncio.create_task(print_streamed_message(llm_response, config.CYAN))
+                                # Wait for the print task to complete
+                                await print_task
+
                         except json.JSONDecodeError:
                             # Handle raw response directly
                             llm_response = await chat_with_model(
@@ -415,68 +500,64 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                                 config=config,
                                 chat_models=chat_models
                             )
-                            print_streamed_message(llm_response, config.CYAN)
-                        return None
-                    else:
-                        llm_response = f"Error: {result.get('error', 'Unknown error')}"
-                elif selected_tool == "default":
-                    # Handle default tool case - generate a shell script for simple commands
-                    parameters = tool_selection.get("parameters", {})
-                    operation = parameters.get("operation", "")
-                    
-                    # For simple command requests, wrap in a shell script
-                    if operation == "process_command":
-                        # Format as a shell script
-                        llm_response = await chat_with_model(
-                            message=query,
-                            config=config,
-                            chat_models=chat_models,
-                            system_prompt=(
-                                "You are a shell script expert. Your task is to generate shell commands for the given request. "
-                                "Always wrap your commands in ```bash\n[command]\n``` markers. "
-                                "For simple queries like time, date, or weather, use the appropriate Unix commands. "
-                                "For example:\n"
-                                "- Time queries: date command with appropriate format\n"
-                                "- Weather queries: curl wttr.in with location\n"
-                                "- File operations: ls, cp, mv, etc.\n"
-                                "Never explain the commands, just provide them in the code block."
-                            )
-                        )
-                    else:
-                        # Default to standard LLM processing with shell command generation
-                        llm_response = await chat_with_model(
-                            message=query,
-                            config=config,
-                            chat_models=chat_models,
-                            system_prompt=(
-                                "You are a shell command generator. "
-                                "Always provide a shell command to answer the query, wrapped in "
-                                "```bash\n[command]\n``` markers. "
-                                "If in doubt, generate a command rather than a text response."
-                            )
-                        )
             else:
-                # Fallback if JSON extraction fails
-                llm_response = await chat_with_model(
-                    query, 
-                    config, 
-                    chat_models
-                )
+                llm_response = f"Error: {tool_selection.get('error', 'Unknown error')}"
+
+            if selected_tool == "default":
+                # Handle default tool case - generate a shell script for simple commands
+                parameters = tool_selection.get("parameters", {})
+                operation = parameters.get("operation", "")
+
+                # For simple command requests, wrap in a shell script
+                if operation == "process_command":
+                    # Format as a shell script
+                    llm_response = await chat_with_model(
+                        message=query,
+                        config=config,
+                        chat_models=chat_models,
+                        system_prompt=(
+                            "You are a shell script expert. Your task is to generate shell commands for the given request. "
+                            "Always wrap your commands in ```bash\n[command]\n``` markers. "
+                            "For simple queries like time, date, or weather, use the appropriate Unix commands. "
+                            "For example:\n"
+                            "- Time queries: date command with appropriate format\n"
+                            "- Weather queries: curl wttr.in with location\n"
+                            "- File operations: ls, cp, mv, etc.\n"
+                            "Never explain the commands, just provide them in the code block."
+                        )
+                    )
+                else:
+                    # Default to standard LLM processing with shell command generation
+                    llm_response = await chat_with_model(
+                        message=query,
+                        config=config,
+                        chat_models=chat_models,
+                        system_prompt=(
+                            "You are a shell command generator. "
+                            "Always provide a shell command to answer the query, wrapped in "
+                            "```bash\n[command]\n``` markers. "
+                            "If in doubt, generate a command rather than a text response."
+                        )
+                    )
         except (json.JSONDecodeError, KeyError, AttributeError) as e:
             print(
                 f"{config.YELLOW}Failed to process tool selection: {str(e)}"
                 f"{config.RESET}"
             )
             llm_response = await chat_with_model(query, config, chat_models)
-    except Exception as e:
-        print(
-            f"{config.YELLOW}Using standard processing due to error: {str(e)}"
-            f"{config.RESET}"
-        )
-        llm_response = await chat_with_model(query, config, chat_models)
+        except Exception as e:
+            print(
+                f"{config.YELLOW}Using standard processing due to error: {str(e)}"
+                f"{config.RESET}"
+            )
+            llm_response = await chat_with_model(query, config, chat_models)
 
+    # After all processing, handle safe_mode and autopilot_mode
     if config.safe_mode:
-        print_streamed_message(llm_response, config.CYAN)
+        # Create a task for print_streamed_message
+        print_task = asyncio.create_task(print_streamed_message(llm_response, config.CYAN))
+        # Wait for the print task to complete
+        await print_task
         scripts = extract_script_from_response(llm_response)
         if scripts:
             code_checker = CodeChecker()
@@ -484,10 +565,10 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 # Lint code and show results
                 lint_results = code_checker.lint_code(script, file_extension, is_autopilot=config.autopilot_mode)
                 code_checker.display_results(lint_results, script, file_extension)
-                
+
                 print(f"\nFound a {script_type} script:")
                 print(script)
-                
+
                 # Determine if there are critical errors that should block execution
                 critical_errors = [
                     err for err in lint_results.get('errors', [])
@@ -495,16 +576,16 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                         'syntax error', 'undefined variable', 'command not found'
                     ])
                 ]
-                
+
                 if critical_errors:
                     print(f"{config.RED}Critical errors found that may prevent successful execution:{config.RESET}")
                     for error in critical_errors:
                         print(f"{config.RED}❌ {error}{config.RESET}")
-                    
+
                     if not get_user_confirmation("Proceed despite critical errors?", config):
                         print("Script execution aborted due to critical errors.")
                         continue
-                
+
                 # Save and execute script if user confirms
                 full_filename = save_script(
                     query, script,
@@ -512,7 +593,7 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                     auto_save=False,
                     config=config
                 )
-                
+
                 if full_filename:
                     print(f"Script saved as {full_filename}")
                     if get_user_confirmation(f"Execute saved script {full_filename}?", config):
@@ -528,7 +609,10 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
             print("No executable script found in the LLM response.")
 
     elif config.autopilot_mode:
-        print_streamed_message(llm_response, config.CYAN)
+        # Create a task for print_streamed_message
+        print_task = asyncio.create_task(print_streamed_message(llm_response, config.CYAN))
+        # Wait for the print task to complete
+        await print_task
         scripts = extract_script_from_response(llm_response)
         if scripts:
             # In autopilot mode, execute each script directly without saving
@@ -536,26 +620,29 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 # Perform basic linting to catch critical errors
                 code_checker = CodeChecker()
                 lint_results = code_checker.lint_code(script, file_extension, is_autopilot=True)
-                
+
                 # Only check for syntax errors in autopilot mode
                 critical_errors = [
                     err for err in lint_results.get('errors', [])
                     if 'syntax error' in err.lower()
                 ]
-                
+
                 if critical_errors:
                     print(f"{config.RED}Syntax errors found in {script_type} script:{config.RESET}")
                     for error in critical_errors:
                         print(f"{config.RED}❌ {error}{config.RESET}")
                     continue
-                
+
                 # Execute the script directly without saving
                 await execute_script_directly(script, file_extension, config)
         else:
             print("No executable script found in the LLM response.")
 
     else:
-        print_streamed_message(llm_response, config.CYAN)
+        # Create a task for print_streamed_message
+        print_task = asyncio.create_task(print_streamed_message(llm_response, config.CYAN))
+        # Wait for the print task to complete
+        await print_task
         scripts = extract_script_from_response(llm_response)
         if scripts:
             code_checker = CodeChecker()
@@ -563,21 +650,22 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                 # Perform linting and show results
                 lint_results = code_checker.lint_code(script, file_extension, is_autopilot=config.autopilot_mode)
                 code_checker.display_results(lint_results, script, file_extension)
-                
+
                 if lint_results['errors'] and not config.autopilot_mode:
                     proceed = input(f"{config.YELLOW}Code contains errors. Would you like to proceed? (yes/no):{config.RESET} ").lower()
                     if proceed != 'yes':
                         print("Skipping this script due to errors.")
                         continue
-                
+
                 await user_decide_and_act(query, script, file_extension, config)
         else:
             print("No executable script found in the LLM response.")
 
+    return llm_response
+
+
 async def process_input_in_safe_mode(query, config, chat_models):
     llm_response = await chat_with_model(query, config, chat_models)
-    print_streamed_message(llm_response, config.CYAN)
-
     scripts = extract_script_from_response(llm_response)
     if scripts:
         for script, file_extension, _ in scripts:
@@ -607,7 +695,10 @@ async def process_input_in_autopilot_mode(query, config, chat_models):
     try:
         print(f"{config.CYAN}Sending command to LLM...{config.RESET}")
         llm_response = await chat_with_model(query, config, chat_models)
-        await print_streamed_message(llm_response, config.CYAN)
+        # Create a task for print_streamed_message
+        print_task = asyncio.create_task(print_streamed_message(llm_response, config.CYAN))
+        # Wait for the print task to complete
+        await print_task
     finally:
         stop_event.set()
         await loading_task
@@ -618,7 +709,7 @@ async def process_input_in_autopilot_mode(query, config, chat_models):
             return
         
         code_checker = CodeChecker()
-        for script, file_extension, script_type in scripts:
+                for script, file_extension, script_type in scripts:
             # Display code with syntax highlighting and linting
             lint_results = code_checker.lint_code(script, file_extension)
             code_checker.display_results(lint_results, script, file_extension)
@@ -1186,3 +1277,4 @@ Provide a solution command or script.
     finally:
         if 'scriptReviewer' in locals():
             scriptReviewer.end_conversation()
+
