@@ -8,6 +8,7 @@ from . import configuration
 from .configuration import initialize_config
 from .small_context.server import SmallContextServer
 from .small_context.integration import LLMIntegration
+from  .utils import cleanup_resources
 
 from cli_FSD.utils import (
     print_instructions_once_per_day,
@@ -438,6 +439,10 @@ async def async_main():
             # Handle script cleanup
             await handle_script_cleanup(config)
             logging.info("Script cleanup completed")
+            
+            # Handle general resource cleanup
+            await cleanup_resources(config)
+            logging.info("Resource cleanup completed")
             
             # Only print final goodbye message here
             logging.info("cli-FSD shutdown complete")

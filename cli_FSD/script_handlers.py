@@ -41,11 +41,14 @@ async def handle_interactive_mode(config, chat_models=None):
     
     while True:
         try:
-            # Get user input
-            user_input = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: input(config.PROMPT).strip()
-            )
-            sys.stdout.flush()
+            # Create input coroutine with protection
+            input_coro = asyncio.get_event_loop().run_in_executor(None, input, config.PROMPT)
+            try:
+                user_input = await asyncio.shield(input_coro)
+                user_input = user_input.strip()
+                sys.stdout.flush()
+            except asyncio.CancelledError:
+                continue
             
             if user_input.lower() in ['exit', 'quit', 'q']:
                 print("\nExiting interactive mode...")
@@ -58,39 +61,46 @@ async def handle_interactive_mode(config, chat_models=None):
             # Add message to buffer
             await message_buffer.put(user_input)
             
-            # Process message from buffer
+            # Process message from buffer with timeout protection
             while not message_buffer.empty():
-                current_message = await message_buffer.get()
                 try:
-                    llm_response = await process_input_based_on_mode(
-                        current_message, config, chat_models
-                    )
-                    
-                    if llm_response:
-                        await print_streamed_message(llm_response, config.CYAN)
-                        sys.stdout.flush()
+                    # Get message with timeout
+                    current_message = await asyncio.wait_for(message_buffer.get(), timeout=0.1)
+                    try:
+                        llm_response = await process_input_based_on_mode(
+                            current_message, config, chat_models
+                        )
                         
-                        # Check for and handle any scripts
-                        scripts = extract_script_from_response(llm_response)
-                        if scripts:
-                            for script, file_extension, script_type in scripts:
-                                print(f"\nFound a {script_type} script:")
-                                print(script)
-                                sys.stdout.flush()
-                                
-                                try:
-                                    # Execute immediately based on mode
-                                    if config.autopilot_mode:
-                                        await execute_script_directly(script, file_extension, config)
-                                    else:
-                                        await user_decide_and_act(current_message, script, file_extension, config)
-                                except Exception as e:
-                                    print(f"{config.RED}Error executing script: {e}{config.RESET}")
+                        if llm_response:
+                            await print_streamed_message(llm_response, config.CYAN)
+                            sys.stdout.flush()
+                            
+                            # Check for and handle any scripts
+                            scripts = extract_script_from_response(llm_response)
+                            if scripts:
+                                for script, file_extension, script_type in scripts:
+                                    print(f"\nFound a {script_type} script:")
+                                    print(script)
                                     sys.stdout.flush()
-                                    continue
-                        
+                                    
+                                    try:
+                                        # Execute immediately based on mode
+                                        if config.autopilot_mode:
+                                            await execute_script_directly(script, file_extension, config)
+                                        else:
+                                            await user_decide_and_act(current_message, script, file_extension, config)
+                                    except Exception as e:
+                                        print(f"{config.RED}Error executing script: {e}{config.RESET}")
+                                        sys.stdout.flush()
+                                        continue
+                    except Exception as e:
+                        print(f"{config.RED}Error processing message: {e}{config.RESET}")
+                        sys.stdout.flush()
+                except asyncio.TimeoutError:
+                    # Timeout is expected when queue is empty
+                    break
                 except Exception as e:
-                    print(f"{config.RED}Error processing message: {e}{config.RESET}")
+                    print(f"{config.RED}Error getting message from buffer: {e}{config.RESET}")
                     sys.stdout.flush()
                 finally:
                     message_buffer.task_done()

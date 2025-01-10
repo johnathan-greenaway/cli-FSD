@@ -5,6 +5,7 @@ from pathlib import Path
 
 class Config:
     def __init__(self):
+        self.COMMAND_TIMEOUT = 30  # Default 30 second timeout for commands
         self.CYAN = "\033[96m"
         self.YELLOW = "\033[93m"
         self.BOLD = "\033[1m"

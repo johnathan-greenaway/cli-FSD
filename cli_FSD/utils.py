@@ -270,6 +270,26 @@ async def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str
     except Exception as e:
         return f"Error using MCP tool: {str(e)}"
     
+async def cleanup_resources(config):
+    """Clean up system resources and temporary files."""
+    try:
+        # Clean up assembled scripts
+        await cleanup_previous_assembled_scripts()
+        
+        # Clean up any temporary files in the config directory
+        if hasattr(config, 'config_dir') and os.path.exists(config.config_dir):
+            temp_files = glob.glob(os.path.join(config.config_dir, "*.tmp"))
+            for temp_file in temp_files:
+                try:
+                    os.remove(temp_file)
+                except OSError as e:
+                    print(f"Error removing temporary file {temp_file}: {e}")
+                    
+        # Log cleanup completion
+        print("Resource cleanup completed")
+    except Exception as e:
+        print(f"Error during resource cleanup: {e}")
+
 async def save_script(query, script, file_extension="sh", auto_save=False, config=None):
     """Save a script to file asynchronously."""
     scripts_dir = "scripts"
