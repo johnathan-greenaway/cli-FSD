@@ -131,10 +131,11 @@ async def display_greeting():
     sys.stdout.flush()
 
 
-def cleanup_previous_assembled_scripts():
+async def cleanup_previous_assembled_scripts():
+    """Clean up previously assembled scripts asynchronously."""
     for filename in glob.glob(".assembled_script_*.sh"):
         try:
-            os.remove(filename)
+            await asyncio.to_thread(os.remove, filename)
             print(f"Deleted previous assembled script: {filename}")
         except OSError as e:
             print(f"Error deleting file {filename}: {e}")
@@ -269,9 +270,10 @@ async def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str
     except Exception as e:
         return f"Error using MCP tool: {str(e)}"
     
-def save_script(query, script, file_extension="sh", auto_save=False, config=None):
+async def save_script(query, script, file_extension="sh", auto_save=False, config=None):
+    """Save a script to file asynchronously."""
     scripts_dir = "scripts"
-    os.makedirs(scripts_dir, exist_ok=True)
+    await asyncio.to_thread(os.makedirs, scripts_dir, exist_ok=True)
 
     # Create a safe filename by replacing non-alphanumeric characters with underscores
     filename = re.sub(r'[^a-zA-Z0-9_-]', '_', query.lower()) + f".{file_extension}"
@@ -280,8 +282,10 @@ def save_script(query, script, file_extension="sh", auto_save=False, config=None
     if auto_save or (config and config.autopilot_mode):
         # Automatically save the script without prompting
         try:
-            with open(filepath, 'w') as f:
-                f.write(script + "\n")
+            async with asyncio.Lock():  # Ensure thread-safe file operations
+                await asyncio.to_thread(
+                    lambda: open(filepath, 'w').write(script + "\n")
+                )
             print(f"Script saved automatically to {filepath}")
             return filepath
         except Exception as e:
@@ -295,8 +299,10 @@ def save_script(query, script, file_extension="sh", auto_save=False, config=None
         choice = input("Would you like to save this script? (yes/no): ").strip().lower()
         if choice in ['yes', 'y']:
             try:
-                with open(filepath, 'w') as f:
-                    f.write(script + "\n")
+                async with asyncio.Lock():  # Ensure thread-safe file operations
+                    await asyncio.to_thread(
+                        lambda: open(filepath, 'w').write(script + "\n")
+                    )
                 print(f"Script saved to {filepath}")
                 return filepath
             except Exception as e:

@@ -28,19 +28,23 @@ _content_cache = {
 
 async def handle_interactive_mode(config, chat_models=None):
     """Handle interactive mode where user can input multiple commands."""
+    message_buffer = asyncio.Queue()  # Create a message buffer
+    
     if chat_models is None:
-        from .chat_models import initialize_chat_models
-        chat_models = initialize_chat_models(config)
+        from .chat_models import initialize_chat_models_async
+        chat_models = await initialize_chat_models_async(config)
         
     print("\nSmall context server initialized successfully")
     sys.stdout.flush()
     
-    config.PROMPT = f"{config.YELLOW}@:{config.RESET} "  # Set consistent prompt
+    config.PROMPT = f"{config.YELLOW}@:{config.RESET} "
     
     while True:
         try:
-            # Get user input with immediate flush
-            user_input = input(config.PROMPT).strip()
+            # Get user input
+            user_input = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: input(config.PROMPT).strip()
+            )
             sys.stdout.flush()
             
             if user_input.lower() in ['exit', 'quit', 'q']:
@@ -51,36 +55,47 @@ async def handle_interactive_mode(config, chat_models=None):
             if not user_input:
                 continue
             
-            # Process the input
-            llm_response = await process_input_based_on_mode(user_input, config, chat_models)
+            # Add message to buffer
+            await message_buffer.put(user_input)
             
-            # Handle the response immediately if we got one
-            if llm_response:
-                # Print response
-                await print_streamed_message(llm_response, config.CYAN)
-                sys.stdout.flush()
-                
-                # Check for and handle any scripts
-                scripts = extract_script_from_response(llm_response)
-                if scripts:
-                    for script, file_extension, script_type in scripts:
-                        print(f"\nFound a {script_type} script:")
-                        print(script)
+            # Process message from buffer
+            while not message_buffer.empty():
+                current_message = await message_buffer.get()
+                try:
+                    llm_response = await process_input_based_on_mode(
+                        current_message, config, chat_models
+                    )
+                    
+                    if llm_response:
+                        await print_streamed_message(llm_response, config.CYAN)
                         sys.stdout.flush()
                         
-                        try:
-                            # Execute immediately based on mode
-                            if config.autopilot_mode:
-                                await execute_script_directly(script, file_extension, config)
-                            else:
-                                await user_decide_and_act(user_input, script, file_extension, config)
-                        except Exception as e:
-                            print(f"{config.RED}Error executing script: {e}{config.RESET}")
-                            sys.stdout.flush()
-                            continue
+                        # Check for and handle any scripts
+                        scripts = extract_script_from_response(llm_response)
+                        if scripts:
+                            for script, file_extension, script_type in scripts:
+                                print(f"\nFound a {script_type} script:")
+                                print(script)
+                                sys.stdout.flush()
+                                
+                                try:
+                                    # Execute immediately based on mode
+                                    if config.autopilot_mode:
+                                        await execute_script_directly(script, file_extension, config)
+                                    else:
+                                        await user_decide_and_act(current_message, script, file_extension, config)
+                                except Exception as e:
+                                    print(f"{config.RED}Error executing script: {e}{config.RESET}")
+                                    sys.stdout.flush()
+                                    continue
+                        
+                except Exception as e:
+                    print(f"{config.RED}Error processing message: {e}{config.RESET}")
+                    sys.stdout.flush()
+                finally:
+                    message_buffer.task_done()
             
-            # Give other tasks a chance to run
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.1)  # Prevent CPU hogging
                 
         except KeyboardInterrupt:
             print("\nExiting interactive mode...")
@@ -186,46 +201,72 @@ async def get_llm_response(prompt, config, chat_models):
         return None
 
 async def process_input_based_on_mode(query, config, chat_models, context=None):
-    """Process input with context management and tool selection."""
+    """Process input with improved error handling."""
     global _content_cache
 
-    # Validate query
-    if not _validate_query(query):
+    if not query or not query.strip():
         print(f"{config.YELLOW}Please provide a command or question.{config.RESET}")
         return None
-
+        
+    try:
+        # For simple time/date/weather queries, bypass context agent
+        if any(word in query.lower() for word in ['time', 'date', 'weather']):
+            try:
+                llm_response = await chat_with_model(
+                    query,
+                    config,
+                    chat_models,
+                    system_prompt="You are a shell command generator. For time/date queries, use the 'date' command with appropriate format. For weather queries, use 'curl wttr.in'. Respond only with the command in a bash code block."
+                )
+                if llm_response:
+                    scripts = extract_script_from_response(llm_response)
+                    if scripts:
+                        for script, file_extension, script_type in scripts:
+                            await execute_script_directly(script, file_extension, config)
+                    return llm_response
+            except Exception as e:
+                print(f"{config.RED}Error processing simple command: {e}{config.RESET}")
+                return None
+    except Exception as e:
+        print(f"{config.RED}Error in simple command check: {e}{config.RESET}")
+        # Continue with normal processing
+        
     # Print current configuration for debugging
     if config.session_model:
         print(f"{config.CYAN}Using model: {config.session_model}{config.RESET}")
 
-    # Build system prompt with context and cached content
-    system_prompt = []
+    try:
+        # Build system prompt with context and cached content
+        system_prompt = []
 
-    # Add context if available
-    if context:
+        # Add context if available
+        if context:
+            system_prompt.append(
+                "Previous conversation context:\n"
+                f"{context}\n\n"
+                "Consider this context while processing the following request."
+            )
+
+        # Add cached content if available
+        if _content_cache['formatted_content']:
+            system_prompt.append(
+                "Previously cached content:\n"
+                f"{_content_cache['formatted_content']}\n\n"
+                "Consider this content if relevant to the request."
+            )
+
+        # Add task instruction
         system_prompt.append(
-            "Previous conversation context:\n"
-            f"{context}\n\n"
-            "Consider this context while processing the following request."
+            f"Request: {query}\n\n"
+            "If generating code, wrap it in appropriate markdown code blocks:\n"
+            "```language\ncode\n```"
         )
 
-    # Add cached content if available
-    if _content_cache['formatted_content']:
-        system_prompt.append(
-            "Previously cached content:\n"
-            f"{_content_cache['formatted_content']}\n\n"
-            "Consider this content if relevant to the request."
-        )
-
-    # Add task instruction
-    system_prompt.append(
-        f"Request: {query}\n\n"
-        "If generating code, wrap it in appropriate markdown code blocks:\n"
-        "```language\ncode\n```"
-    )
-
-    # Combine prompts
-    final_prompt = "\n\n".join(system_prompt)
+        # Combine prompts
+        final_prompt = "\n\n".join(system_prompt)
+    except Exception as e:
+        print(f"{config.RED}Error building system prompt: {e}{config.RESET}")
+        final_prompt = f"Request: {query}"  # Fallback to simple prompt
 
     # Check if this is a request to view specific cached content
     if _content_cache['raw_content'] and any(word in query.lower() for word in ['show', 'view', 'read', 'tell', 'about']):
@@ -268,17 +309,28 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
     try:
         # For simple time/date/weather queries, bypass context agent and return immediately
         if any(word in query.lower() for word in ['time', 'date', 'weather']):
-            llm_response = await chat_with_model(
-                query,
-                config,
-                chat_models,
-                system_prompt="You are a shell command generator. For time/date queries, use the 'date' command with appropriate format. For weather queries, use 'curl wttr.in'. Respond only with the command in a bash code block."
-            )
-            scripts = extract_script_from_response(llm_response)
-            if scripts:
-                for script, file_extension, script_type in scripts:
-                    await execute_script_directly(script, file_extension, config)
-            return llm_response
+            try:
+                llm_response = await chat_with_model(
+                    query,
+                    config,
+                    chat_models,
+                    system_prompt="You are a shell command generator. For time/date queries, use the 'date' command with appropriate format. For weather queries, use 'curl wttr.in'. Respond only with the command in a bash code block."
+                )
+                if llm_response:
+                    scripts = extract_script_from_response(llm_response)
+                    if scripts:
+                        for script, file_extension, script_type in scripts:
+                            try:
+                                await execute_script_directly(script, file_extension, config)
+                            except Exception as e:
+                                print(f"{config.RED}Error executing script: {e}{config.RESET}")
+                    return llm_response
+                else:
+                    print(f"{config.YELLOW}No response received for simple command{config.RESET}")
+                    return None
+            except Exception as e:
+                print(f"{config.RED}Error processing simple command: {e}{config.RESET}")
+                return None
 
         # For other queries, use context agent with timeout
         try:
@@ -591,7 +643,7 @@ async def process_input_based_on_mode(query, config, chat_models, context=None):
                         continue
 
                 # Save and execute script if user confirms
-                full_filename = save_script(
+                full_filename = await save_script(
                     query, script,
                     file_extension=file_extension,
                     auto_save=False,
@@ -679,7 +731,7 @@ async def process_input_in_safe_mode(query, config, chat_models):
             print(script)
             
             # Pass the correct parameters: query, script, file_extension, auto_save=False
-            full_filename = save_script(query, script, file_extension=file_extension, auto_save=False, config=config)
+            full_filename = await save_script(query, script, file_extension=file_extension, auto_save=False, config=config)
             if full_filename:
                 print(f"Script extracted and saved as {full_filename}.")
                 
@@ -822,12 +874,18 @@ async def assemble_final_script(scripts, api_key):
 # Track assembled scripts for cleanup
 _assembled_scripts = set()
 
-def handle_script_cleanup(config):
-    """Handle cleanup of assembled scripts with option to save."""
+async def handle_script_cleanup(config):
+    """Handle cleanup of assembled scripts and async resources with option to save."""
     global _assembled_scripts
     
     if not _assembled_scripts:
         return
+        
+    # Ensure any pending async operations are completed
+    try:
+        await asyncio.sleep(0)  # Allow any pending async operations to complete
+    except Exception as e:
+        print(f"Warning: Error during async cleanup: {e}")
         
     print(f"\n{config.CYAN}Found {len(_assembled_scripts)} unnamed script(s) from this session.{config.RESET}")
     save_all = input("Would you like to review and save any scripts before cleanup? (yes/no): ").strip().lower()
@@ -867,9 +925,16 @@ def handle_script_cleanup(config):
             except OSError as e:
                 print(f"{config.RED}Warning: Failed to clean up script {script}: {e}{config.RESET}")
 
-def cleanup_assembled_scripts():
-    """Clean up any remaining assembled scripts without prompting."""
+async def cleanup_assembled_scripts():
+    """Clean up any remaining assembled scripts and async resources without prompting."""
     global _assembled_scripts
+    
+    # Ensure any pending async operations are completed
+    try:
+        await asyncio.sleep(0)  # Allow any pending async operations to complete
+    except Exception as e:
+        print(f"Warning: Error during async cleanup: {e}")
+    
     for script in _assembled_scripts.copy():
         try:
             if os.path.exists(script):
@@ -1008,15 +1073,10 @@ def clean_up_llm_response(llm_response):
     return llm_response.strip()
 
 async def execute_script(filename, file_extension, config):
-    """Execute a saved script with proper error handling and output capture."""
+    """Execute a saved script with async handling and proper error capture."""
     try:
         if file_extension == "py":
-            result = subprocess.run(
-                ["python", filename],
-                capture_output=True,
-                text=True,
-                check=False
-            )
+            cmd = f"python {filename}"
         elif file_extension in ["sh", "bash", ""]:
             # Ensure script is executable
             try:
@@ -1024,140 +1084,219 @@ async def execute_script(filename, file_extension, config):
             except OSError as e:
                 print(f"{config.RED}Failed to set executable permissions: {e}{config.RESET}")
                 return
-            
-            result = subprocess.run(
-                ["bash", filename],
-                capture_output=True,
-                text=True,
-                check=False
-            )
+            cmd = f"bash {filename}"
         else:
             print(f"{config.RED}Running scripts with .{file_extension} extension is not supported.{config.RESET}")
             return
+
+        # Execute script using create_subprocess_shell
+        process = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
         
         # Always show output
-        if result.stdout:
-            print(result.stdout)
-        if result.stderr:
-            print(f"{config.RED}{result.stderr}{config.RESET}")
+        if stdout:
+            print(stdout.decode())
+        if stderr:
+            print(f"{config.RED}{stderr.decode()}{config.RESET}")
             
         # Handle return code
-        if result.returncode != 0:
-            print(f"{config.RED}Script execution failed with return code {result.returncode}{config.RESET}")
+        if process.returncode != 0:
+            print(f"{config.RED}Script execution failed with return code {process.returncode}{config.RESET}")
             
             # Try to get resolution for the error
-            if resolution := await consult_llm_for_error_resolution(result.stderr or result.stdout, config):
+            error_output = stderr.decode() or stdout.decode()
+            if resolution := await consult_llm_for_error_resolution(error_output, config):
                 if get_user_confirmation("Would you like to apply the suggested fix?", config):
                     await execute_resolution_script(resolution, config)
+            return False
         else:
             print(f"{config.GREEN}Script executed successfully.{config.RESET}")
+            return True
             
     except Exception as e:
         print(f"{config.RED}An error occurred while executing the script: {e}{config.RESET}")
+        return False
 
 async def execute_script_directly(script, file_extension, config):
-    """Execute a script directly with proper cleanup and error handling."""
+    """Execute a script with improved async handling.
+    
+    Args:
+        script (str): The command to execute
+        file_extension (str): File extension for script type detection
+        config: Configuration object containing settings
+        
+    Returns:
+        bool: True if execution was successful, False otherwise
+    """
     temp_file_path = None
     try:
+        # Set up environment with system PATH
+        env = os.environ.copy()
+        
         # For simple commands like 'date' or 'curl wttr.in', execute directly
         if script.strip().startswith(('date', 'curl wttr.in')):
             try:
-                # Execute simple command directly
+                # Create subprocess with timeout
                 process = await asyncio.create_subprocess_shell(
                     script,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                    shell=True
                 )
-                stdout, stderr = await process.communicate()
                 
-                if stdout:
-                    print(stdout.decode())
-                if stderr:
-                    print(f"{config.RED}{stderr.decode()}{config.RESET}")
+                try:
+                    # Wait for process with timeout
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(),
+                        timeout=config.COMMAND_TIMEOUT if hasattr(config, 'COMMAND_TIMEOUT') else 30
+                    )
                     
-                return process.returncode == 0
+                    # Handle output
+                    if stdout:
+                        output = stdout.decode().strip()
+                        print(output)
+                        
+                    # Handle errors
+                    if stderr:
+                        error = stderr.decode().strip()
+                        print(f"{config.RED}Error: {error}{config.RESET}")
+                        
+                    success = process.returncode == 0
+                    if not success:
+                        print(f"{config.RED}Command failed with exit code: {process.returncode}{config.RESET}")
+                        
+                    return success
+                    
+                except asyncio.TimeoutError:
+                    print(f"{config.RED}Command timed out after {config.COMMAND_TIMEOUT if hasattr(config, 'COMMAND_TIMEOUT') else 30} seconds{config.RESET}")
+                    process.kill()
+                    return False
+                    
             except Exception as e:
-                print(f"{config.RED}Error executing command: {e}{config.RESET}")
+                print(f"{config.RED}Failed to execute command: {str(e)}{config.RESET}")
                 return False
+            finally:
+                # Ensure process is cleaned up
+                if 'process' in locals() and process is not None:
+                    try:
+                        process.kill()
+                    except:
+                        pass
 
-        # For other scripts, use temporary files
-        if file_extension in ["sh", "bash", ""]:
-            if not script.startswith("#!"):
-                script = "#!/bin/bash\n" + script
-
+        # For Python scripts
         if file_extension == "py":
-            # Create a temporary file for Python scripts
+            # Create temporary Python script
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
                 temp_file.write(script)
                 temp_file_path = temp_file.name
-            
+
             try:
-                # Execute Python script asynchronously
-                process = await asyncio.create_subprocess_exec(
-                    "python",
-                    temp_file_path,
+                # Execute Python script using create_subprocess_shell with timeout
+                cmd = f"python {temp_file_path}"
+                process = await asyncio.create_subprocess_shell(
+                    cmd,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env
                 )
-                stdout, stderr = await process.communicate()
                 
-                if stdout:
-                    print(stdout.decode())
-                if stderr:
-                    print(f"{config.RED}{stderr.decode()}{config.RESET}")
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(),
+                        timeout=config.COMMAND_TIMEOUT if hasattr(config, 'COMMAND_TIMEOUT') else 30
+                    )
                     
-                return process.returncode == 0
+                    if stdout:
+                        print(stdout.decode())
+                    if stderr:
+                        print(f"{config.RED}{stderr.decode()}{config.RESET}")
+                    
+                    return process.returncode == 0
+                    
+                except asyncio.TimeoutError:
+                    print(f"{config.RED}Python script execution timed out{config.RESET}")
+                    process.kill()
+                    return False
+                    
             except Exception as e:
                 print(f"{config.RED}Error executing Python script: {e}{config.RESET}")
                 return False
-                
-        elif file_extension in ["sh", "bash", ""]:  # Accept empty extension as shell script
+
+        # For shell scripts
+        elif file_extension in ["sh", "bash", ""]:
+            if not script.startswith("#!"):
+                script = "#!/bin/bash\n" + script
+
             # Create temporary shell script
             with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as temp_file:
                 temp_file.write(script)
                 temp_file_path = temp_file.name
-                
+
             try:
                 # Set executable permissions
                 os.chmod(temp_file_path, 0o755)
-                
+
                 if not config.autopilot_mode and not get_user_confirmation(f"Execute script:\n{script}"):
                     print("Script execution aborted by the user.")
                     return False
-                
-                # Execute the shell script asynchronously
-                process = await asyncio.create_subprocess_exec(
-                    "bash",
-                    temp_file_path,
+
+                # Execute shell script using create_subprocess_shell with timeout
+                cmd = f"bash {temp_file_path}"
+                process = await asyncio.create_subprocess_shell(
+                    cmd,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env
                 )
-                stdout, stderr = await process.communicate()
                 
-                if stdout:
-                    print(stdout.decode())
-                if stderr:
-                    print(f"{config.RED}{stderr.decode()}{config.RESET}")
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        process.communicate(),
+                        timeout=config.COMMAND_TIMEOUT if hasattr(config, 'COMMAND_TIMEOUT') else 30
+                    )
                     
-                return process.returncode == 0
-                
+                    if stdout:
+                        print(stdout.decode())
+                    if stderr:
+                        print(f"{config.RED}{stderr.decode()}{config.RESET}")
+                    
+                    success = process.returncode == 0
+                    if not success:
+                        error_output = stderr.decode() or stdout.decode()
+                        if resolution := await consult_llm_for_error_resolution(error_output, config):
+                            if get_user_confirmation("Would you like to apply the suggested fix?", config):
+                                return await execute_resolution_script(resolution, config)
+                    
+                    return success
+                    
+                except asyncio.TimeoutError:
+                    print(f"{config.RED}Shell script execution timed out{config.RESET}")
+                    process.kill()
+                    return False
+                    
             except Exception as e:
                 print(f"{config.RED}Error executing shell script: {e}{config.RESET}")
                 return False
+
         else:
             print(f"{config.RED}Running scripts with .{file_extension} extension is not supported.{config.RESET}")
             return False
-            
+
     except Exception as e:
         print(f"{config.RED}Error preparing script for execution: {e}{config.RESET}")
         return False
-        
+
     finally:
         # Clean up temporary file
         if temp_file_path and os.path.exists(temp_file_path):
             try:
-                os.unlink(temp_file_path)
-            except OSError as e:
+                await asyncio.to_thread(os.unlink, temp_file_path)
+            except Exception as e:
                 print(f"Warning: Failed to clean up temporary file {temp_file_path}: {e}")
 
 async def user_decide_and_act(query, script, file_extension, config):
@@ -1168,7 +1307,7 @@ async def user_decide_and_act(query, script, file_extension, config):
     else:
         # Interactive mode
         auto_save = False  # Default to manual save in interactive mode
-        full_filename = save_script(query, script, file_extension=file_extension, auto_save=auto_save, config=config)
+        full_filename = await save_script(query, script, file_extension=file_extension, auto_save=auto_save, config=config)
         
         if full_filename:
             print(f"Script saved to {full_filename}.")
@@ -1186,14 +1325,31 @@ async def user_decide_and_act(query, script, file_extension, config):
                 print("Script execution aborted by the user.")
 
 async def execute_resolution_script(resolution, config):
+    """Execute a resolution script with async handling."""
     print(f"{config.CYAN}Executing resolution:{config.RESET}\n{resolution}")
     try:
-        subprocess.run(resolution, shell=True, check=True)
-        print(f"{config.GREEN}Resolution executed successfully.{config.RESET}")
-    except subprocess.CalledProcessError as e:
-        print(f"{config.RED}Resolution execution failed with error: {e}{config.RESET}")
+        process = await asyncio.create_subprocess_shell(
+            resolution,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        
+        if stdout:
+            print(stdout.decode())
+        if stderr:
+            print(f"{config.RED}{stderr.decode()}{config.RESET}")
+            
+        if process.returncode == 0:
+            print(f"{config.GREEN}Resolution executed successfully.{config.RESET}")
+            return True
+        else:
+            print(f"{config.RED}Resolution execution failed with return code {process.returncode}{config.RESET}")
+            return False
+            
     except Exception as e:
-        print(f"An error occurred while executing the resolution: {e}")
+        print(f"{config.RED}An error occurred while executing the resolution: {e}{config.RESET}")
+        return False
 
 # Initialize system info cache
 _system_info_cache = None
@@ -1283,4 +1439,3 @@ Provide a solution command or script.
     finally:
         if 'scriptReviewer' in locals():
             scriptReviewer.end_conversation()
-

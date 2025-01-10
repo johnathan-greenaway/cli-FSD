@@ -14,7 +14,7 @@ from cli_FSD.utils import (
     display_greeting,
     cleanup_previous_assembled_scripts
 )
-from cli_FSD.chat_models import initialize_chat_models
+from cli_FSD.chat_models import initialize_chat_models, initialize_chat_models_async
 from cli_FSD.command_handlers import handle_command_mode
 from cli_FSD.script_handlers import process_input_based_on_mode
 from .script_handlers import handle_interactive_mode, process_input_based_on_mode, handle_script_cleanup
@@ -107,9 +107,9 @@ async def async_main():
 
         args = parse_arguments()
         config = initialize_config(args)
-        chat_models = initialize_chat_models(config)
+        chat_models = await initialize_chat_models_async(config)
 
-        handle_script_cleanup(config)
+        await handle_script_cleanup(config)
         
         # Initialize services
         try:
@@ -134,7 +134,7 @@ async def async_main():
             return 0
 
         # If no query is provided, start the interactive loop
-        cleanup_previous_assembled_scripts()
+        await cleanup_previous_assembled_scripts()
         print_instructions_once_per_day()
         await display_greeting()
 
@@ -223,7 +223,7 @@ async def async_main():
                             # Save preferences if flags were changed
                             if flags_changed:
                                 config.save_preferences()
-                                chat_models = initialize_chat_models(config)
+                                chat_models = await initialize_chat_models_async(config)
                                 if config.session_model:
                                     print(f"Using model: {config.session_model}")
                                 else:
@@ -303,7 +303,7 @@ async def async_main():
                             # Save preferences if flags were changed
                             if flags_changed:
                                 config.save_preferences()
-                                chat_models = initialize_chat_models(config)
+                                chat_models = await initialize_chat_models_async(config)
                                 if config.session_model:
                                     print(f"Using model: {config.session_model}")
                                 else:
@@ -407,7 +407,7 @@ async def async_main():
                 logging.info("cli-FSD exited by user.")
                 
                 # Handle cleanup of assembled scripts
-                handle_script_cleanup(config)
+                await handle_script_cleanup(config)
                 
                 print("Goodbye!")
                 break
@@ -424,11 +424,20 @@ async def async_main():
     finally:
         # Cleanup
         try:
+            # Clean up chat models
+            if 'chat_models' in locals() and chat_models:
+                if hasattr(chat_models.get('model'), 'close'):
+                    await chat_models['model'].close()
+                    logging.info("Chat models cleaned up")
+
+            # Clean up small context server
             if 'small_context_server' in locals():
                 await small_context_server.stop()
+                logging.info("Small context server stopped")
             
             # Handle script cleanup
-            handle_script_cleanup(config)
+            await handle_script_cleanup(config)
+            logging.info("Script cleanup completed")
             
             # Only print final goodbye message here
             logging.info("cli-FSD shutdown complete")

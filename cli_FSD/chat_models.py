@@ -1,53 +1,80 @@
 import os
 import json
+import asyncio
 import aiohttp
 from ollama import Client as OllamaClient
 from groq import Groq as GroqClient
 from .utils import get_system_info, print_immediate
 import sys
 
-def initialize_chat_models(config):
+async def initialize_chat_models_async(config):
+    """Initialize chat models asynchronously."""
     chat_models = {}
-    # Initialize based on session model preference
+    
     if config.session_model == 'ollama':
-        chat_models['model'] = initialize_ollama_client()
+        chat_models['model'] = await initialize_ollama_client_async()
     elif config.session_model == 'groq':
-        chat_models['model'] = initialize_groq_client()
+        chat_models['model'] = await initialize_groq_client_async()
     # Claude doesn't need initialization, handled in chat_with_claude
     
     return chat_models
 
-def initialize_ollama_client():
+def initialize_chat_models(config):
+    """Synchronous wrapper for async initialization."""
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(initialize_chat_models_async(config))
+
+async def initialize_ollama_client_async():
+    """Initialize Ollama client asynchronously."""
     host = 'http://localhost:11434'
     try:
         client = OllamaClient(host=host)
-        # Get running models - using sync request for initialization only
-        import requests
-        response = requests.get(f"{host}/api/ps")
-        if response.status_code == 200:
-            models = response.json().get("models", [])
-            if models:
-                running_model = models[0]["name"]
-                print(f"Connected to Ollama at {host}. Using running model: {running_model}")
-                # Store the running model on the client object
-                client.running_model = running_model
+        # Get running models using aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{host}/api/ps") as response:
+                if response.status == 200:
+                    data = await response.json()
+                    models = data.get("models", [])
+                    if models:
+                        running_model = models[0]["name"]
+                        print(f"Connected to Ollama at {host}. Using running model: {running_model}")
+                        # Store the running model on the client object
+                        client.running_model = running_model
+                        return client
+                    else:
+                        print(f"Connected to Ollama at {host}, but no running models found.")
+                else:
+                    print(f"Connected to Ollama at {host}, but couldn't get running models.")
                 return client
-            else:
-                print(f"Connected to Ollama at {host}, but no running models found.")
-        else:
-            print(f"Connected to Ollama at {host}, but couldn't get running models.")
-        return client
     except Exception as e:
         print(f"Failed to connect to Ollama at {host}: {str(e)}")
     return None
 
-def initialize_groq_client():
+async def initialize_groq_client_async():
+    """Initialize Groq client asynchronously."""
     groq_api_key = os.getenv("GROQ_API_KEY")
     if groq_api_key:
         try:
             groq_client = GroqClient(api_key=groq_api_key)
-            print("Groq client initialized successfully.")
-            return groq_client
+            # Test connection asynchronously
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.groq.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {groq_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "messages": [{"role": "system", "content": "Test connection"}],
+                        "model": "mixtral-8x7b-32768",
+                        "max_tokens": 1
+                    }
+                ) as response:
+                    if response.status == 200:
+                        print("Groq client initialized successfully.")
+                        return groq_client
+                    else:
+                        print(f"Failed to initialize Groq client: {await response.text()}")
         except Exception as e:
             print(f"Failed to initialize Groq client: {e}")
     else:
