@@ -35,6 +35,8 @@ async def handle_interactive_mode(config, chat_models=None):
     print("\nSmall context server initialized successfully")
     sys.stdout.flush()
     
+    config.PROMPT = f"{config.YELLOW}@:{config.RESET} "  # Set consistent prompt
+    
     while True:
         try:
             # Get user input with immediate flush
@@ -42,63 +44,52 @@ async def handle_interactive_mode(config, chat_models=None):
             sys.stdout.flush()
             
             if user_input.lower() in ['exit', 'quit', 'q']:
+                print("\nExiting interactive mode...")
+                sys.stdout.flush()
                 return
                 
             if not user_input:
                 continue
-                
-            print(f"Content: {user_input}")
-            sys.stdout.flush()
             
-            try:
-                # Process the input and get LLM response
-                llm_response = await process_input_based_on_mode(user_input, config, chat_models)
-                
-                # Handle the response if we got one
-                if llm_response:
-                    try:
-                        # Use print_streamed_message for response
-                        await print_streamed_message(llm_response, config.CYAN)
-                        sys.stdout.flush()
-                        
-                        # Extract and handle any scripts
-                        scripts = extract_script_from_response(llm_response)
-                        if scripts:
-                            for script, file_extension, script_type in scripts:
-                                print(f"\nFound a {script_type} script:")
-                                print(script)
-                                sys.stdout.flush()
-                                
-                                try:
-                                    if config.autopilot_mode:
-                                        await execute_script_directly(script, file_extension, config)
-                                    else:
-                                        await user_decide_and_act(user_input, script, file_extension, config)
-                                except Exception as e:
-                                    print(f"{config.RED}Error executing script: {e}{config.RESET}")
-                                    sys.stdout.flush()
-                                    continue
-                        
-                    except Exception as e:
-                        print(f"{config.RED}Error printing response: {e}{config.RESET}")
-                        sys.stdout.flush()
-                
-            except asyncio.CancelledError:
-                return  # Exit cleanly on cancellation
-            except Exception as e:
-                print(f"{config.RED}Error processing command: {e}{config.RESET}")
+            # Process the input
+            llm_response = await process_input_based_on_mode(user_input, config, chat_models)
+            
+            # Handle the response immediately if we got one
+            if llm_response:
+                # Print response
+                await print_streamed_message(llm_response, config.CYAN)
                 sys.stdout.flush()
+                
+                # Check for and handle any scripts
+                scripts = extract_script_from_response(llm_response)
+                if scripts:
+                    for script, file_extension, script_type in scripts:
+                        print(f"\nFound a {script_type} script:")
+                        print(script)
+                        sys.stdout.flush()
+                        
+                        try:
+                            # Execute immediately based on mode
+                            if config.autopilot_mode:
+                                await execute_script_directly(script, file_extension, config)
+                            else:
+                                await user_decide_and_act(user_input, script, file_extension, config)
+                        except Exception as e:
+                            print(f"{config.RED}Error executing script: {e}{config.RESET}")
+                            sys.stdout.flush()
+                            continue
             
-            # Short sleep to allow other tasks to run
+            # Give other tasks a chance to run
             await asyncio.sleep(0.1)
-                    
+                
         except KeyboardInterrupt:
-            return  # Exit cleanly
+            print("\nExiting interactive mode...")
+            sys.stdout.flush()
+            return
         except Exception as e:
             print(f"{config.RED}Error: {str(e)}{config.RESET}")
             sys.stdout.flush()
-            continue
-
+            
 async def _find_matching_content(query):
     """Find content matching a natural language query."""
     if not _content_cache['raw_content']:

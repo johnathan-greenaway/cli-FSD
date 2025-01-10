@@ -73,11 +73,27 @@ def print_instructions_once_per_day():
 
 
 async def print_streamed_message(message, color=CYAN):
+    """Print message with character-by-character streaming."""
+    if not message:
+        return
+        
+    # For immediate command feedback, don't stream short messages or commands
+    if len(message) < 100 or '```' in message:
+        print(f"{color}{message}{RESET}")
+        sys.stdout.flush()
+        return
+        
+    # Stream longer messages
     for char in message:
         print(f"{color}{char}{RESET}", end='', flush=True)
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.01)  # Reduced delay from 0.03
     print()
+    sys.stdout.flush()
 
+def print_immediate(message, color=CYAN):
+    """Print message immediately without streaming."""
+    print(f"{color}{message}{RESET}")
+    sys.stdout.flush()
 
 async def get_weather():
     try:

@@ -3,7 +3,8 @@ import json
 import aiohttp
 from ollama import Client as OllamaClient
 from groq import Groq as GroqClient
-from .utils import get_system_info
+from .utils import get_system_info, print_immediate
+import sys
 
 def initialize_chat_models(config):
     chat_models = {}
@@ -62,6 +63,10 @@ async def chat_with_model(message, config, chat_models, system_prompt=None):
         chat_models: Dictionary of initialized model clients
         system_prompt: Optional system prompt to override default
     """
+    from .utils import print_immediate, print_streamed_message
+    
+    print_immediate(f"\nProcessing request: {message}", config.CYAN)
+    
     # Use provided system prompt or default
     if system_prompt is None:
         system_prompt = (
@@ -71,39 +76,79 @@ async def chat_with_model(message, config, chat_models, system_prompt=None):
             f"System info: {get_system_info()}"
         )
     
+    response = None
     # Use model based on session preference
     if config.session_model:
         try:
             if config.session_model == 'ollama' and 'model' in chat_models:
-                return await chat_with_ollama(message, chat_models['model'], system_prompt)
+                response = await chat_with_ollama(message, chat_models['model'], system_prompt)
             elif config.session_model == 'groq' and 'model' in chat_models:
-                return await chat_with_groq(message, chat_models['model'], system_prompt)
+                response = await chat_with_groq(message, chat_models['model'], system_prompt)
             elif config.session_model == 'claude':
-                return await chat_with_claude(message, config, system_prompt)
+                response = await chat_with_claude(message, config, system_prompt)
+            
+            if response:
+                # For command responses, print immediately
+                if '```' in response:
+                    print_immediate("\nGenerated command:", config.CYAN)
+                    print_immediate(response, config.RESET)
+                else:
+                    # For regular responses, use streaming
+                    print_immediate("\nReceived response:", config.CYAN)
+                    await print_streamed_message(response, config.RESET)
+                return response
+                
         except Exception as e:
-            print(f"Error using {config.session_model}: {e}")
+            print_immediate(f"\nError using {config.session_model}: {e}", config.RED)
     
-    # Fallback to default model handlers if no session preference
-    model_handlers = [
+    # Try each model handler in sequence
+    for model_name, check_enabled, handler in [
         ('ollama', lambda: config.use_ollama and 'model' in chat_models,
          lambda: chat_with_ollama(message, chat_models['model'], system_prompt)),
         ('groq', lambda: config.use_groq and 'model' in chat_models,
          lambda: chat_with_groq(message, chat_models['model'], system_prompt)),
         ('claude', lambda: config.use_claude,
          lambda: chat_with_claude(message, config, system_prompt))
-    ]
-    
-    for model_name, check_enabled, handler in model_handlers:
+    ]:
         if check_enabled():
             try:
-                return await handler()
+                print_immediate(f"\nTrying {model_name}...", config.CYAN)
+                response = await handler()
+                if response:
+                    # For command responses, print immediately
+                    if '```' in response:
+                        print_immediate("\nGenerated command:", config.CYAN)
+                        print_immediate(response, config.RESET)
+                    else:
+                        # For regular responses, use streaming
+                        print_immediate(f"\nReceived response from {model_name}:", config.CYAN)
+                        await print_streamed_message(response, config.RESET)
+                    return response
             except Exception as e:
-                print(f"Error using {model_name}: {e}")
+                print_immediate(f"\nError using {model_name}: {e}", config.RED)
                 continue
     
     # Final fallback to OpenAI
-    return await chat_with_openai(message, config, system_prompt)
-
+    print_immediate("\nFalling back to OpenAI...", config.CYAN)
+    try:
+        response = await chat_with_openai(message, config, system_prompt)
+        if response:
+            # For command responses, print immediately
+            if '```' in response:
+                print_immediate("\nGenerated command:", config.CYAN)
+                print_immediate(response, config.RESET)
+            else:
+                # For regular responses, use streaming
+                print_immediate("\nReceived response from OpenAI:", config.CYAN)
+                await print_streamed_message(response, config.RESET)
+            return response
+        else:
+            print_immediate("\nNo response received from any model", config.RED)
+            return None
+    except Exception as e:
+        print_immediate(f"\nError using OpenAI: {e}", config.RED)
+        return None
+    
 async def chat_with_ollama(message, ollama_client, system_prompt):
     try:
         # Use the running model if available, otherwise fallback to a default
