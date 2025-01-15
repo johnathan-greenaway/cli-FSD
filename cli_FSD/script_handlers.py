@@ -570,26 +570,30 @@ def extract_script_from_response(response):
         if not content:
             continue
             
-        # Determine script type based on content and language tag
-        if lang == "python":
-            ext = "py"
-            script_type = "python"
+        # Add shebang line if not present
+        if not content.startswith("#!"):
+            if lang == "python":
+                content = "#!/usr/bin/env python3\n" + content
+                ext = "py"
+                script_type = "python"
+            else:
+                content = "#!/bin/bash\n" + content
+                ext = "sh"
+                script_type = "bash"
         else:
-            # Default to shell script
-            ext = "sh"
-            script_type = "bash"
-            
             # Check for shebang line
-            if content.startswith("#!"):
-                first_line = content.split("\n")[0]
-                if "python" in first_line.lower():
-                    ext = "py"
-                    script_type = "python"
+            first_line = content.split("\n")[0]
+            if "python" in first_line.lower():
+                ext = "py"
+                script_type = "python"
+            else:
+                ext = "sh"
+                script_type = "bash"
         
         scripts.append((content, ext, script_type))
     
     return scripts
-
+    
 def assemble_final_script(scripts, api_key):
     # Use cached system info
     info_details = get_cached_system_info()
