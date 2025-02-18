@@ -179,6 +179,7 @@ def process_input_based_on_mode(query, config, chat_models):
                 "which tool would be most effective. For web browsing requests, always select "
                 "the small_context tool with browse_web operation. When using browse_web, "
                 "ensure the response excludes technical details about servers, responses, or parsing. "
+                "Only use the web browser when the request contains a task that explicitly requires web browsing or includes a provided link."
                 "Focus only on the actual content. Respond with a JSON object containing your "
                 "analysis and selection. Be precise and follow the specified format."
             )
