@@ -10,11 +10,29 @@ from .utils import print_streamed_message, get_system_info, animated_loading, sa
 from .chat_models import chat_with_model
 from .resources.assembler import AssemblyAssist
 import threading
-import requests
+import importlib.util
+
+# Check if requests is available and import it
+requests = None
+if importlib.util.find_spec("requests"):
+    import requests
+else:
+    print("Warning: requests package not installed. Some features may be limited.")
+
 from .configuration import Config
 from .linting.code_checker import CodeChecker
-
 from .agents.context_agent import ContextAgent
+
+# Initialize URL handling utilities
+def get_search_url(query):
+    """Generate a search URL from a query."""
+    search_terms = ['search', 'find', 'lookup', 'what is', 'how to']
+    if any(term in query.lower() for term in search_terms):
+        search_query = query
+        for term in search_terms:
+            search_query = search_query.replace(term, '').strip()
+        return f"https://www.google.com/search?q={search_query}"
+    return None
 
 # Cache for storing content from MCP tools
 _content_cache = {
@@ -169,6 +187,30 @@ def process_input_based_on_mode(query, config, chat_models):
             llm_response = chat_with_model(query, config, chat_models)
             return llm_response
         
+        # First try CLI commands for system operations
+        if any(word in query.lower() for word in ['install', 'setup', 'configure', 'run', 'start', 'stop', 'restart']):
+            llm_response = chat_with_model(
+                query,
+                config=config,
+                chat_models=chat_models,
+                system_prompt=(
+                    "You are a CLI expert. If this request can be handled with CLI commands, "
+                    "provide the appropriate command wrapped in ```bash\n[command]\n``` markers. "
+                    "If no CLI command is suitable, respond with 'NO_CLI_COMMAND'."
+                )
+            )
+            
+            if "NO_CLI_COMMAND" not in llm_response:
+                print(f"{config.CYAN}Using CLI command for system operation{config.RESET}")
+                return llm_response
+
+        # Then check if it's a search query
+        if any(word in query.lower() for word in ['search', 'find', 'lookup', 'what is', 'how to']):
+            search_query = query.replace('search', '').replace('find', '').replace('lookup', '').strip()
+            print(f"{config.CYAN}Processing search query: {search_query}{config.RESET}")
+            # Let the tool selection handle the search with proper URL
+            analysis["prompt"] += "\nThis is a search query that requires web browsing."
+            
         # Get LLM's tool selection decision with the analysis prompt
         llm_analysis = chat_with_model(
             message=analysis["prompt"],
@@ -176,11 +218,12 @@ def process_input_based_on_mode(query, config, chat_models):
             chat_models=chat_models,
             system_prompt=(
                 "You are a tool selection expert. Analyze the user's request and determine "
-                "which tool would be most effective. For web browsing requests, always select "
-                "the small_context tool with browse_web operation. When using browse_web, "
-                "ensure the response excludes technical details about servers, responses, or parsing. "
-                "Only use the web browser when the request contains a task that explicitly requires web browsing or includes a provided link."
-                "Focus only on the actual content. Respond with a JSON object containing your "
+                "which tool would be most effective. Follow these priorities:\n"
+                "1. For web browsing requests or search queries, use small_context with browse_web\n"
+                "2. For information queries, use small_context with browse_web\n"
+                "3. When using browse_web, ensure you provide a specific URL\n"
+                "4. For search queries without a specific URL, use 'https://www.google.com/search?q=[query]'\n"
+                "Focus on providing actionable URLs. Respond with a JSON object containing your "
                 "analysis and selection. Be precise and follow the specified format."
             )
         )
@@ -200,17 +243,42 @@ def process_input_based_on_mode(query, config, chat_models):
                 
                 # Get response using selected tool
                 selected_tool = tool_selection.get("selected_tool", "").lower()
-                if selected_tool == "small_context":
-                    # Rest of the small_context handling code...
-                    # [Ensure that existing small_context handling code is placed here]
-                    
-                    # Example placeholder for small_context handling:
+                
+                # Determine URL based on query type and tool selection
+                url = get_search_url(query)
+                if not url and selected_tool == "small_context":
                     parameters = tool_selection.get("parameters", {})
                     url = parameters.get("url")
-                    if not url or url == "[URL will be determined based on request]":
-                        print(f"{config.RED}No valid URL provided in tool selection.{config.RESET}")
+                
+                # Handle URL validation and fallbacks
+                if not url or url == "[URL will be determined based on request]":
+                    # Fallback to browser search if no valid URL
+                    if any(word in query.lower() for word in ['search', 'find', 'lookup', 'what is', 'how to']):
+                        search_query = query.replace('search', '').replace('find', '').replace('lookup', '').strip()
+                        url = f"https://www.google.com/search?q={search_query}"
+                        print(f"{config.CYAN}Falling back to web search for: {search_query}{config.RESET}")
+                    else:
+                        # Try CLI command first for system operations
+                        llm_response = chat_with_model(
+                            query,
+                            config=config,
+                            chat_models=chat_models,
+                            system_prompt=(
+                                "You are a CLI expert. If this request can be handled with CLI commands, "
+                                "provide the appropriate command wrapped in ```bash\n[command]\n``` markers. "
+                                "If no CLI command is suitable, respond with 'NO_CLI_COMMAND'."
+                            )
+                        )
+                        
+                        if "NO_CLI_COMMAND" not in llm_response:
+                            print(f"{config.CYAN}Using CLI command instead of web browsing{config.RESET}")
+                            return llm_response
+                        
+                        print(f"{config.RED}No valid URL provided and no CLI command available.{config.RESET}")
                         return None
 
+                # Only execute tool selection if we have a valid URL
+                if url:
                     # Update the request with the LLM-selected URL
                     result = agent.execute_tool_selection(tool_selection)
                     if result.get("tool") == "use_mcp_tool":
