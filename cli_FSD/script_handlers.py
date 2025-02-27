@@ -189,6 +189,37 @@ _content_cache = {
 SCRIPT_PATTERN = re.compile(r"```(?:(bash|sh|python))?\n(.*?)```", re.DOTALL)
 CLEANUP_PATTERN = re.compile(r"```(?:bash|sh)\n(.*?)\n```", re.DOTALL)
 
+def assemble_final_script(scripts: list) -> str:
+    """
+    Assemble multiple script blocks into a final executable script.
+    
+    Args:
+        scripts: List of tuples containing (content, extension, script_type)
+    
+    Returns:
+        str: The assembled script ready for execution
+    """
+    if not scripts:
+        return ""
+        
+    # If there's only one script, return it directly
+    if len(scripts) == 1:
+        return scripts[0][0]
+        
+    # For multiple scripts, combine them with proper separators
+    final_script = "#!/bin/bash\n\n"
+    
+    for content, ext, script_type in scripts:
+        if script_type == "python":
+            # For Python scripts, wrap in python -c
+            escaped_content = content.replace('"', '\\"')
+            final_script += f'python3 -c "{escaped_content}"\n\n'
+        else:
+            # For bash scripts, include directly
+            final_script += f"{content}\n\n"
+            
+    return final_script.strip()
+
 def extract_script_from_response(response):
     """Extract scripts from LLM response with improved language detection."""
     if not isinstance(response, str):
@@ -375,6 +406,27 @@ def get_user_confirmation(command: str, config=None) -> bool:
     print(f"\nAbout to execute command:\n{command}")
     response = input("Do you want to proceed? (yes/no): ").strip().lower()
     return response in ['yes', 'y']
+
+def auto_handle_script_execution(script: str, config) -> bool:
+    """
+    Automatically handle script execution with proper error handling.
+    
+    Args:
+        script: The script content to execute
+        config: Configuration object containing execution settings
+        
+    Returns:
+        bool: True if execution was successful, False otherwise
+    """
+    if not script:
+        print("No script content provided.")
+        return False
+        
+    # Determine script type based on content
+    script_type = "python" if script.startswith("#!/usr/bin/env python") else "bash"
+    ext = "py" if script_type == "python" else "sh"
+    
+    return execute_script_directly(script, ext, config)
 
 def consult_llm_for_error_resolution(error_message, config):
     """Consult LLM for error resolution suggestions."""
