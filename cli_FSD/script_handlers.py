@@ -23,65 +23,304 @@ from .configuration import Config
 from .linting.code_checker import CodeChecker
 from .agents.context_agent import ContextAgent
 
-def evaluate_response(query: str, response: str, config, chat_models) -> bool:
+# Global response context cache to store information from previous responses
+_response_context = {
+    'previous_responses': [],  # List of previous responses
+    'browser_attempts': 0,     # Number of browser attempts made
+    'collected_info': {},      # Information collected from various tools
+    'tolerance_level': 'medium'  # Default tolerance level: 'strict', 'medium', 'lenient'
+}
+
+def set_evaluation_tolerance(level: str):
+    """
+    Set the tolerance level for response evaluation.
+    
+    Args:
+        level: 'strict', 'medium', or 'lenient'
+    """
+    if level in ['strict', 'medium', 'lenient']:
+        _response_context['tolerance_level'] = level
+        print(f"Response evaluation tolerance set to: {level}")
+    else:
+        print(f"Invalid tolerance level: {level}. Using default: 'medium'")
+        _response_context['tolerance_level'] = 'medium'
+
+def is_raw_mcp_response(response: str) -> bool:
+    """
+    Check if a response appears to be a raw MCP/browser response.
+    
+    Args:
+        response: The response to check
+        
+    Returns:
+        bool: True if it appears to be a raw MCP response
+    """
+    # Check for common patterns in raw MCP responses
+    if len(response) > 1000:  # Raw responses tend to be long
+        # Check for JSON-like structure
+        if (response.startswith('{') and response.endswith('}')) or (response.startswith('[') and response.endswith(']')):
+            return True
+        
+        # Check for HTML-like content
+        if '<html' in response.lower() or '<body' in response.lower():
+            return True
+            
+        # Check for common web content patterns
+        if 'http://' in response or 'https://' in response:
+            return True
+    
+    return False
+
+def evaluate_response(query: str, response: str, config, chat_models, response_type="general") -> bool:
     """
     Use LLM to evaluate if a response adequately answers the user's query.
     Returns True if the response is adequate, False otherwise.
+    
+    The evaluation strictness depends on the current tolerance level.
     """
+    # For raw MCP/browser responses, we should always process them first
+    if response_type in ["browser", "mcp"] or is_raw_mcp_response(response):
+        print(f"{config.CYAN}Detected raw browser/MCP response, skipping evaluation...{config.RESET}")
+        return True
+    
+    # Store response in context for potential future use
+    _response_context['previous_responses'].append({
+        'query': query,
+        'response': response[:500] if len(response) > 500 else response,  # Store truncated version
+        'timestamp': datetime.now().isoformat()
+    })
+    
+    # Adjust evaluation criteria based on tolerance level
+    tolerance = _response_context['tolerance_level']
+    
+    if tolerance == 'lenient':
+        strictness = "Be lenient in your evaluation. Accept responses that provide some useful information, even if not complete."
+        threshold = 0.6  # Lower threshold for acceptance
+    elif tolerance == 'strict':
+        strictness = "Be very strict in your evaluation. Only accept responses that fully and accurately answer the question."
+        threshold = 0.9  # Higher threshold for acceptance
+    else:  # medium (default)
+        strictness = "Use balanced judgment in your evaluation. Accept responses that adequately address the main points."
+        threshold = 0.75  # Moderate threshold
+    
     evaluation = chat_with_model(
         message=(
             f"User Query: {query}\n\n"
             f"Response: {response}\n\n"
-            "Does this response adequately answer the user's question? Consider:\n"
+            "Rate how well this response answers the user's question on a scale of 0.0 to 1.0, where:\n"
+            "- 0.0 means completely inadequate/irrelevant\n"
+            "- 1.0 means perfect and complete answer\n\n"
+            "Consider:\n"
             "1. Does it directly address what was asked?\n"
             "2. Does it provide actionable information?\n"
             "3. Is it specific enough to be useful?\n"
             "4. For CLI commands, does it provide the correct command?\n"
             "5. For search results, does it provide relevant information?\n"
-            "Respond with ONLY 'yes' if adequate, or 'no' if inadequate."
+            "Respond with ONLY a number between 0.0 and 1.0."
         ),
         config=config,
         chat_models=chat_models,
         system_prompt=(
-            "You are a response quality evaluator. Be strict in your evaluation. "
-            "Only accept responses that truly answer the user's question. "
+            f"You are a response quality evaluator. {strictness} "
             "For CLI commands, ensure they are correct and complete. "
             "For search results, ensure they provide relevant information."
         )
     )
-    return evaluation.strip().lower() == 'yes'
+    
+    try:
+        # Extract numeric score from response
+        score = float(evaluation.strip())
+        print(f"Response quality score: {score:.2f} (threshold: {threshold:.2f})")
+        return score >= threshold
+    except ValueError:
+        # Fallback to simple yes/no if numeric parsing fails
+        return evaluation.strip().lower() == 'yes'
 
 def get_fallback_response(query: str, original_response: str, config, chat_models) -> str:
-    """Get a more helpful response from the fallback LLM."""
+    """
+    Get a more helpful response from the fallback LLM, using previous responses as context.
+    """
+    # Gather context from previous responses
+    context = ""
+    if _response_context['previous_responses']:
+        # Get up to 3 most recent previous responses as context
+        recent_responses = _response_context['previous_responses'][-3:]
+        context = "Information from previous responses:\n"
+        for i, resp in enumerate(recent_responses):
+            if resp['query'] != query:  # Skip duplicates of current query
+                context += f"Response {i+1}: {resp['response'][:300]}...\n\n"
+    
+    # Add any collected information from tools
+    tool_info = ""
+    if _response_context['collected_info']:
+        tool_info = "Information collected from tools:\n"
+        for tool, info in _response_context['collected_info'].items():
+            tool_info += f"- {tool}: {str(info)[:300]}...\n"
+    
     return chat_with_model(
         message=(
-            f"Original query: {query}\n"
-            f"Previous response: {original_response}\n"
+            f"Original query: {query}\n\n"
+            f"Previous response: {original_response}\n\n"
+            f"{context}\n"
+            f"{tool_info}\n"
             "This response was deemed inadequate. Please provide a more helpful response that:\n"
             "1. Directly addresses the user's question\n"
             "2. Provides specific, actionable information\n"
-            "3. Draws from your knowledge to give accurate details\n"
+            "3. Draws from your knowledge and the context provided\n"
             "4. For CLI commands, provides the exact command needed\n"
-            "5. For general queries, provides comprehensive information"
+            "5. For general queries, provides comprehensive information\n"
+            "6. Incorporates any useful information from previous responses"
         ),
         config=config,
         chat_models=chat_models,
         system_prompt=(
             "You are a helpful expert assistant. Provide detailed, accurate responses "
             "that directly address the user's needs. If the query is about software or "
-            "system operations, include specific steps or commands when appropriate."
+            "system operations, include specific steps or commands when appropriate. "
+            "Use any relevant information from previous responses to improve your answer."
         )
     )
 
-def process_response(query: str, response: str, config, chat_models) -> str:
+def format_browser_response(query: str, response: str, config, chat_models) -> str:
+    """
+    Format a raw browser/MCP response into a more readable format.
+    
+    Args:
+        query: The original user query
+        response: The raw browser/MCP response
+        config: Configuration object
+        chat_models: Chat models to use
+        
+    Returns:
+        str: Formatted response
+    """
+    print(f"{config.CYAN}Formatting raw browser/MCP response...{config.RESET}")
+    
+    # Truncate very long responses for processing
+    truncated_response = response[:5000] if len(response) > 5000 else response
+    
+    formatted_response = chat_with_model(
+        message=(
+            f"The following is a raw response from a browser/MCP tool for the query: '{query}'\n\n"
+            f"{truncated_response}\n\n"
+            "Please format this information into a clear, concise, and well-structured response that directly "
+            "answers the user's query. Include all relevant information from the raw response."
+        ),
+        config=config,
+        chat_models=chat_models,
+        system_prompt=(
+            "You are an expert at formatting raw web data into helpful responses. "
+            "Focus on extracting the most relevant information and presenting it clearly."
+        )
+    )
+    
+    # Store the formatted response in context
+    _response_context['collected_info']['formatted_browser'] = formatted_response[:500]
+    
+    return formatted_response
+
+def process_response(query: str, response: str, config, chat_models, allow_browser_fallback=True, response_type="general") -> str:
     """
     Process a response through evaluation and fallback if needed.
     Returns the final response to use.
+    
+    Args:
+        query: The original user query
+        response: The response to evaluate
+        config: Configuration object
+        chat_models: Chat models to use
+        allow_browser_fallback: Whether to allow browser fallback if response is inadequate
+        response_type: Type of response - "general", "cli", "browser", or "mcp"
     """
-    if not evaluate_response(query, response, config, chat_models):
+    # For raw browser/MCP responses, format them first
+    if response_type in ["browser", "mcp"] or is_raw_mcp_response(response):
+        return format_browser_response(query, response, config, chat_models)
+    
+    # For general and CLI responses, evaluate and use fallbacks if needed
+    if not evaluate_response(query, response, config, chat_models, response_type):
         print(f"{config.YELLOW}Initial response was inadequate. Getting better response...{config.RESET}")
-        return get_fallback_response(query, response, config, chat_models)
+        
+        # Try fallback LLM first
+        improved_response = get_fallback_response(query, response, config, chat_models)
+        
+        # If fallback still inadequate and browser fallback is allowed, try browser
+        if allow_browser_fallback and not evaluate_response(query, improved_response, config, chat_models, response_type):
+            if _response_context['browser_attempts'] < 2:  # Limit browser attempts
+                print(f"{config.YELLOW}Fallback response still inadequate. Trying browser search...{config.RESET}")
+                _response_context['browser_attempts'] += 1
+                
+                # Try browser search
+                browser_response = try_browser_search(query, config, chat_models)
+                if browser_response:
+                    # Store browser result in context
+                    _response_context['collected_info']['browser_search'] = browser_response[:500]  # Store truncated version
+                    
+                    # Format the browser response
+                    formatted_browser = format_browser_response(query, browser_response, config, chat_models)
+                    
+                    # Combine browser results with previous knowledge
+                    final_response = chat_with_model(
+                        message=(
+                            f"Original query: {query}\n\n"
+                            f"Previous responses: {improved_response}\n\n"
+                            f"Browser search results: {formatted_browser}\n\n"
+                            "Combine all this information to provide the most accurate and complete response."
+                        ),
+                        config=config,
+                        chat_models=chat_models,
+                        system_prompt=(
+                            "You are a helpful expert assistant. Synthesize information from multiple sources "
+                            "to provide the most accurate and complete response to the user's query."
+                        )
+                    )
+                    return final_response
+            else:
+                print(f"{config.YELLOW}Maximum browser attempts reached. Using best available response.{config.RESET}")
+        
+        return improved_response
     return response
+
+def try_browser_search(query: str, config, chat_models) -> str:
+    """
+    Attempt to use browser search to find an answer.
+    
+    Args:
+        query: The user query
+        config: Configuration object
+        chat_models: Chat models to use
+        
+    Returns:
+        str: Browser search results or empty string if failed
+    """
+    search_query = query
+    # Clean up query for search
+    for term in ['search', 'find', 'lookup', 'what is', 'how to', 'browse']:
+        search_query = search_query.replace(term, '').strip()
+    
+    url = f"https://www.google.com/search?q={search_query}"
+    print(f"{config.CYAN}Trying browser search for: {search_query}{config.RESET}")
+    
+    try:
+        # Try MCP browser tool first
+        try:
+            response = use_mcp_tool(
+                server_name="small-context",
+                tool_name="browse_web",
+                arguments={"url": url}
+            )
+            if response:
+                return response
+        except Exception as e:
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying alternative search...{config.RESET}")
+        
+        # Fallback to using WebBrowser class directly
+        from .small_context.protocol import WebBrowser
+        browser = WebBrowser()
+        result = browser.browse(url)
+        return json.dumps(result)
+    except Exception as e:
+        print(f"{config.YELLOW}Browser search failed: {str(e)}{config.RESET}")
+        return ""
 
 def handle_cli_command(query: str, config, chat_models) -> str:
     """Handle CLI command generation and evaluation."""
@@ -98,13 +337,13 @@ def handle_cli_command(query: str, config, chat_models) -> str:
     
     if "NO_CLI_COMMAND" not in response:
         print(f"{config.CYAN}Generated CLI command, evaluating...{config.RESET}")
-        return process_response(query, response, config, chat_models)
+        return process_response(query, response, config, chat_models, response_type="cli")
     return response
 
 def handle_web_search(query: str, response: str, config, chat_models) -> str:
     """Handle web search result evaluation."""
     print(f"{config.CYAN}Processing search result...{config.RESET}")
-    return process_response(query, response, config, chat_models)
+    return process_response(query, response, config, chat_models, allow_browser_fallback=False, response_type="browser")
 
 def get_search_url(query):
     """Generate a search URL from a query."""
@@ -122,6 +361,18 @@ def _validate_query(query: str) -> bool:
 
 def process_input_based_on_mode(query, config, chat_models):
     """Process user input based on the current mode and query type."""
+    global _response_context
+    
+    # Reset browser attempts counter for new queries
+    _response_context['browser_attempts'] = 0
+    
+    # Check for tolerance level commands
+    if query.lower().startswith("set tolerance "):
+        level = query.lower().replace("set tolerance ", "").strip()
+        set_evaluation_tolerance(level)
+        print(f"{config.GREEN}Tolerance level set to: {level}{config.RESET}")
+        return None
+    
     # Validate query
     if not _validate_query(query):
         print(f"{config.YELLOW}Please provide a command or question.{config.RESET}")
@@ -131,37 +382,71 @@ def process_input_based_on_mode(query, config, chat_models):
     if config.session_model:
         print(f"{config.CYAN}Using model: {config.session_model}{config.RESET}")
     
-    # First try CLI commands for system operations
-    if any(word in query.lower() for word in ['install', 'setup', 'configure', 'run', 'start', 'stop', 'restart']):
+    # Check if this is explicitly a browser request
+    is_browser_request = any(term in query.lower() for term in ['browse', 'open website', 'go to', 'visit'])
+    
+    # First try CLI commands for system operations (unless it's a browser request)
+    if not is_browser_request and any(word in query.lower() for word in ['install', 'setup', 'configure', 'run', 'start', 'stop', 'restart']):
         response = handle_cli_command(query, config, chat_models)
         if "NO_CLI_COMMAND" not in response:
             return response
     
-    # Then try web search if it's a search query
-    if any(word in query.lower() for word in ['search', 'find', 'lookup', 'what is', 'how to']):
-        search_query = query.replace('search', '').replace('find', '').replace('lookup', '').strip()
-        url = f"https://www.google.com/search?q={search_query}"
-        print(f"{config.CYAN}Searching for: {search_query}{config.RESET}")
+    # Handle explicit browser requests or search queries
+    if is_browser_request or any(word in query.lower() for word in ['search', 'find', 'lookup', 'what is', 'how to']):
+        # Extract the search query or URL
+        search_terms = ['search', 'find', 'lookup', 'what is', 'how to', 'browse', 'open website', 'go to', 'visit']
+        search_query = query
+        for term in search_terms:
+            search_query = search_query.replace(term, '').strip()
         
+        # Determine if this is a URL or a search query
+        if search_query.startswith(('http://', 'https://', 'www.')):
+            url = search_query if search_query.startswith(('http://', 'https://')) else f"https://{search_query}"
+        else:
+            url = f"https://www.google.com/search?q={search_query}"
+        
+        print(f"{config.CYAN}{'Browsing to' if is_browser_request else 'Searching for'}: {search_query}{config.RESET}")
+        
+        # Always try to use the MCP tool first for both browser requests and search queries
         try:
-            # Use MCP tool for web search
             response = use_mcp_tool(
-                server_name="web_search",
-                tool_name="search",
+                server_name="small-context",
+                tool_name="browse_web",
                 arguments={"url": url}
             )
             
             if response:
-                final_response = handle_web_search(query, response, config, chat_models)
-                if final_response:
-                    print_streamed_message(final_response, config.CYAN)
+                # Store in context
+                _response_context['collected_info']['web_result'] = response[:500]  # Store truncated version
+                
+                # Format the response
+                formatted_response = format_browser_response(query, response, config, chat_models)
+                print_streamed_message(formatted_response, config.CYAN)
                 return None
         except Exception as e:
-            print(f"{config.YELLOW}Web search failed: {str(e)}{config.RESET}")
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying alternative approach...{config.RESET}")
+            
+            # Fallback to using WebBrowser class directly
+            try:
+                from .small_context.protocol import WebBrowser
+                browser = WebBrowser()
+                result = browser.browse(url)
+                response = json.dumps(result)
+                
+                if response:
+                    # Store in context
+                    _response_context['collected_info']['web_result'] = response[:500]  # Store truncated version
+                    
+                    # Format the response
+                    formatted_response = format_browser_response(query, response, config, chat_models)
+                    print_streamed_message(formatted_response, config.CYAN)
+                    return None
+            except Exception as e2:
+                print(f"{config.YELLOW}Web operation failed: {str(e2)}{config.RESET}")
     
     # If no specific handling, fall back to general LLM processing
     llm_response = chat_with_model(query, config, chat_models)
-    final_response = process_response(query, llm_response, config, chat_models)
+    final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
     print_streamed_message(final_response, config.CYAN)
     return None
 
@@ -433,6 +718,10 @@ def consult_llm_for_error_resolution(error_message, config):
     system_info = get_system_info()
     print(f"{config.CYAN}Consulting LLM for error resolution:{config.RESET} {error_message}")
     
+    if not requests:
+        print(f"{config.YELLOW}Requests package not available. Cannot consult LLM for error resolution.{config.RESET}")
+        return None
+    
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config.api_key}"
@@ -467,6 +756,6 @@ def consult_llm_for_error_resolution(error_message, config):
             
         print("No advice was returned by the model.")
         return None
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         print(f"API request error: {e}")
         return None
