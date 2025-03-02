@@ -31,6 +31,96 @@ _response_context = {
     'tolerance_level': 'medium'  # Default tolerance level: 'strict', 'medium', 'lenient'
 }
 
+# Cache for storing content from MCP tools
+_content_cache = {
+    'raw_content': None,  # Raw JSON response
+    'formatted_content': None,  # Formatted text for summaries
+    'headlines': [],  # List of headlines for easy reference
+    'paragraphs': []  # List of paragraphs for easy reference
+}
+
+def _find_matching_content(query):
+    """Find content matching a natural language query."""
+    if not _content_cache['raw_content']:
+        return None
+        
+    # Use LLM to help parse the query and find relevant content
+    try:
+        content = _content_cache['raw_content']
+        if content.get("type") == "webpage":
+            # Format content for matching
+            stories = []
+            for item in content.get("content", []):
+                if item.get("type") == "story":
+                    story_text = [
+                        f"Title: {item['title']}",
+                        f"URL: {item['url']}"
+                    ]
+                    for key, value in item.get("metadata", {}).items():
+                        story_text.append(f"{key}: {value}")
+                    stories.append({
+                        "title": item["title"],
+                        "content": "\n".join(story_text)
+                    })
+                elif item.get("type") == "section":
+                    for block in item.get("blocks", []):
+                        if block.get("text"):
+                            text = block["text"]
+                            if block.get("links"):
+                                text += "\nLinks:\n" + "\n".join(
+                                    f"- {link['text']}: {link['url']}"
+                                    for link in block["links"]
+                                )
+                            stories.append({
+                                "title": text.split("\n")[0],
+                                "content": text
+                            })
+            
+            if stories:
+                # Ask LLM to analyze and match content
+                analysis = chat_with_model(
+                    message=(
+                        "Given these content sections:\n\n" +
+                        "\n---\n".join(f"Section {i}:\n{s['content']}" for i, s in enumerate(stories)) +
+                        f"\n\nAnd this user request: '{query}'\n\n"
+                        "Analyze the content and the request to:\n"
+                        "1. Find the most relevant section(s)\n"
+                        "2. Extract specific details or quotes that answer the request\n"
+                        "3. Include any relevant links or references\n\n"
+                        "Format your response as JSON:\n"
+                        "{\n"
+                        "  \"sections\": [section_numbers],\n"
+                        "  \"details\": \"extracted details and quotes\",\n"
+                        "  \"links\": [\"relevant links\"]\n"
+                        "}"
+                    ),
+                    config=Config(),
+                    chat_models=None,
+                    system_prompt="You are a content analysis expert. Respond only with a JSON object containing the requested information."
+                )
+                
+                try:
+                    result = json.loads(analysis.strip())
+                    if result.get("sections"):
+                        matched_content = []
+                        for section_num in result["sections"]:
+                            if 0 <= section_num < len(stories):
+                                matched_content.append(stories[section_num]["content"])
+                        
+                        return {
+                            'headline': stories[result["sections"][0]]["title"],
+                            'content': "\n\n".join(matched_content),
+                            'details': result.get("details", ""),
+                            'links': result.get("links", [])
+                        }
+                except (ValueError, json.JSONDecodeError):
+                    pass
+            
+    except Exception:
+        pass
+    
+    return None
+
 def set_evaluation_tolerance(level: str):
     """
     Set the tolerance level for response evaluation.
@@ -362,6 +452,7 @@ def _validate_query(query: str) -> bool:
 def process_input_based_on_mode(query, config, chat_models):
     """Process user input based on the current mode and query type."""
     global _response_context
+    global _content_cache
     
     # Reset browser attempts counter for new queries
     _response_context['browser_attempts'] = 0
@@ -382,6 +473,39 @@ def process_input_based_on_mode(query, config, chat_models):
     if config.session_model:
         print(f"{config.CYAN}Using model: {config.session_model}{config.RESET}")
     
+    # Check if this is a request to view specific cached content
+    if _content_cache['raw_content'] and any(word in query.lower() for word in ['show', 'view', 'read', 'tell', 'about']):
+        matching_content = _find_matching_content(query)
+        if matching_content:
+            print(f"\n{config.CYAN}Found relevant content:{config.RESET}")
+            print(f"\nHeadline: {matching_content['headline']}")
+            if matching_content['content']:
+                print(f"\nContent: {matching_content['content']}")
+            if matching_content.get('details'):
+                print(f"\nDetails: {matching_content['details']}")
+            if matching_content.get('links'):
+                print("\nRelevant links:")
+                for link in matching_content['links']:
+                    print(f"- {link}")
+            return None
+    
+    # Check if this is a follow-up question about cached content
+    if _content_cache['formatted_content'] and not query.lower().startswith(("get", "fetch", "find")):
+        # Process as a question about the cached content
+        llm_response = chat_with_model(
+            message=(
+                f"Based on this content:\n\n{_content_cache['formatted_content']}\n\n"
+                f"User question: {query}\n\n"
+                "Provide a clear and focused answer. If the question is about a specific topic or article, "
+                "include relevant quotes and links from the content. After your answer, suggest 2-3 relevant "
+                "follow-up questions the user might want to ask about this topic."
+            ),
+            config=config,
+            chat_models=chat_models
+        )
+        print_streamed_message(llm_response, config.CYAN)
+        return None
+    
     # Check if this is explicitly a browser request
     is_browser_request = any(term in query.lower() for term in ['browse', 'open website', 'go to', 'visit'])
     
@@ -391,64 +515,248 @@ def process_input_based_on_mode(query, config, chat_models):
         if "NO_CLI_COMMAND" not in response:
             return response
     
-    # Handle explicit browser requests or search queries
-    if is_browser_request or any(word in query.lower() for word in ['search', 'find', 'lookup', 'what is', 'how to']):
-        # Extract the search query or URL
-        search_terms = ['search', 'find', 'lookup', 'what is', 'how to', 'browse', 'open website', 'go to', 'visit']
-        search_query = query
-        for term in search_terms:
-            search_query = search_query.replace(term, '').strip()
+    # Use ContextAgent to analyze the request and determine which tool to use
+    try:
+        agent = ContextAgent()
+        analysis = agent.analyze_request(query)
         
-        # Determine if this is a URL or a search query
-        if search_query.startswith(('http://', 'https://', 'www.')):
-            url = search_query if search_query.startswith(('http://', 'https://')) else f"https://{search_query}"
-        else:
-            url = f"https://www.google.com/search?q={search_query}"
+        # Validate analysis object
+        if not analysis or not isinstance(analysis, dict) or "prompt" not in analysis:
+            # Fall back to direct LLM processing if analysis fails
+            print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
+            llm_response = chat_with_model(query, config, chat_models)
+            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+            print_streamed_message(final_response, config.CYAN)
+            return None
         
-        print(f"{config.CYAN}{'Browsing to' if is_browser_request else 'Searching for'}: {search_query}{config.RESET}")
-        
-        # Always try to use the MCP tool first for both browser requests and search queries
-        try:
-            response = use_mcp_tool(
-                server_name="small-context",
-                tool_name="browse_web",
-                arguments={"url": url}
+        # Get LLM's tool selection decision with the analysis prompt
+        llm_analysis = chat_with_model(
+            message=analysis["prompt"],
+            config=config,
+            chat_models=chat_models,
+            system_prompt=(
+                "You are a tool selection expert. Analyze the user's request and determine "
+                "which tool would be most effective. For web browsing requests, always select "
+                "the small_context tool with browse_web operation. When using browse_web, "
+                "ensure the response excludes technical details about servers, responses, or parsing. "
+                "Focus only on the actual content. Respond with a JSON object containing your "
+                "analysis and selection. Be precise and follow the specified format."
             )
-            
-            if response:
-                # Store in context
-                _response_context['collected_info']['web_result'] = response[:500]  # Store truncated version
+        )
+        
+        if not llm_analysis:
+            print(f"{config.YELLOW}No response received from tool selection LLM analysis.{config.RESET}")
+            llm_response = chat_with_model(query, config, chat_models)
+            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+            print_streamed_message(final_response, config.CYAN)
+            return None
+        
+        try:
+            # Extract JSON from the LLM analysis response
+            json_start = llm_analysis.find('{')
+            json_end = llm_analysis.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                json_str = llm_analysis[json_start:json_end]
+                tool_selection = json.loads(json_str)
                 
-                # Format the response
-                formatted_response = format_browser_response(query, response, config, chat_models)
-                print_streamed_message(formatted_response, config.CYAN)
-                return None
-        except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying alternative approach...{config.RESET}")
-            
-            # Fallback to using WebBrowser class directly
-            try:
-                from .small_context.protocol import WebBrowser
-                browser = WebBrowser()
-                result = browser.browse(url)
-                response = json.dumps(result)
-                
-                if response:
-                    # Store in context
-                    _response_context['collected_info']['web_result'] = response[:500]  # Store truncated version
+                # Get response using selected tool
+                selected_tool = tool_selection.get("selected_tool", "").lower()
+                if selected_tool == "small_context":
+                    # Handle small_context tool
+                    parameters = tool_selection.get("parameters", {})
+                    url = parameters.get("url")
+                    if not url or url == "[URL will be determined based on request]":
+                        print(f"{config.RED}No valid URL provided in tool selection.{config.RESET}")
+                        llm_response = chat_with_model(query, config, chat_models)
+                        final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+                        print_streamed_message(final_response, config.CYAN)
+                        return None
+
+                    # Update the request with the LLM-selected URL
+                    result = agent.execute_tool_selection(tool_selection)
+                    if result.get("tool") == "use_mcp_tool":
+                        # Execute MCP tool with debug output
+                        print(f"{config.CYAN}Executing MCP tool: {result['operation']}{config.RESET}")
+                        print(f"{config.CYAN}Using URL: {url}{config.RESET}")
+                        
+                        # Create arguments with the URL
+                        arguments = {
+                            **result["arguments"],
+                            "url": url  # Ensure URL is included in arguments
+                        }
+                        
+                        response = use_mcp_tool(
+                            server_name=result["server"],
+                            tool_name=result["operation"],
+                            arguments=arguments
+                        )
+                        print(f"{config.CYAN}MCP tool response received.{config.RESET}")
+                        
+                        try:
+                            # Handle both string and list responses
+                            if isinstance(response, str):
+                                content = json.loads(response)
+                            elif isinstance(response, (list, dict)):
+                                content = response
+                            else:
+                                raise ValueError(f"Unexpected response type: {type(response)}")
+                            
+                            # Format content for processing
+                            if isinstance(content, dict):
+                                if content.get("type") == "webpage":
+                                    # Process structured content
+                                    _content_cache['raw_content'] = content
+                                    
+                                    # Format content for LLM processing
+                                    formatted_content = []
+                                    
+                                    # Process each content block
+                                    for item in content.get("content", []):
+                                        if item.get("type") == "story":
+                                            # Format story with metadata
+                                            story_text = [
+                                                f"Title: {item['title']}",
+                                                f"URL: {item['url']}"
+                                            ]
+                                            # Add metadata if present
+                                            for key, value in item.get("metadata", {}).items():
+                                                story_text.append(f"{key}: {value}")
+                                            formatted_content.append("\n".join(story_text))
+                                        elif item.get("type") == "section":
+                                            # Process section blocks
+                                            for block in item.get("blocks", []):
+                                                if block.get("text"):
+                                                    text = block["text"]
+                                                    # Add links if present
+                                                    if block.get("links"):
+                                                        text += "\nLinks:\n" + "\n".join(
+                                                            f"- {link['text']}: {link['url']}"
+                                                            for link in block["links"]
+                                                        )
+                                                    formatted_content.append(text)
+                                    
+                                    # Cache formatted content
+                                    _content_cache['formatted_content'] = "\n\n".join(formatted_content)
+                                    
+                                    # Let LLM analyze and present the content
+                                    llm_response = chat_with_model(
+                                        message=(
+                                            "You are a content analyzer. Given this content:\n\n"
+                                            f"{_content_cache['formatted_content']}\n\n"
+                                            "1. Provide a clear overview of the main points\n"
+                                            "2. Format each point as a bullet\n"
+                                            "3. Include relevant links when available\n"
+                                            "4. Focus on the actual content\n"
+                                            "5. If there are multiple stories/sections, organize them clearly\n"
+                                            "6. Highlight any particularly interesting or important information\n\n"
+                                            "After your summary, provide a list of suggested interactions like:\n"
+                                            "- 'Tell me more about [topic]'\n"
+                                            "- 'Show me the full article about [headline]'\n"
+                                            "- 'What are the key points about [subject]'\n"
+                                            "Choose topics/headlines/subjects from the actual content."
+                                        ),
+                                        config=config,
+                                        chat_models=chat_models
+                                    )
+                                    print_streamed_message(llm_response, config.CYAN)
+                                    
+                                    # Print interaction hint
+                                    print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
+                                    return None
+                                else:
+                                    formatted_response = json.dumps(content, indent=2)
+                                    llm_response = chat_with_model(
+                                        message=f"Please summarize this content:\n\n{formatted_response}",
+                                        config=config,
+                                        chat_models=chat_models
+                                    )
+                                    print_streamed_message(llm_response, config.CYAN)
+                                    return None
+                            else:
+                                formatted_response = str(content)
+                                llm_response = chat_with_model(
+                                    message=f"Please summarize this content:\n\n{formatted_response}",
+                                    config=config,
+                                    chat_models=chat_models
+                                )
+                                print_streamed_message(llm_response, config.CYAN)
+                                return None
+                        except json.JSONDecodeError:
+                            # Handle raw response directly
+                            llm_response = chat_with_model(
+                                message=f"Please summarize this content in a clear and concise way:\n\n{response}",
+                                config=config,
+                                chat_models=chat_models
+                            )
+                            print_streamed_message(llm_response, config.CYAN)
+                            return None
+                    else:
+                        llm_response = f"Error: {result.get('error', 'Unknown error')}"
+                        print_streamed_message(llm_response, config.CYAN)
+                        return None
+                elif selected_tool == "default":
+                    # Handle default tool case - generate a shell script for simple commands
+                    parameters = tool_selection.get("parameters", {})
+                    operation = parameters.get("operation", "")
                     
-                    # Format the response
-                    formatted_response = format_browser_response(query, response, config, chat_models)
-                    print_streamed_message(formatted_response, config.CYAN)
+                    # For simple command requests, wrap in a shell script
+                    if operation == "process_command":
+                        # Format as a shell script
+                        llm_response = chat_with_model(
+                            message=query,
+                            config=config,
+                            chat_models=chat_models,
+                            system_prompt=(
+                                "You are a shell script expert. Your task is to generate shell commands for the given request. "
+                                "Always wrap your commands in ```bash\n[command]\n``` markers. "
+                                "For simple queries like time, date, or weather, use the appropriate Unix commands. "
+                                "For example:\n"
+                                "- Time queries: date command with appropriate format\n"
+                                "- Weather queries: curl wttr.in with location\n"
+                                "- File operations: ls, cp, mv, etc.\n"
+                                "Never explain the commands, just provide them in the code block."
+                            )
+                        )
+                    else:
+                        # Default to standard LLM processing with shell command generation
+                        llm_response = chat_with_model(
+                            message=query,
+                            config=config,
+                            chat_models=chat_models,
+                            system_prompt=(
+                                "You are a shell command generator. "
+                                "Always provide a shell command to answer the query, wrapped in "
+                                "```bash\n[command]\n``` markers. "
+                                "If in doubt, generate a command rather than a text response."
+                            )
+                        )
+                    
+                    print_streamed_message(llm_response, config.CYAN)
                     return None
-            except Exception as e2:
-                print(f"{config.YELLOW}Web operation failed: {str(e2)}{config.RESET}")
-    
-    # If no specific handling, fall back to general LLM processing
-    llm_response = chat_with_model(query, config, chat_models)
-    final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
-    print_streamed_message(final_response, config.CYAN)
-    return None
+                else:
+                    # Default to standard LLM processing
+                    llm_response = chat_with_model(query, config, chat_models)
+                    final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+                    print_streamed_message(final_response, config.CYAN)
+                    return None
+            else:
+                # Fallback if JSON extraction fails
+                llm_response = chat_with_model(query, config, chat_models)
+                final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+                print_streamed_message(final_response, config.CYAN)
+                return None
+        except (json.JSONDecodeError, KeyError, AttributeError) as e:
+            print(f"{config.YELLOW}Failed to process tool selection: {str(e)}{config.RESET}")
+            llm_response = chat_with_model(query, config, chat_models)
+            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+            print_streamed_message(final_response, config.CYAN)
+            return None
+    except Exception as e:
+        print(f"{config.YELLOW}Using standard processing due to error: {str(e)}{config.RESET}")
+        llm_response = chat_with_model(query, config, chat_models)
+        final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+        print_streamed_message(final_response, config.CYAN)
+        return None
 
 def process_input_in_safe_mode(query, config, chat_models):
     """Process input in safe mode with additional checks and confirmations."""
@@ -462,14 +770,8 @@ def process_input_in_autopilot_mode(query, config, chat_models):
     final_response = process_response(query, llm_response, config, chat_models)
     print_streamed_message(final_response, config.CYAN)
 
-# Initialize cache for storing content from MCP tools
-_content_cache = {
-    'raw_content': None,  # Raw JSON response
-    'formatted_content': None,  # Formatted text for summaries
-    'headlines': [],  # List of headlines for easy reference
-    'paragraphs': []  # List of paragraphs for easy reference
-}
-
+# Track assembled scripts for cleanup
+_assembled_scripts = set()
 # Pre-compile regex patterns for better performance
 SCRIPT_PATTERN = re.compile(r"```(?:(bash|sh|python))?\n(.*?)```", re.DOTALL)
 CLEANUP_PATTERN = re.compile(r"```(?:bash|sh)\n(.*?)\n```", re.DOTALL)
@@ -504,6 +806,7 @@ def assemble_final_script(scripts: list) -> str:
             final_script += f"{content}\n\n"
             
     return final_script.strip()
+
 
 def extract_script_from_response(response):
     """Extract scripts from LLM response with improved language detection."""
@@ -552,6 +855,51 @@ def clean_up_llm_response(llm_response):
         return "\n".join(block.strip() for block in script_blocks if block.strip())
     print("No executable script blocks found in the response.")
     return llm_response.strip()
+
+def handle_script_cleanup(config):
+    """Handle cleanup of assembled scripts with option to save."""
+    global _assembled_scripts
+    
+    if not _assembled_scripts:
+        return
+        
+    print(f"\n{config.CYAN}Found {len(_assembled_scripts)} unnamed script(s) from this session.{config.RESET}")
+    save_all = input("Would you like to review and save any scripts before cleanup? (yes/no): ").strip().lower()
+    
+    if save_all == 'yes':
+        for script_path in _assembled_scripts.copy():
+            try:
+                if os.path.exists(script_path):
+                    with open(script_path, 'r') as f:
+                        content = f.read()
+                    
+                    print(f"\n{config.CYAN}Script content:{config.RESET}\n{content}")
+                    save = input(f"Save this script? (yes/no): ").strip().lower()
+                    
+                    if save == 'yes':
+                        name = input("Enter name for the script (without extension): ").strip()
+                        if name:
+                            new_path = f"{name}.sh"
+                            os.rename(script_path, new_path)
+                            print(f"Script saved as {new_path}")
+                            _assembled_scripts.remove(script_path)
+                            continue
+                    
+                    # If not saving or no name provided, delete the script
+                    os.unlink(script_path)
+                    _assembled_scripts.remove(script_path)
+                    
+            except OSError as e:
+                print(f"{config.RED}Warning: Failed to handle script {script_path}: {e}{config.RESET}")
+    else:
+        # Clean up all scripts without saving
+        for script in _assembled_scripts.copy():
+            try:
+                if os.path.exists(script):
+                    os.unlink(script)
+                    _assembled_scripts.remove(script)
+            except OSError as e:
+                print(f"{config.RED}Warning: Failed to clean up script {script}: {e}{config.RESET}")
 
 def execute_script(filename, file_extension, config):
     """Execute a saved script with proper error handling."""
@@ -673,6 +1021,17 @@ def execute_script_directly(script, file_extension, config):
             except OSError as e:
                 print(f"Warning: Failed to clean up temporary file {temp_file_path}: {e}")
 
+def cleanup_assembled_scripts():
+    """Clean up any remaining assembled scripts without prompting."""
+    global _assembled_scripts
+    for script in _assembled_scripts.copy():
+        try:
+            if os.path.exists(script):
+                os.unlink(script)
+                _assembled_scripts.remove(script)
+        except OSError as e:
+            print(f"Warning: Failed to clean up script {script}: {e}")
+
 def execute_resolution_script(resolution, config):
     """Execute a resolution script with proper error handling."""
     print(f"{config.CYAN}Executing resolution:{config.RESET}\n{resolution}")
@@ -759,3 +1118,4 @@ def consult_llm_for_error_resolution(error_message, config):
     except Exception as e:
         print(f"API request error: {e}")
         return None
+
