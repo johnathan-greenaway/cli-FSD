@@ -28,7 +28,7 @@ blocks:
             - |
               if [[ "${SEMAPHORE_GIT_BRANCH}" == "release-branch" ]]; then
                 echo "On release branch - using version $BASE_VERSION"
-                sed -i "s/version=[\"'][^\"']*/version=\"$BASE_VERSION\"/" setup.py
+                sed -i "s/version=[\"'][^\"']*[\"']/version=\"$BASE_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
                 TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload dist/*
@@ -39,7 +39,7 @@ blocks:
               if [[ "${SEMAPHORE_GIT_BRANCH}" == "development" ]]; then
                 DEV_VERSION="${BASE_VERSION}.dev1"
                 echo "On development branch - using version $DEV_VERSION"
-                sed -i "s/version=[\"'][^\"']*/version=\"$DEV_VERSION\"/" setup.py
+                sed -i "s/version=[\"'][^\"']*[\"']/version=\"$DEV_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
                 TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --skip-existing dist/*
@@ -51,7 +51,7 @@ blocks:
                 FEATURE_NAME=$(echo ${SEMAPHORE_GIT_BRANCH} | sed "s/feature\///" | sed "s/[-\/]/./"g)
                 DEV_VERSION="${BASE_VERSION}.dev0+feature.${FEATURE_NAME}"
                 echo "On feature branch - using version $DEV_VERSION"
-                sed -i "s/version=[\"'][^\"']*/version=\"$DEV_VERSION\"/" setup.py
+                sed -i "s/version=[\"'][^\"']*[\"']/version=\"$DEV_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
                 TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --skip-existing dist/*
