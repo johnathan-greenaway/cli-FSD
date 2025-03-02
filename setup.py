@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='cli-FSD',
-    version='1.2.98',
+    version='1.7.7',
     author='JG',
     author_email='wazacraftRFID@gmail.com',
     description='LLM-enabled companion utility for your terminal.',
@@ -10,6 +10,14 @@ setup(
     long_description_content_type='text/markdown',
     url='https://github.com/wazacraft/cli-FSD',
     packages=find_packages(),
+    package_data={
+        'cli_FSD': [
+            'config_files/*.json',
+            'small_context/server.py',
+            'small_context/cache.py',
+            'small_context/test_server.py'
+        ]
+    },
     entry_points={
         'console_scripts': [
             '@=cli_FSD.main:main', 
@@ -21,8 +29,17 @@ setup(
         'python-dotenv',
         'requests',
         'ollama',
-        'groq'
+        'groq',
+        'beautifulsoup4',
+        'aiohttp',
+        'redis',
+        'pylint',
+        'beautifulsoup4',
+        'flake8',
+        'rich',
+        'aiohttp'
     ],
+    include_package_data=True,
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
@@ -30,4 +47,3 @@ setup(
     ],
     python_requires='>=3.6',
 )
-  

@@ -3,15 +3,17 @@
 import argparse
 import sys
 import logging
-from .config import initialize_config
-from .utils import (
+from . import configuration
+from .configuration import initialize_config
+
+from cli_FSD.utils import (
     print_instructions_once_per_day,
     display_greeting,
     cleanup_previous_assembled_scripts
 )
-from .chat_models import initialize_chat_models
-from .command_handlers import handle_command_mode
-from .script_handlers import process_input_based_on_mode
+from cli_FSD.chat_models import initialize_chat_models
+from cli_FSD.command_handlers import handle_command_mode
+from cli_FSD.script_handlers import process_input_based_on_mode
 
 def main():
     # Configure logging
@@ -54,21 +56,100 @@ def main():
             if not user_input:
                 continue  # Skip empty inputs
 
+            # Parse model selection flags if command starts with @
+            if user_input.startswith("@"):
+                try:
+                    # Split into parts but preserve quoted strings
+                    parts = []
+                    current = []
+                    in_quotes = False
+                    for char in user_input[1:].strip():  # Skip @ and leading space
+                        if char == '"':
+                            in_quotes = not in_quotes
+                        elif char.isspace() and not in_quotes:
+                            if current:
+                                parts.append(''.join(current))
+                                current = []
+                        else:
+                            current.append(char)
+                    if current:
+                        parts.append(''.join(current))
+                    
+                    # Process flags
+                    i = 0
+                    flags_changed = False
+                    while i < len(parts) and parts[i].startswith("-"):
+                        flag = parts[i]
+                        if flag == "-o":
+                            config.session_model = "ollama"
+                            config.use_ollama = True
+                            config.use_claude = config.use_groq = False
+                            flags_changed = True
+                        elif flag == "-c":
+                            config.session_model = "claude"
+                            config.use_claude = True
+                            config.use_ollama = config.use_groq = False
+                            flags_changed = True
+                        elif flag == "-g":
+                            config.session_model = "groq"
+                            config.use_groq = True
+                            config.use_claude = config.use_ollama = False
+                            flags_changed = True
+                        elif flag == "-a":
+                            config.autopilot_mode = True
+                            flags_changed = True
+                        elif flag == "-ci":
+                            config.scriptreviewer_on = True
+                            flags_changed = True
+                        elif flag == "-d":
+                            # Reset all settings to default
+                            config.session_model = None
+                            config.use_ollama = config.use_claude = config.use_groq = False
+                            config.autopilot_mode = config.scriptreviewer_on = False
+                            flags_changed = True
+                        else:
+                            break
+                        i += 1
+
+                    # Save preferences if flags were changed
+                    if flags_changed:
+                        config.save_preferences()
+                        chat_models = initialize_chat_models(config)
+                        if config.session_model:
+                            print(f"Using model: {config.session_model}")
+                        else:
+                            print("Using default model settings")
+                        if config.autopilot_mode:
+                            print("Autopilot mode enabled")
+
+                    # Reconstruct query preserving quotes
+                    user_input = " ".join(parts[i:])
+                    
+                    if not user_input:
+                        continue
+                        
+                except Exception as e:
+                    print(f"{config.RED}Error parsing command: {str(e)}{config.RESET}")
+                    continue
+
             if user_input.upper() == 'CMD':
                 handle_command_mode(config, chat_models)
             elif user_input.lower() == 'safe':
                 config.safe_mode = True
                 config.autopilot_mode = False
+                config.save_preferences()
                 print("Switched to safe mode. You will be prompted before executing any commands.")
                 logging.info("Switched to safe mode.")
             elif user_input.lower() == 'autopilot':
                 config.safe_mode = False
                 config.autopilot_mode = True
+                config.save_preferences()
                 print("Switched to autopilot mode.")
                 logging.info("Switched to autopilot mode.")
             elif user_input.lower() == 'normal':
                 config.safe_mode = False
                 config.autopilot_mode = False
+                config.save_preferences()
                 print("Switched to normal mode.")
                 logging.info("Switched to normal mode.")
             else:
@@ -91,8 +172,14 @@ def main():
                     logging.error(error_message)
                 config.llm_suggestions = None
         except (KeyboardInterrupt, EOFError):
-            print("\nExiting cli-FSD. Goodbye!")
+            print("\nExiting cli-FSD...")
             logging.info("cli-FSD exited by user.")
+            
+            # Handle cleanup of assembled scripts
+            from .script_handlers import handle_script_cleanup
+            handle_script_cleanup(config)
+            
+            print("Goodbye!")
             break
 
     print("Operation completed.")
@@ -110,5 +197,6 @@ def parse_arguments():
     parser.add_argument("-ci", "--assistantsAPI", action="store_true", help="Use OpenAI for error resolution")
     parser.add_argument("-o", "--ollama", action="store_true", help="Use Ollama for processing requests")
     parser.add_argument("-g", "--groq", action="store_true", help="Use Groq for processing requests")
+    parser.add_argument("-d", "--default", action="store_true", help="Reset to default model settings")
     parser.add_argument("query", nargs=argparse.REMAINDER, help="User query to process directly")
     return parser.parse_args()
