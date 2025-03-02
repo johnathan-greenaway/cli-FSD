@@ -31,7 +31,7 @@ blocks:
                 sed -i "s/version=[\"'][^\"']*[\"']/version=\"$BASE_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
-                TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload dist/*
+                TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose dist/*
               fi
             
             # Handle develop branch (.dev1 suffix)
@@ -42,7 +42,7 @@ blocks:
                 sed -i "s/version=[\"'][^\"']*[\"']/version=\"$DEV_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
-                TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --skip-existing dist/*
+                TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose --skip-existing dist/*
               fi
             
             # Handle feature branches (.dev0+feature.name suffix)
@@ -54,5 +54,5 @@ blocks:
                 sed -i "s/version=[\"'][^\"']*[\"']/version=\"$DEV_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
-                TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --skip-existing dist/*
+                TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose --skip-existing dist/*
               fi
