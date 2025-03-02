@@ -11,6 +11,12 @@ import threading
 import requests
 from .resources import assembler as AssemblyAssist
 
+# Add this near the top of your script_handlers.py file, right after your imports
+def get_user_confirmation(prompt):
+    """Ask user for confirmation with the given prompt."""
+    response = input(f"{prompt} (yes/no): ").strip().lower()
+    return response == "yes"
+
 def process_input_based_on_mode(query, config, chat_models):
     if config.safe_mode:
         process_input_in_safe_mode(query, config, chat_models)
