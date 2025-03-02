@@ -7,6 +7,8 @@ agent:
 blocks:
   - name: Test and Deploy
     task:
+      secrets: 
+        - name: TWINE_PASSWORD
       jobs:
         - name: pytest
           commands:
