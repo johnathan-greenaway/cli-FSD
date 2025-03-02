@@ -9,7 +9,7 @@ from .utils import print_streamed_message, get_system_info, animated_loading, sa
 from .chat_models import chat_with_model
 import threading
 import requests
-from .config import Config
+from .resources import assembler as AssemblyAssist
 
 def process_input_based_on_mode(query, config, chat_models):
     if config.safe_mode:
@@ -430,6 +430,11 @@ def consult_openai_for_error_resolution(error_message, system_info=""):
     try:
         # Use cached system info
         system_info = get_cached_system_info()
+        
+        # Get the config object properly - this is missing
+        # Either pass config as a parameter or import it
+        from .config import Config
+        config = Config()  # Or however you initialize your config
         
         # Get current LLM suggestion with proper fallback
         llm_suggestion = getattr(config, 'llm_suggestions', None) or "No previous LLM suggestion."
