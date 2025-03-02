@@ -2,10 +2,10 @@ version: v1.0
 name: Python
 agent:
   machine:
-    type: f1-standard-2
+    type: e2-standard-2
     os_image: ubuntu2204
 blocks:
-  - name: Test
+  - name: Test and Deploy
     task:
       jobs:
         - name: pytest
@@ -19,8 +19,8 @@ blocks:
             - flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
             - pip install pytest
             - pytest
-            - '# Deploy only on master branch'
-            - 'if [[ "${SEMAPHORE_GIT_BRANCH}" == "master" ]]; then'
+            - '# Deploy only on release branch'
+            - 'if [[ "${SEMAPHORE_GIT_BRANCH}" == "release-branch" ]]; then'
             - '    pip install twine build'
             - '    python -m build'
             - '    TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload dist/*'
