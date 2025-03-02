@@ -10,11 +10,26 @@ from .utils import print_streamed_message, get_system_info, animated_loading, sa
 from .chat_models import chat_with_model
 from .resources.assembler import AssemblyAssist
 import threading
-import requests
+import importlib.util
+
+# Check if requests is available and import it
+requests = None
+if importlib.util.find_spec("requests"):
+    import requests
+else:
+    print("Warning: requests package not installed. Some features may be limited.")
+
 from .configuration import Config
 from .linting.code_checker import CodeChecker
-
 from .agents.context_agent import ContextAgent
+
+# Global response context cache to store information from previous responses
+_response_context = {
+    'previous_responses': [],  # List of previous responses
+    'browser_attempts': 0,     # Number of browser attempts made
+    'collected_info': {},      # Information collected from various tools
+    'tolerance_level': 'medium'  # Default tolerance level: 'strict', 'medium', 'lenient'
+}
 
 # Cache for storing content from MCP tools
 _content_cache = {
@@ -106,13 +121,348 @@ def _find_matching_content(query):
     
     return None
 
-# Ensure query is not empty before processing
+def set_evaluation_tolerance(level: str):
+    """
+    Set the tolerance level for response evaluation.
+    
+    Args:
+        level: 'strict', 'medium', or 'lenient'
+    """
+    if level in ['strict', 'medium', 'lenient']:
+        _response_context['tolerance_level'] = level
+        print(f"Response evaluation tolerance set to: {level}")
+    else:
+        print(f"Invalid tolerance level: {level}. Using default: 'medium'")
+        _response_context['tolerance_level'] = 'medium'
+
+def is_raw_mcp_response(response: str) -> bool:
+    """
+    Check if a response appears to be a raw MCP/browser response.
+    
+    Args:
+        response: The response to check
+        
+    Returns:
+        bool: True if it appears to be a raw MCP response
+    """
+    # Check for common patterns in raw MCP responses
+    if len(response) > 1000:  # Raw responses tend to be long
+        # Check for JSON-like structure
+        if (response.startswith('{') and response.endswith('}')) or (response.startswith('[') and response.endswith(']')):
+            return True
+        
+        # Check for HTML-like content
+        if '<html' in response.lower() or '<body' in response.lower():
+            return True
+            
+        # Check for common web content patterns
+        if 'http://' in response or 'https://' in response:
+            return True
+    
+    return False
+
+def evaluate_response(query: str, response: str, config, chat_models, response_type="general") -> bool:
+    """
+    Use LLM to evaluate if a response adequately answers the user's query.
+    Returns True if the response is adequate, False otherwise.
+    
+    The evaluation strictness depends on the current tolerance level.
+    """
+    # For raw MCP/browser responses, we should always process them first
+    if response_type in ["browser", "mcp"] or is_raw_mcp_response(response):
+        print(f"{config.CYAN}Detected raw browser/MCP response, skipping evaluation...{config.RESET}")
+        return True
+    
+    # Store response in context for potential future use
+    _response_context['previous_responses'].append({
+        'query': query,
+        'response': response[:500] if len(response) > 500 else response,  # Store truncated version
+        'timestamp': datetime.now().isoformat()
+    })
+    
+    # Adjust evaluation criteria based on tolerance level
+    tolerance = _response_context['tolerance_level']
+    
+    if tolerance == 'lenient':
+        strictness = "Be lenient in your evaluation. Accept responses that provide some useful information, even if not complete."
+        threshold = 0.6  # Lower threshold for acceptance
+    elif tolerance == 'strict':
+        strictness = "Be very strict in your evaluation. Only accept responses that fully and accurately answer the question."
+        threshold = 0.9  # Higher threshold for acceptance
+    else:  # medium (default)
+        strictness = "Use balanced judgment in your evaluation. Accept responses that adequately address the main points."
+        threshold = 0.75  # Moderate threshold
+    
+    evaluation = chat_with_model(
+        message=(
+            f"User Query: {query}\n\n"
+            f"Response: {response}\n\n"
+            "Rate how well this response answers the user's question on a scale of 0.0 to 1.0, where:\n"
+            "- 0.0 means completely inadequate/irrelevant\n"
+            "- 1.0 means perfect and complete answer\n\n"
+            "Consider:\n"
+            "1. Does it directly address what was asked?\n"
+            "2. Does it provide actionable information?\n"
+            "3. Is it specific enough to be useful?\n"
+            "4. For CLI commands, does it provide the correct command?\n"
+            "5. For search results, does it provide relevant information?\n"
+            "Respond with ONLY a number between 0.0 and 1.0."
+        ),
+        config=config,
+        chat_models=chat_models,
+        system_prompt=(
+            f"You are a response quality evaluator. {strictness} "
+            "For CLI commands, ensure they are correct and complete. "
+            "For search results, ensure they provide relevant information."
+        )
+    )
+    
+    try:
+        # Extract numeric score from response
+        score = float(evaluation.strip())
+        print(f"Response quality score: {score:.2f} (threshold: {threshold:.2f})")
+        return score >= threshold
+    except ValueError:
+        # Fallback to simple yes/no if numeric parsing fails
+        return evaluation.strip().lower() == 'yes'
+
+def get_fallback_response(query: str, original_response: str, config, chat_models) -> str:
+    """
+    Get a more helpful response from the fallback LLM, using previous responses as context.
+    """
+    # Gather context from previous responses
+    context = ""
+    if _response_context['previous_responses']:
+        # Get up to 3 most recent previous responses as context
+        recent_responses = _response_context['previous_responses'][-3:]
+        context = "Information from previous responses:\n"
+        for i, resp in enumerate(recent_responses):
+            if resp['query'] != query:  # Skip duplicates of current query
+                context += f"Response {i+1}: {resp['response'][:300]}...\n\n"
+    
+    # Add any collected information from tools
+    tool_info = ""
+    if _response_context['collected_info']:
+        tool_info = "Information collected from tools:\n"
+        for tool, info in _response_context['collected_info'].items():
+            tool_info += f"- {tool}: {str(info)[:300]}...\n"
+    
+    return chat_with_model(
+        message=(
+            f"Original query: {query}\n\n"
+            f"Previous response: {original_response}\n\n"
+            f"{context}\n"
+            f"{tool_info}\n"
+            "This response was deemed inadequate. Please provide a more helpful response that:\n"
+            "1. Directly addresses the user's question\n"
+            "2. Provides specific, actionable information\n"
+            "3. Draws from your knowledge and the context provided\n"
+            "4. For CLI commands, provides the exact command needed\n"
+            "5. For general queries, provides comprehensive information\n"
+            "6. Incorporates any useful information from previous responses"
+        ),
+        config=config,
+        chat_models=chat_models,
+        system_prompt=(
+            "You are a helpful expert assistant. Provide detailed, accurate responses "
+            "that directly address the user's needs. If the query is about software or "
+            "system operations, include specific steps or commands when appropriate. "
+            "Use any relevant information from previous responses to improve your answer."
+        )
+    )
+
+def format_browser_response(query: str, response: str, config, chat_models) -> str:
+    """
+    Format a raw browser/MCP response into a more readable format.
+    
+    Args:
+        query: The original user query
+        response: The raw browser/MCP response
+        config: Configuration object
+        chat_models: Chat models to use
+        
+    Returns:
+        str: Formatted response
+    """
+    print(f"{config.CYAN}Formatting raw browser/MCP response...{config.RESET}")
+    
+    # Truncate very long responses for processing
+    truncated_response = response[:5000] if len(response) > 5000 else response
+    
+    formatted_response = chat_with_model(
+        message=(
+            f"The following is a raw response from a browser/MCP tool for the query: '{query}'\n\n"
+            f"{truncated_response}\n\n"
+            "Please format this information into a clear, concise, and well-structured response that directly "
+            "answers the user's query. Include all relevant information from the raw response."
+        ),
+        config=config,
+        chat_models=chat_models,
+        system_prompt=(
+            "You are an expert at formatting raw web data into helpful responses. "
+            "Focus on extracting the most relevant information and presenting it clearly."
+        )
+    )
+    
+    # Store the formatted response in context
+    _response_context['collected_info']['formatted_browser'] = formatted_response[:500]
+    
+    return formatted_response
+
+def process_response(query: str, response: str, config, chat_models, allow_browser_fallback=True, response_type="general") -> str:
+    """
+    Process a response through evaluation and fallback if needed.
+    Returns the final response to use.
+    
+    Args:
+        query: The original user query
+        response: The response to evaluate
+        config: Configuration object
+        chat_models: Chat models to use
+        allow_browser_fallback: Whether to allow browser fallback if response is inadequate
+        response_type: Type of response - "general", "cli", "browser", or "mcp"
+    """
+    # For raw browser/MCP responses, format them first
+    if response_type in ["browser", "mcp"] or is_raw_mcp_response(response):
+        return format_browser_response(query, response, config, chat_models)
+    
+    # For general and CLI responses, evaluate and use fallbacks if needed
+    if not evaluate_response(query, response, config, chat_models, response_type):
+        print(f"{config.YELLOW}Initial response was inadequate. Getting better response...{config.RESET}")
+        
+        # Try fallback LLM first
+        improved_response = get_fallback_response(query, response, config, chat_models)
+        
+        # If fallback still inadequate and browser fallback is allowed, try browser
+        if allow_browser_fallback and not evaluate_response(query, improved_response, config, chat_models, response_type):
+            if _response_context['browser_attempts'] < 2:  # Limit browser attempts
+                print(f"{config.YELLOW}Fallback response still inadequate. Trying browser search...{config.RESET}")
+                _response_context['browser_attempts'] += 1
+                
+                # Try browser search
+                browser_response = try_browser_search(query, config, chat_models)
+                if browser_response:
+                    # Store browser result in context
+                    _response_context['collected_info']['browser_search'] = browser_response[:500]  # Store truncated version
+                    
+                    # Format the browser response
+                    formatted_browser = format_browser_response(query, browser_response, config, chat_models)
+                    
+                    # Combine browser results with previous knowledge
+                    final_response = chat_with_model(
+                        message=(
+                            f"Original query: {query}\n\n"
+                            f"Previous responses: {improved_response}\n\n"
+                            f"Browser search results: {formatted_browser}\n\n"
+                            "Combine all this information to provide the most accurate and complete response."
+                        ),
+                        config=config,
+                        chat_models=chat_models,
+                        system_prompt=(
+                            "You are a helpful expert assistant. Synthesize information from multiple sources "
+                            "to provide the most accurate and complete response to the user's query."
+                        )
+                    )
+                    return final_response
+            else:
+                print(f"{config.YELLOW}Maximum browser attempts reached. Using best available response.{config.RESET}")
+        
+        return improved_response
+    return response
+
+def try_browser_search(query: str, config, chat_models) -> str:
+    """
+    Attempt to use browser search to find an answer.
+    
+    Args:
+        query: The user query
+        config: Configuration object
+        chat_models: Chat models to use
+        
+    Returns:
+        str: Browser search results or empty string if failed
+    """
+    search_query = query
+    # Clean up query for search
+    for term in ['search', 'find', 'lookup', 'what is', 'how to', 'browse']:
+        search_query = search_query.replace(term, '').strip()
+    
+    url = f"https://www.google.com/search?q={search_query}"
+    print(f"{config.CYAN}Trying browser search for: {search_query}{config.RESET}")
+    
+    try:
+        # Try MCP browser tool first
+        try:
+            response = use_mcp_tool(
+                server_name="small-context",
+                tool_name="browse_web",
+                arguments={"url": url}
+            )
+            if response:
+                return response
+        except Exception as e:
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying alternative search...{config.RESET}")
+        
+        # Fallback to using WebBrowser class directly
+        from .small_context.protocol import WebBrowser
+        browser = WebBrowser()
+        result = browser.browse(url)
+        return json.dumps(result)
+    except Exception as e:
+        print(f"{config.YELLOW}Browser search failed: {str(e)}{config.RESET}")
+        return ""
+
+def handle_cli_command(query: str, config, chat_models) -> str:
+    """Handle CLI command generation and evaluation."""
+    response = chat_with_model(
+        query,
+        config=config,
+        chat_models=chat_models,
+        system_prompt=(
+            "You are a CLI expert. If this request can be handled with CLI commands, "
+            "provide the appropriate command wrapped in ```bash\n[command]\n``` markers. "
+            "If no CLI command is suitable, respond with 'NO_CLI_COMMAND'."
+        )
+    )
+    
+    if "NO_CLI_COMMAND" not in response:
+        print(f"{config.CYAN}Generated CLI command, evaluating...{config.RESET}")
+        return process_response(query, response, config, chat_models, response_type="cli")
+    return response
+
+def handle_web_search(query: str, response: str, config, chat_models) -> str:
+    """Handle web search result evaluation."""
+    print(f"{config.CYAN}Processing search result...{config.RESET}")
+    return process_response(query, response, config, chat_models, allow_browser_fallback=False, response_type="browser")
+
+def get_search_url(query):
+    """Generate a search URL from a query."""
+    search_terms = ['search', 'find', 'lookup', 'what is', 'how to']
+    if any(term in query.lower() for term in search_terms):
+        search_query = query
+        for term in search_terms:
+            search_query = search_query.replace(term, '').strip()
+        return f"https://www.google.com/search?q={search_query}"
+    return None
+
 def _validate_query(query: str) -> bool:
     """Validate that the query is not empty and contains actual content."""
     return bool(query and query.strip())
 
 def process_input_based_on_mode(query, config, chat_models):
+    """Process user input based on the current mode and query type."""
+    global _response_context
     global _content_cache
+    
+    # Reset browser attempts counter for new queries
+    _response_context['browser_attempts'] = 0
+    
+    # Check for tolerance level commands
+    if query.lower().startswith("set tolerance "):
+        level = query.lower().replace("set tolerance ", "").strip()
+        set_evaluation_tolerance(level)
+        print(f"{config.GREEN}Tolerance level set to: {level}{config.RESET}")
+        return None
     
     # Validate query
     if not _validate_query(query):
@@ -156,8 +506,16 @@ def process_input_based_on_mode(query, config, chat_models):
         print_streamed_message(llm_response, config.CYAN)
         return None
     
-    llm_response = None
+    # Check if this is explicitly a browser request
+    is_browser_request = any(term in query.lower() for term in ['browse', 'open website', 'go to', 'visit'])
     
+    # First try CLI commands for system operations (unless it's a browser request)
+    if not is_browser_request and any(word in query.lower() for word in ['install', 'setup', 'configure', 'run', 'start', 'stop', 'restart']):
+        response = handle_cli_command(query, config, chat_models)
+        if "NO_CLI_COMMAND" not in response:
+            return response
+    
+    # Use ContextAgent to analyze the request and determine which tool to use
     try:
         agent = ContextAgent()
         analysis = agent.analyze_request(query)
@@ -167,7 +525,9 @@ def process_input_based_on_mode(query, config, chat_models):
             # Fall back to direct LLM processing if analysis fails
             print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
             llm_response = chat_with_model(query, config, chat_models)
-            return llm_response
+            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+            print_streamed_message(final_response, config.CYAN)
+            return None
         
         # Get LLM's tool selection decision with the analysis prompt
         llm_analysis = chat_with_model(
@@ -187,7 +547,9 @@ def process_input_based_on_mode(query, config, chat_models):
         if not llm_analysis:
             print(f"{config.YELLOW}No response received from tool selection LLM analysis.{config.RESET}")
             llm_response = chat_with_model(query, config, chat_models)
-            return llm_response
+            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+            print_streamed_message(final_response, config.CYAN)
+            return None
         
         try:
             # Extract JSON from the LLM analysis response
@@ -200,20 +562,19 @@ def process_input_based_on_mode(query, config, chat_models):
                 # Get response using selected tool
                 selected_tool = tool_selection.get("selected_tool", "").lower()
                 if selected_tool == "small_context":
-                    # Rest of the small_context handling code...
-                    # [Ensure that existing small_context handling code is placed here]
-                    
-                    # Example placeholder for small_context handling:
+                    # Handle small_context tool
                     parameters = tool_selection.get("parameters", {})
                     url = parameters.get("url")
                     if not url or url == "[URL will be determined based on request]":
                         print(f"{config.RED}No valid URL provided in tool selection.{config.RESET}")
+                        llm_response = chat_with_model(query, config, chat_models)
+                        final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+                        print_streamed_message(final_response, config.CYAN)
                         return None
 
                     # Update the request with the LLM-selected URL
                     result = agent.execute_tool_selection(tool_selection)
                     if result.get("tool") == "use_mcp_tool":
-                        from .utils import use_mcp_tool
                         # Execute MCP tool with debug output
                         print(f"{config.CYAN}Executing MCP tool: {result['operation']}{config.RESET}")
                         print(f"{config.CYAN}Using URL: {url}{config.RESET}")
@@ -301,6 +662,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                     
                                     # Print interaction hint
                                     print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
+                                    return None
                                 else:
                                     formatted_response = json.dumps(content, indent=2)
                                     llm_response = chat_with_model(
@@ -309,6 +671,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                         chat_models=chat_models
                                     )
                                     print_streamed_message(llm_response, config.CYAN)
+                                    return None
                             else:
                                 formatted_response = str(content)
                                 llm_response = chat_with_model(
@@ -317,7 +680,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                     chat_models=chat_models
                                 )
                                 print_streamed_message(llm_response, config.CYAN)
-                            
+                                return None
                         except json.JSONDecodeError:
                             # Handle raw response directly
                             llm_response = chat_with_model(
@@ -326,9 +689,11 @@ def process_input_based_on_mode(query, config, chat_models):
                                 chat_models=chat_models
                             )
                             print_streamed_message(llm_response, config.CYAN)
-                        return None
+                            return None
                     else:
                         llm_response = f"Error: {result.get('error', 'Unknown error')}"
+                        print_streamed_message(llm_response, config.CYAN)
+                        return None
                 elif selected_tool == "default":
                     # Handle default tool case - generate a shell script for simple commands
                     parameters = tool_selection.get("parameters", {})
@@ -365,194 +730,83 @@ def process_input_based_on_mode(query, config, chat_models):
                                 "If in doubt, generate a command rather than a text response."
                             )
                         )
+                    
+                    print_streamed_message(llm_response, config.CYAN)
+                    return None
+                else:
+                    # Default to standard LLM processing
+                    llm_response = chat_with_model(query, config, chat_models)
+                    final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+                    print_streamed_message(final_response, config.CYAN)
+                    return None
             else:
                 # Fallback if JSON extraction fails
-                llm_response = chat_with_model(
-                    query, 
-                    config, 
-                    chat_models
-                )
+                llm_response = chat_with_model(query, config, chat_models)
+                final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+                print_streamed_message(final_response, config.CYAN)
+                return None
         except (json.JSONDecodeError, KeyError, AttributeError) as e:
-            print(
-                f"{config.YELLOW}Failed to process tool selection: {str(e)}"
-                f"{config.RESET}"
-            )
+            print(f"{config.YELLOW}Failed to process tool selection: {str(e)}{config.RESET}")
             llm_response = chat_with_model(query, config, chat_models)
+            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+            print_streamed_message(final_response, config.CYAN)
+            return None
     except Exception as e:
-        print(
-            f"{config.YELLOW}Using standard processing due to error: {str(e)}"
-            f"{config.RESET}"
-        )
+        print(f"{config.YELLOW}Using standard processing due to error: {str(e)}{config.RESET}")
         llm_response = chat_with_model(query, config, chat_models)
-
-    if config.safe_mode:
-        print_streamed_message(llm_response, config.CYAN)
-        scripts = extract_script_from_response(llm_response)
-        if scripts:
-            code_checker = CodeChecker()
-            for script, file_extension, script_type in scripts:
-                # Lint code and show results
-                lint_results = code_checker.lint_code(script, file_extension, is_autopilot=config.autopilot_mode)
-                code_checker.display_results(lint_results, script, file_extension)
-                
-                print(f"\nFound a {script_type} script:")
-                print(script)
-                
-                # Determine if there are critical errors that should block execution
-                critical_errors = [
-                    err for err in lint_results.get('errors', [])
-                    if any(critical in err.lower() for critical in [
-                        'syntax error', 'undefined variable', 'command not found'
-                    ])
-                ]
-                
-                if critical_errors:
-                    print(f"{config.RED}Critical errors found that may prevent successful execution:{config.RESET}")
-                    for error in critical_errors:
-                        print(f"{config.RED}❌ {error}{config.RESET}")
-                    
-                    if not get_user_confirmation("Proceed despite critical errors?", config):
-                        print("Script execution aborted due to critical errors.")
-                        continue
-                
-                # Save and execute script if user confirms
-                full_filename = save_script(
-                    query, script,
-                    file_extension=file_extension,
-                    auto_save=False,
-                    config=config
-                )
-                
-                if full_filename:
-                    print(f"Script saved as {full_filename}")
-                    if get_user_confirmation(f"Execute saved script {full_filename}?", config):
-                        if script_type == "python":
-                            execute_script(full_filename, "py", config)
-                        else:
-                            execute_shell_command(f"bash {full_filename}", config)
-                else:
-                    print("Failed to save script. Attempting direct execution...")
-                    if get_user_confirmation("Execute script directly?", config):
-                        execute_script_directly(script, file_extension, config)
-        else:
-            print("No executable script found in the LLM response.")
-
-    elif config.autopilot_mode:
-        print_streamed_message(llm_response, config.CYAN)
-        scripts = extract_script_from_response(llm_response)
-        if scripts:
-            # In autopilot mode, execute each script directly without saving
-            for script, file_extension, script_type in scripts:
-                # Perform basic linting to catch critical errors
-                code_checker = CodeChecker()
-                lint_results = code_checker.lint_code(script, file_extension, is_autopilot=True)
-                
-                # Only check for syntax errors in autopilot mode
-                critical_errors = [
-                    err for err in lint_results.get('errors', [])
-                    if 'syntax error' in err.lower()
-                ]
-                
-                if critical_errors:
-                    print(f"{config.RED}Syntax errors found in {script_type} script:{config.RESET}")
-                    for error in critical_errors:
-                        print(f"{config.RED}❌ {error}{config.RESET}")
-                    continue
-                
-                # Execute the script directly without saving
-                execute_script_directly(script, file_extension, config)
-        else:
-            print("No executable script found in the LLM response.")
-
-    else:
-        print_streamed_message(llm_response, config.CYAN)
-        scripts = extract_script_from_response(llm_response)
-        if scripts:
-            code_checker = CodeChecker()
-            for script, file_extension, _ in scripts:
-                # Perform linting and show results
-                lint_results = code_checker.lint_code(script, file_extension, is_autopilot=config.autopilot_mode)
-                code_checker.display_results(lint_results, script, file_extension)
-                
-                if lint_results['errors'] and not config.autopilot_mode:
-                    proceed = input(f"{config.YELLOW}Code contains errors. Would you like to proceed? (yes/no):{config.RESET} ").lower()
-                    if proceed != 'yes':
-                        print("Skipping this script due to errors.")
-                        continue
-                
-                user_decide_and_act(query, script, file_extension, config)
-        else:
-            print("No executable script found in the LLM response.")
+        final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+        print_streamed_message(final_response, config.CYAN)
+        return None
 
 def process_input_in_safe_mode(query, config, chat_models):
+    """Process input in safe mode with additional checks and confirmations."""
     llm_response = chat_with_model(query, config, chat_models)
-    print_streamed_message(llm_response, config.CYAN)
-
-    scripts = extract_script_from_response(llm_response)
-    if scripts:
-        for script, file_extension, _ in scripts:
-            print(f"Found a {file_extension} script:")
-            print(script)
-            
-            # Pass the correct parameters: query, script, file_extension, auto_save=False
-            full_filename = save_script(query, script, file_extension=file_extension, auto_save=False, config=config)
-            if full_filename:
-                print(f"Script extracted and saved as {full_filename}.")
-                
-                if config.safe_mode:
-                    user_confirmation = input(f"Do you want to execute the saved script {full_filename}? (yes/no): ").strip().lower()
-                    if user_confirmation == "yes":
-                        execute_shell_command(f"bash {full_filename}", config)
-                    else:
-                        print("Script execution aborted by the user.")
-            else:
-                print("Failed to save the script.")
-    else:
-        print("No executable script found in the LLM response.")
+    final_response = process_response(query, llm_response, config, chat_models)
+    print_streamed_message(final_response, config.CYAN)
 
 def process_input_in_autopilot_mode(query, config, chat_models):
-    """Process input in autopilot mode with dynamic code display."""
-    from contextlib import contextmanager
-    
-    @contextmanager
-    def loading_animation():
-        stop_event = threading.Event()
-        loading_thread = threading.Thread(
-            target=animated_loading,
-            args=(stop_event,),
-            daemon=True  # Ensure thread cleanup on program exit
-        )
-        try:
-            loading_thread.start()
-            yield
-        finally:
-            stop_event.set()
-            loading_thread.join(timeout=1.0)  # Prevent hanging
-    
-    with loading_animation():
-        print(f"{config.CYAN}Sending command to LLM...{config.RESET}")
-        llm_response = chat_with_model(query, config, chat_models)
-        print_streamed_message(llm_response, config.CYAN)
-        
-        scripts = extract_script_from_response(llm_response)
-        if not scripts:
-            print("No executable script found in the LLM response.")
-            return
-        
-        code_checker = CodeChecker()
-        for script, file_extension, script_type in scripts:
-            # Display code with syntax highlighting and linting
-            lint_results = code_checker.lint_code(script, file_extension)
-            code_checker.display_results(lint_results, script, file_extension)
-            
-            # Execute script directly without blocking on errors
-            if script_type == "python":
-                execute_script_directly(script, "py", config)
-            else:
-                execute_script_directly(script, "sh", config)
+    """Process input in autopilot mode with automatic execution."""
+    llm_response = chat_with_model(query, config, chat_models)
+    final_response = process_response(query, llm_response, config, chat_models)
+    print_streamed_message(final_response, config.CYAN)
 
-# Pre-compile regex patterns at module level for better performance
+# Track assembled scripts for cleanup
+_assembled_scripts = set()
+# Pre-compile regex patterns for better performance
 SCRIPT_PATTERN = re.compile(r"```(?:(bash|sh|python))?\n(.*?)```", re.DOTALL)
+CLEANUP_PATTERN = re.compile(r"```(?:bash|sh)\n(.*?)\n```", re.DOTALL)
+
+def assemble_final_script(scripts: list) -> str:
+    """
+    Assemble multiple script blocks into a final executable script.
+    
+    Args:
+        scripts: List of tuples containing (content, extension, script_type)
+    
+    Returns:
+        str: The assembled script ready for execution
+    """
+    if not scripts:
+        return ""
+        
+    # If there's only one script, return it directly
+    if len(scripts) == 1:
+        return scripts[0][0]
+        
+    # For multiple scripts, combine them with proper separators
+    final_script = "#!/bin/bash\n\n"
+    
+    for content, ext, script_type in scripts:
+        if script_type == "python":
+            # For Python scripts, wrap in python -c
+            escaped_content = content.replace('"', '\\"')
+            final_script += f'python3 -c "{escaped_content}"\n\n'
+        else:
+            # For bash scripts, include directly
+            final_script += f"{content}\n\n"
+            
+    return final_script.strip()
+
 
 def extract_script_from_response(response):
     """Extract scripts from LLM response with improved language detection."""
@@ -570,80 +824,37 @@ def extract_script_from_response(response):
         if not content:
             continue
             
-        # Determine script type based on content and language tag
-        if lang == "python":
-            ext = "py"
-            script_type = "python"
+        # Add shebang line if not present
+        if not content.startswith("#!"):
+            if lang == "python":
+                content = "#!/usr/bin/env python3\n" + content
+                ext = "py"
+                script_type = "python"
+            else:
+                content = "#!/bin/bash\n" + content
+                ext = "sh"
+                script_type = "bash"
         else:
-            # Default to shell script
-            ext = "sh"
-            script_type = "bash"
-            
             # Check for shebang line
-            if content.startswith("#!"):
-                first_line = content.split("\n")[0]
-                if "python" in first_line.lower():
-                    ext = "py"
-                    script_type = "python"
+            first_line = content.split("\n")[0]
+            if "python" in first_line.lower():
+                ext = "py"
+                script_type = "python"
+            else:
+                ext = "sh"
+                script_type = "bash"
         
         scripts.append((content, ext, script_type))
     
     return scripts
 
-def assemble_final_script(scripts, api_key):
-    # Use cached system info
-    info_details = get_cached_system_info()
-    
-    # Optimize script joining
-    final_script_prompt = "\n\n".join(
-        script.strip() for script, _, _ in scripts if script.strip()
-    )
-    
-    # Prepare API request
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
-    
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a shell script expert. Combine scripts into a single executable, ensuring Unix compatibility and portability. Return only code, no comments or explanations."
-        },
-        {
-            "role": "user",
-            "content": f"System Info: {info_details}\n\nCombine these scripts:\n\n{final_script_prompt}"
-        }
-    ]
-    
-    try:
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json={
-                "model": "gpt-4-turbo-preview",
-                "messages": messages,
-                "temperature": 0.3,  # Lower temperature for more consistent output
-                "max_tokens": 2000   # Limit response size
-            },
-            timeout=30  # Add timeout
-        )
-        response.raise_for_status()
-        
-        if content := response.json().get('choices', [{}])[0].get('message', {}).get('content', ''):
-            return clean_up_llm_response(content)
-            
-        print("No assembled script was returned by the model.")
-        return None
-    except requests.exceptions.RequestException as e:
-        print(f"API request error: {e}")
-        return None
-    except Exception as e:
-        print(f"Unexpected error during script assembly: {e}")
-        return None
-
-# Track assembled scripts for cleanup
-_assembled_scripts = set()
+def clean_up_llm_response(llm_response):
+    """Clean up LLM response by extracting and formatting script blocks."""
+    script_blocks = CLEANUP_PATTERN.findall(llm_response)
+    if script_blocks:
+        return "\n".join(block.strip() for block in script_blocks if block.strip())
+    print("No executable script blocks found in the response.")
+    return llm_response.strip()
 
 def handle_script_cleanup(config):
     """Handle cleanup of assembled scripts with option to save."""
@@ -690,148 +901,8 @@ def handle_script_cleanup(config):
             except OSError as e:
                 print(f"{config.RED}Warning: Failed to clean up script {script}: {e}{config.RESET}")
 
-def cleanup_assembled_scripts():
-    """Clean up any remaining assembled scripts without prompting."""
-    global _assembled_scripts
-    for script in _assembled_scripts.copy():
-        try:
-            if os.path.exists(script):
-                os.unlink(script)
-                _assembled_scripts.remove(script)
-        except OSError as e:
-            print(f"Warning: Failed to clean up script {script}: {e}")
-
-def auto_handle_script_execution(final_script, config):
-    """Handle script assembly and execution with proper cleanup."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f".assembled_script_{timestamp}.sh"
-    
-    try:
-        # Use tempfile for safer file handling
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as temp_file:
-            temp_file.write(final_script)
-            temp_path = temp_file.name
-            
-        try:
-            # Move temp file to final location
-            os.rename(temp_path, filename)
-            _assembled_scripts.add(filename)  # Track for cleanup
-            
-            print(f"{config.CYAN}Final script assembled and saved as {filename}.{config.RESET}")
-            os.chmod(filename, 0o755)
-            
-            print(f"{config.CYAN}Executing {filename}...{config.RESET}")
-            success = execute_shell_command(f"./{filename}", config)
-            
-            if success:
-                print(f"{config.GREEN}Script execution completed successfully.{config.RESET}")
-            else:
-                print(f"{config.RED}Script execution failed.{config.RESET}")
-                
-            return success
-            
-        except Exception as e:
-            # Clean up temp file if move failed
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-            raise e
-            
-    except Exception as e:
-        print(f"{config.RED}Failed to handle script execution: {e}{config.RESET}")
-        return False
-
-def get_user_confirmation(command: str, config=None) -> bool:
-    """Get user confirmation before executing a command."""
-    if config and config.autopilot_mode:
-        return True
-    print(f"\nAbout to execute command:\n{command}")
-    response = input("Do you want to proceed? (yes/no): ").strip().lower()
-    return response in ['yes', 'y']
-
-def execute_shell_command(command, config, stream_output=True):
-    """Execute a shell command with proper error handling and output management."""
-    if command.startswith('./'):
-        try:
-            script_path = command[2:]
-            os.chmod(script_path, 0o755)
-        except OSError as e:
-            print(f"{config.RED}Failed to set executable permissions: {e}{config.RESET}")
-            return False
-
-    if not get_user_confirmation(command, config):
-        return False
-
-    try:
-        # Use context manager with timeout
-        with subprocess.Popen(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-            encoding='utf-8',
-            errors='replace'  # Handle encoding errors by replacing invalid characters
-        ) as process:
-            output_lines = []
-            
-            # Use select for non-blocking reads with timeout
-            from select import select
-            while True:
-                reads, _, _ = select([process.stdout], [], [], 0.1)
-                if not reads:
-                    # No output available, check if process is still running
-                    if process.poll() is not None:
-                        break
-                    continue
-                    
-                line = process.stdout.readline()
-                if not line:
-                    break
-                    
-                if stream_output:
-                    print(line, end='', flush=True)
-                output_lines.append(line.strip())
-            
-            return_code = process.wait(timeout=300)  # 5 minute timeout
-
-            if return_code != 0:
-                error_context = "\n".join(output_lines)
-                print(f"{config.RED}Error encountered executing command: {error_context}{config.RESET}")
-                
-                if resolution := consult_llm_for_error_resolution(error_context, config):
-                    print(f"{config.CYAN}Suggested resolution:{config.RESET}\n{resolution}")
-                    
-                    if not config.safe_mode or get_user_confirmation("Apply suggested resolution?", config):
-                        return execute_resolution_script(resolution, config)
-                return False
-                
-            return True
-            
-    except subprocess.TimeoutExpired:
-        print(f"{config.RED}Command execution timed out after 5 minutes{config.RESET}")
-        return False
-    except subprocess.CalledProcessError as e:
-        print(f"{config.RED}Command execution failed with error: {e}{config.RESET}")
-        return False
-    except Exception as e:
-        print(f"{config.RED}An error occurred while executing the command: {e}{config.RESET}")
-        return False
-
-# Pre-compile additional regex pattern for cleanup
-CLEANUP_PATTERN = re.compile(r"```(?:bash|sh)\n(.*?)\n```", re.DOTALL)
-
-def clean_up_llm_response(llm_response):
-    script_blocks = CLEANUP_PATTERN.findall(llm_response)
-    if script_blocks:
-        # Use list comprehension for better performance
-        return "\n".join(block.strip() for block in script_blocks if block.strip())
-    print("No executable script blocks found in the response.")
-    return llm_response.strip()
-
 def execute_script(filename, file_extension, config):
-    """Execute a saved script with proper error handling and output capture."""
+    """Execute a saved script with proper error handling."""
     try:
         if file_extension == "py":
             result = subprocess.run(
@@ -841,7 +912,6 @@ def execute_script(filename, file_extension, config):
                 check=False
             )
         elif file_extension in ["sh", "bash", ""]:
-            # Ensure script is executable
             try:
                 os.chmod(filename, 0o755)
             except OSError as e:
@@ -858,17 +928,14 @@ def execute_script(filename, file_extension, config):
             print(f"{config.RED}Running scripts with .{file_extension} extension is not supported.{config.RESET}")
             return
         
-        # Always show output
         if result.stdout:
             print(result.stdout)
         if result.stderr:
             print(f"{config.RED}{result.stderr}{config.RESET}")
             
-        # Handle return code
         if result.returncode != 0:
             print(f"{config.RED}Script execution failed with return code {result.returncode}{config.RESET}")
             
-            # Try to get resolution for the error
             if resolution := consult_llm_for_error_resolution(result.stderr or result.stdout, config):
                 if get_user_confirmation("Would you like to apply the suggested fix?", config):
                     execute_resolution_script(resolution, config)
@@ -882,19 +949,16 @@ def execute_script_directly(script, file_extension, config):
     """Execute a script directly with proper cleanup and error handling."""
     temp_file_path = None
     try:
-        # Add shebang line if missing for shell scripts
         if file_extension in ["sh", "bash", ""]:
             if not script.startswith("#!"):
                 script = "#!/bin/bash\n" + script
 
         if file_extension == "py":
-            # Create a temporary file for Python scripts too
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
                 temp_file.write(script)
                 temp_file_path = temp_file.name
             
             try:
-                # Execute Python script as a subprocess for better isolation
                 result = subprocess.run(
                     ["python", temp_file_path],
                     capture_output=True,
@@ -913,21 +977,18 @@ def execute_script_directly(script, file_extension, config):
                 print(f"{config.RED}Error executing Python script: {e}{config.RESET}")
                 return False
                 
-        elif file_extension in ["sh", "bash", ""]:  # Accept empty extension as shell script
-            # Create temporary shell script
+        elif file_extension in ["sh", "bash", ""]:
             with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as temp_file:
                 temp_file.write(script)
                 temp_file_path = temp_file.name
                 
             try:
-                # Set executable permissions
                 os.chmod(temp_file_path, 0o755)
                 
                 if not config.autopilot_mode and not get_user_confirmation(f"Execute script:\n{script}"):
                     print("Script execution aborted by the user.")
                     return False
                 
-                # Execute the shell script
                 result = subprocess.run(
                     ["bash", temp_file_path],
                     capture_output=True,
@@ -935,7 +996,6 @@ def execute_script_directly(script, file_extension, config):
                     check=False
                 )
                 
-                # Print output regardless of success/failure
                 if result.stdout:
                     print(result.stdout)
                 if result.stderr:
@@ -955,39 +1015,25 @@ def execute_script_directly(script, file_extension, config):
         return False
         
     finally:
-        # Clean up temporary file
         if temp_file_path and os.path.exists(temp_file_path):
             try:
                 os.unlink(temp_file_path)
             except OSError as e:
                 print(f"Warning: Failed to clean up temporary file {temp_file_path}: {e}")
 
-def user_decide_and_act(query, script, file_extension, config):
-    """Handle script execution based on user preferences and mode."""
-    if config.autopilot_mode:
-        # In autopilot mode, execute directly without saving
-        execute_script_directly(script, file_extension, config)
-    else:
-        # Interactive mode
-        auto_save = False  # Default to manual save in interactive mode
-        full_filename = save_script(query, script, file_extension=file_extension, auto_save=auto_save, config=config)
-        
-        if full_filename:
-            print(f"Script saved to {full_filename}.")
-            run = input("Would you like to run this script? (yes/no): ").strip().lower()
-            if run == 'yes':
-                if file_extension == "py":
-                    execute_script(full_filename, file_extension, config)
-                else:
-                    execute_shell_command(f"bash {full_filename}", config)
-        else:
-            run = input("Would you like to run this script without saving? (yes/no): ").strip().lower()
-            if run == 'yes':
-                execute_script_directly(script, file_extension, config)
-            else:
-                print("Script execution aborted by the user.")
+def cleanup_assembled_scripts():
+    """Clean up any remaining assembled scripts without prompting."""
+    global _assembled_scripts
+    for script in _assembled_scripts.copy():
+        try:
+            if os.path.exists(script):
+                os.unlink(script)
+                _assembled_scripts.remove(script)
+        except OSError as e:
+            print(f"Warning: Failed to clean up script {script}: {e}")
 
 def execute_resolution_script(resolution, config):
+    """Execute a resolution script with proper error handling."""
     print(f"{config.CYAN}Executing resolution:{config.RESET}\n{resolution}")
     try:
         subprocess.run(resolution, shell=True, check=True)
@@ -997,20 +1043,44 @@ def execute_resolution_script(resolution, config):
     except Exception as e:
         print(f"An error occurred while executing the resolution: {e}")
 
-# Initialize system info cache
-_system_info_cache = None
+def get_user_confirmation(command: str, config=None) -> bool:
+    """Get user confirmation before executing a command."""
+    if config and config.autopilot_mode:
+        return True
+    print(f"\nAbout to execute command:\n{command}")
+    response = input("Do you want to proceed? (yes/no): ").strip().lower()
+    return response in ['yes', 'y']
 
-def get_cached_system_info():
-    global _system_info_cache
-    if _system_info_cache is None:
-        _system_info_cache = get_system_info()
-    return _system_info_cache
+def auto_handle_script_execution(script: str, config) -> bool:
+    """
+    Automatically handle script execution with proper error handling.
+    
+    Args:
+        script: The script content to execute
+        config: Configuration object containing execution settings
+        
+    Returns:
+        bool: True if execution was successful, False otherwise
+    """
+    if not script:
+        print("No script content provided.")
+        return False
+        
+    # Determine script type based on content
+    script_type = "python" if script.startswith("#!/usr/bin/env python") else "bash"
+    ext = "py" if script_type == "python" else "sh"
+    
+    return execute_script_directly(script, ext, config)
 
 def consult_llm_for_error_resolution(error_message, config):
-    system_info = get_cached_system_info()
+    """Consult LLM for error resolution suggestions."""
+    system_info = get_system_info()
     print(f"{config.CYAN}Consulting LLM for error resolution:{config.RESET} {error_message}")
     
-    # Reuse headers and base message structure
+    if not requests:
+        print(f"{config.YELLOW}Requests package not available. Cannot consult LLM for error resolution.{config.RESET}")
+        return None
+    
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config.api_key}"
@@ -1034,7 +1104,7 @@ def consult_llm_for_error_resolution(error_message, config):
             json={
                 "model": config.current_model,
                 "messages": messages,
-                "temperature": 0.3  # Lower temperature for more focused responses
+                "temperature": 0.3
             }
         )
         response.raise_for_status()
@@ -1045,39 +1115,7 @@ def consult_llm_for_error_resolution(error_message, config):
             
         print("No advice was returned by the model.")
         return None
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         print(f"API request error: {e}")
         return None
 
-def consult_openai_for_error_resolution(error_message, config):
-    """Consult OpenAI for error resolution with improved error handling and caching."""
-    try:
-        # Use cached system info
-        system_info = get_cached_system_info()
-        
-        instructions = "You are a code debugging assistant specializing in shell scripts and system commands. Provide concise, practical solutions."
-        scriptReviewer = AssemblyAssist(instructions)
-        
-        if not scriptReviewer.start_conversation():
-            print(f"{config.RED}Failed to initialize error resolution.{config.RESET}")
-            return None
-            
-        message = f"""
-Error: {error_message}
-System: {system_info}
-Provide a solution command or script.
-"""
-        response = scriptReviewer.send_message(message)
-        
-        if response:
-            print(f"{config.CYAN}Suggested solution:{config.RESET}\n{response}")
-            return response.strip()
-            
-        return None
-        
-    except Exception as e:
-        print(f"{config.RED}Error resolution failed: {e}{config.RESET}")
-        return None
-    finally:
-        if 'scriptReviewer' in locals():
-            scriptReviewer.end_conversation()
