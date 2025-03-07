@@ -51,7 +51,7 @@ def main():
 
     while True:
         try:
-            user_input = input(f"{config.YELLOW}@:{config.RESET} ").strip()
+            user_input = input(f"{config.YELLOW}@{config.SMALL_FONT}(v{config.VERSION}){config.RESET}{config.YELLOW}:{config.RESET} ").strip()
 
             if not user_input:
                 continue  # Skip empty inputs

@@ -39,7 +39,9 @@ def get_system_info():
 
 
 def print_instructions():
-    print(f"{GREEN}{BOLD}Terminal Companion with Full Self Drive Mode{RESET}")
+    from . import configuration
+    config = configuration.Config()
+    print(f"{GREEN}{BOLD}Terminal Companion with Full Self Drive Mode {config.SMALL_FONT}(v{config.VERSION}){RESET}")
     print(f"{GREEN}{BOLD}FSD is ON. {RESET}")
     print("Type 'CMD' to enter command mode and enter 'script' to save and run a script.")
     print("Type 'autopilot' in command mode to toggle autopilot mode on/off.")
@@ -102,8 +104,11 @@ def display_greeting():
         file.write(str(today))
 
     if str(today) != last_run:
+        from . import configuration
+        config = configuration.Config()
         weather = get_weather()
         system_info = get_system_info()
+        print(f"{BOLD}Terminal Companion with Full Self Drive Mode {config.SMALL_FONT}(v{config.VERSION}){RESET}")
         print(f"{weather}")
         print(f"{system_info}")
         print("What would you like to do today?")
