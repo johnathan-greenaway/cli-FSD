@@ -5,12 +5,14 @@ from pathlib import Path
 
 class Config:
     def __init__(self):
+        self.VERSION = "1.7.8"  # Version from setup.py
         self.CYAN = "\033[96m"
         self.YELLOW = "\033[93m"
         self.BOLD = "\033[1m"
         self.RESET = "\033[0m"
         self.RED = "\033[31m"
         self.GREEN = "\033[32m"
+        self.SMALL_FONT = "\033[0;2m"  # Smaller font (dim)
 
         # Project config files
         self.project_root = Path(__file__).parent.parent
