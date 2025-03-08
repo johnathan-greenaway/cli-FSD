@@ -2,21 +2,29 @@
 
 This agent analyzes user requests and determines whether to use the Small Context Protocol
 or other tools like fetch, sequential thinking, etc. based on the nature of the task.
+It can also provide hybrid responses that combine latent knowledge with tool-based answers.
 """
 
 from typing import Any, Dict, List, Optional, Union
 import json
 import time
+import threading
 
 
 class ContextAgent:
-    """Agent for context-aware tool selection."""
+    """Agent for context-aware tool selection with hybrid response capabilities."""
+    
+    def __init__(self):
+        """Initialize the context agent."""
+        self._tool_response_cache = {}
+        self._background_tasks = {}
     
     def analyze_request(self, request: str) -> Dict[str, Any]:
         """Analyze user request to determine optimal tool selection.
         
         This method generates a prompt for the LLM to analyze the request and
-        determine which tools/approaches would be most effective.
+        determine which tools/approaches would be most effective, including
+        the possibility of a hybrid response.
         
         Args:
             request: The user's natural language request
@@ -33,8 +41,10 @@ You are an expert in tool selection and content analysis. Your task is to determ
 
 Respond with a JSON object in this format:
 {{
+    "response_type": "direct_knowledge|tool_based|hybrid",
+    "confidence": 0.0-1.0,
     "selected_tool": "tool_name",
-    "reasoning": "Explanation of why this tool was selected",
+    "reasoning": "Explanation of why this approach was selected",
     "parameters": {{
         "operation": "operation_name",
         "url": "url_if_needed",
@@ -48,6 +58,11 @@ Respond with a JSON object in this format:
     }}
 }}
 
+Response types:
+1. direct_knowledge: Use when you can confidently answer with your latent knowledge
+2. tool_based: Use when a tool is clearly needed to provide an accurate response
+3. hybrid: Use when you can provide a partial answer from latent knowledge but a tool would provide more complete information
+
 Available tools and operations:
 1. small_context
    - browse_web: For web browsing and content extraction
@@ -55,7 +70,6 @@ Available tools and operations:
 2. fetch: For data retrieval
 3. sequential_thinking: For complex reasoning
 4. default: For simple commands. USE THIS FOR WEATHER REQUESTS.
-
 
 Guidelines:
 1. For web browsing:
@@ -70,10 +84,15 @@ Guidelines:
    - Consider the complexity of the request
    - Evaluate need for context preservation
    - Assess if external data is needed
+   - Set confidence level based on how certain you are that the selected approach is optimal
 4. IMPORTANT: For specific commands:
    - Queries that mention weather: Use 'curl wttr.in/[location]' command instead of web browsing
    - Time queries: Use appropriate system commands
-   - File operations: Use standard Unix commands""",
+   - File operations: Use standard Unix commands
+5. For hybrid responses:
+   - Provide a confidence score between 0.5-0.8 (indicating partial confidence)
+   - Select the tool that would provide the most complete information
+   - The system will provide a preview of latent knowledge while preparing the tool response""",
             "requires_llm_processing": True
         }
     
@@ -87,25 +106,102 @@ Guidelines:
             Dict containing execution results
         """
         try:
+            response_type = analysis.get("response_type", "tool_based")
             selected_tool = analysis.get("selected_tool")
             parameters = analysis.get("parameters", {})
+            confidence = analysis.get("confidence", 0.0)
             
-            if selected_tool == "small_context":
-                return self._handle_small_context(
+            # Handle different response types
+            if response_type == "direct_knowledge":
+                return {
+                    "type": "direct_knowledge",
+                    "confidence": confidence,
+                    "requires_tools": False,
+                    "message": "Use latent knowledge to answer directly"
+                }
+            elif response_type == "hybrid":
+                return self._handle_hybrid_response(
+                    selected_tool,
                     parameters,
-                    analysis.get("context_management", {})
+                    analysis.get("context_management", {}),
+                    confidence
                 )
-            elif selected_tool == "fetch":
-                return self._handle_fetch(parameters)
-            elif selected_tool == "sequential_thinking":
-                return self._handle_sequential_thinking(parameters)
-            else:
-                return self._handle_default_tools(parameters)
+            else:  # tool_based (default)
+                if selected_tool == "small_context":
+                    return self._handle_small_context(
+                        parameters,
+                        analysis.get("context_management", {})
+                    )
+                elif selected_tool == "fetch":
+                    return self._handle_fetch(parameters)
+                elif selected_tool == "sequential_thinking":
+                    return self._handle_sequential_thinking(parameters)
+                else:
+                    return self._handle_default_tools(parameters)
         except Exception as e:
             return {
                 "type": "error",
                 "error": f"Tool execution failed: {str(e)}"
             }
+    
+    def _handle_hybrid_response(
+        self,
+        selected_tool: str,
+        parameters: Dict[str, Any],
+        context_config: Dict[str, Any],
+        confidence: float
+    ) -> Dict[str, Any]:
+        """Handle hybrid response that combines latent knowledge with tool-based answers.
+        
+        Args:
+            selected_tool: The tool selected for the complete answer
+            parameters: Parameters for tool execution
+            context_config: Configuration for context management
+            confidence: Confidence level in the latent knowledge portion
+            
+        Returns:
+            Dict containing hybrid response configuration
+        """
+        # Create a unique ID for this hybrid response
+        response_id = f"hybrid_{int(time.time())}"
+        
+        # Prepare the tool response in the background
+        tool_response = None
+        if selected_tool == "small_context":
+            tool_response = self._handle_small_context(parameters, context_config)
+        elif selected_tool == "fetch":
+            tool_response = self._handle_fetch(parameters)
+        elif selected_tool == "sequential_thinking":
+            tool_response = self._handle_sequential_thinking(parameters)
+        else:
+            tool_response = self._handle_default_tools(parameters)
+        
+        # Cache the tool response
+        self._tool_response_cache[response_id] = tool_response
+        
+        # Return hybrid response configuration
+        return {
+            "type": "hybrid",
+            "response_id": response_id,
+            "confidence": confidence,
+            "preview_message": "Provide a brief answer from latent knowledge",
+            "tool_info": {
+                "tool": selected_tool,
+                "parameters": parameters
+            },
+            "requires_user_choice": True
+        }
+    
+    def get_cached_tool_response(self, response_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a cached tool response by ID.
+        
+        Args:
+            response_id: The unique ID of the cached response
+            
+        Returns:
+            The cached tool response or None if not found
+        """
+        return self._tool_response_cache.get(response_id)
     
     def _handle_small_context(
         self,
