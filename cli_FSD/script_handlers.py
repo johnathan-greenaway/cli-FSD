@@ -532,7 +532,12 @@ def process_input_based_on_mode(query, config, chat_models):
                 "the small_context tool with browse_web operation. When using browse_web, "
                 "ensure the response excludes technical details about servers, responses, or parsing. "
                 "Focus only on the actual content. Respond with a JSON object containing your "
-                "analysis and selection. Be precise and follow the specified format."
+                "analysis and selection. Be precise and follow the specified format.\n\n"
+                "IMPORTANT: For each request, decide if you should:\n"
+                "1. Answer with your latent knowledge (direct_knowledge)\n"
+                "2. Use a tool to get information (tool_based)\n"
+                "3. Provide a hybrid response with both latent knowledge and tool-based information (hybrid)\n\n"
+                "For hybrid responses, set confidence between 0.5-0.8 to indicate partial confidence."
             )
         )
         
@@ -551,9 +556,125 @@ def process_input_based_on_mode(query, config, chat_models):
                 json_str = llm_analysis[json_start:json_end]
                 tool_selection = json.loads(json_str)
                 
-                # Get response using selected tool
+                # Get response using selected approach
+                response_type = tool_selection.get("response_type", "tool_based").lower()
                 selected_tool = tool_selection.get("selected_tool", "").lower()
-                if selected_tool == "small_context":
+                confidence = tool_selection.get("confidence", 0.0)
+                
+                # Handle direct knowledge response
+                if response_type == "direct_knowledge":
+                    print(f"{config.CYAN}Using direct knowledge to answer (confidence: {confidence:.2f}){config.RESET}")
+                    llm_response = chat_with_model(
+                        message=query,
+                        config=config,
+                        chat_models=chat_models,
+                        system_prompt=(
+                            "You are a knowledgeable assistant. Answer this question using your built-in knowledge. "
+                            "Provide a comprehensive and accurate response without using external tools. "
+                            "Format your answer clearly with appropriate headings, bullet points, and paragraphs as needed."
+                        )
+                    )
+                    print_streamed_message(llm_response, config.CYAN)
+                    return llm_response
+                    
+                # Handle hybrid response
+                elif response_type == "hybrid":
+                    print(f"{config.CYAN}Using hybrid approach (confidence: {confidence:.2f}){config.RESET}")
+                    
+                    # Execute tool selection to prepare the tool response
+                    result = agent.execute_tool_selection(tool_selection)
+                    
+                    if result.get("type") == "hybrid" and result.get("response_id"):
+                        response_id = result.get("response_id")
+                        
+                        # Get latent knowledge preview
+                        print(f"{config.CYAN}Generating knowledge preview while preparing tool response...{config.RESET}")
+                        preview = chat_with_model(
+                            message=(
+                                f"User query: {query}\n\n"
+                                "Provide a brief, accurate answer using only your built-in knowledge. "
+                                "This is a preview response, so keep it concise (3-5 sentences) but informative. "
+                                "Acknowledge any limitations in your answer."
+                            ),
+                            config=config,
+                            chat_models=chat_models
+                        )
+                        
+                        # Display the preview
+                        print(f"\n{config.CYAN}Knowledge Preview:{config.RESET}")
+                        print_streamed_message(preview, config.CYAN)
+                        
+                        # Get the cached tool response
+                        tool_response = agent.get_cached_tool_response(response_id)
+                        
+                        # Ask user if they want to continue with the tool response
+                        print(f"\n{config.YELLOW}I can provide more complete information using {selected_tool}.{config.RESET}")
+                        user_choice = input(f"{config.YELLOW}Would you like to see the complete answer? (yes/no): {config.RESET}").strip().lower()
+                        
+                        if user_choice in ["yes", "y"]:
+                            print(f"{config.CYAN}Retrieving complete information...{config.RESET}")
+                            
+                            # Process the tool response
+                            if tool_response:
+                                # Handle different tool responses
+                                if tool_response.get("tool") == "use_mcp_tool":
+                                    try:
+                                        from .utils import use_mcp_tool
+                                        response = use_mcp_tool(
+                                            server_name=tool_response.get("server"),
+                                            tool_name=tool_response.get("operation"),
+                                            arguments=tool_response.get("arguments", {})
+                                        )
+                                        
+                                        # Format the complete response
+                                        complete_response = chat_with_model(
+                                            message=(
+                                                f"User query: {query}\n\n"
+                                                f"Knowledge preview: {preview}\n\n"
+                                                f"Additional information from {selected_tool}: {response}\n\n"
+                                                "Combine the knowledge preview with this additional information to provide "
+                                                "a comprehensive answer. Format your response clearly and ensure it fully "
+                                                "addresses the user's query."
+                                            ),
+                                            config=config,
+                                            chat_models=chat_models
+                                        )
+                                        
+                                        print_streamed_message(complete_response, config.CYAN)
+                                        return complete_response
+                                    except Exception as e:
+                                        print(f"{config.RED}Error executing MCP tool: {e}{config.RESET}")
+                                        return preview
+                                else:
+                                    # For other tool types
+                                    print(f"{config.CYAN}Using {selected_tool} to complete the response...{config.RESET}")
+                                    complete_response = chat_with_model(
+                                        message=(
+                                            f"User query: {query}\n\n"
+                                            f"Knowledge preview: {preview}\n\n"
+                                            "Expand on this preview with more detailed information. "
+                                            "Provide a comprehensive answer that fully addresses the user's query."
+                                        ),
+                                        config=config,
+                                        chat_models=chat_models
+                                    )
+                                    
+                                    print_streamed_message(complete_response, config.CYAN)
+                                    return complete_response
+                            else:
+                                print(f"{config.RED}Tool response not available.{config.RESET}")
+                                return preview
+                        else:
+                            print(f"{config.CYAN}Using knowledge preview as final response.{config.RESET}")
+                            return preview
+                    else:
+                        print(f"{config.RED}Error preparing hybrid response: {result.get('error', 'Unknown error')}{config.RESET}")
+                        llm_response = chat_with_model(query, config, chat_models)
+                        print_streamed_message(llm_response, config.CYAN)
+                        return llm_response
+                
+                # Handle tool-based response (default)
+                elif selected_tool == "small_context":
                     # Handle small_context tool
                     parameters = tool_selection.get("parameters", {})
                     url = parameters.get("url")
@@ -1369,7 +1490,12 @@ def process_input_based_on_mode(query, config, chat_models):
                 "the small_context tool with browse_web operation. When using browse_web, "
                 "ensure the response excludes technical details about servers, responses, or parsing. "
                 "Focus only on the actual content. Respond with a JSON object containing your "
-                "analysis and selection. Be precise and follow the specified format."
+                "analysis and selection. Be precise and follow the specified format.\n\n"
+                "IMPORTANT: For each request, decide if you should:\n"
+                "1. Answer with your latent knowledge (direct_knowledge)\n"
+                "2. Use a tool to get information (tool_based)\n"
+                "3. Provide a hybrid response with both latent knowledge and tool-based information (hybrid)\n\n"
+                "For hybrid responses, set confidence between 0.5-0.8 to indicate partial confidence."
             )
         )
         
@@ -1389,7 +1515,12 @@ def process_input_based_on_mode(query, config, chat_models):
                 tool_selection = json.loads(json_str)
                 
                 # Get response using selected tool
-                selected_tool = tool_selection.get("selected_tool", "").lower()
+                response_type = tool_selection.get("response_type", "tool_based").lower()
+                selected_tool = tool_selection.get("selected_tool", "") 
+                if selected_tool is not None:
+                    selected_tool = selected_tool.lower()
+                else:
+                    selected_tool = ""
                 if selected_tool == "small_context":
                     # Handle small_context tool
                     parameters = tool_selection.get("parameters", {})
