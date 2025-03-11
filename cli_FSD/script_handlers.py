@@ -1515,7 +1515,12 @@ def process_input_based_on_mode(query, config, chat_models):
                 tool_selection = json.loads(json_str)
                 
                 # Get response using selected tool
-                selected_tool = tool_selection.get("selected_tool", "").lower()
+                response_type = tool_selection.get("response_type", "tool_based").lower()
+                selected_tool = tool_selection.get("selected_tool", "") 
+                if selected_tool is not None:
+                    selected_tool = selected_tool.lower()
+                else:
+                    selected_tool = ""
                 if selected_tool == "small_context":
                     # Handle small_context tool
                     parameters = tool_selection.get("parameters", {})
