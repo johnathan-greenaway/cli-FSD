@@ -28,7 +28,7 @@ blocks:
             
             # Handle release branch (standard version)
             - |
-              if [[ "${SEMAPHORE_GIT_BRANCH}" == "release-branch" ]]; then
+              if [[ "${SEMAPHORE_GIT_BRANCH}" == "main" ]]; then
                 echo "On release branch - using version $BASE_VERSION"
                 sed -i "s/version=[\"'][^\"']*[\"']/version=\"$BASE_VERSION\"/" setup.py
                 pip install twine build
