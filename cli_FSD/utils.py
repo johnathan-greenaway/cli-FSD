@@ -152,6 +152,19 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     Returns:
         Tool execution result as a string
     """
+    # For browse_web operation, try to use our efficient WebContentFetcher first
+    if tool_name == "browse_web" and "url" in arguments:
+        try:
+            from .web_fetcher import fetcher
+            url = arguments["url"]
+            # Try to use our efficient fetcher
+            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+            if result:
+                return json.dumps(result)
+        except Exception:
+            # If our fetcher fails, continue with MCP tool
+            pass
+    
     try:
         import json
         import subprocess

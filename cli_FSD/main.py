@@ -26,6 +26,13 @@ def main():
 
     logging.info("cli-FSD started")
 
+    # Initialize web fetcher early
+    try:
+        from .web_fetcher import fetcher
+        logging.info("Initialized WebContentFetcher")
+    except Exception as e:
+        logging.error(f"Failed to initialize WebContentFetcher: {e}")
+
     args = parse_arguments()
     config = initialize_config(args)
     chat_models = initialize_chat_models(config)

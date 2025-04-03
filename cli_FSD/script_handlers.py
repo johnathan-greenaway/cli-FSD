@@ -401,7 +401,16 @@ def try_browser_search(query: str, config, chat_models) -> str:
             if response:
                 return response
         except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying alternative search...{config.RESET}")
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying efficient web fetcher...{config.RESET}")
+        
+        # Use our efficient web fetcher
+        try:
+            from .web_fetcher import fetcher
+            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+            if result:
+                return json.dumps(result)
+        except Exception as e:
+            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying fallback browser...{config.RESET}")
         
         # Fallback to using WebBrowser class directly
         from .small_context.protocol import WebBrowser
@@ -1351,7 +1360,16 @@ def try_browser_search(query: str, config, chat_models) -> str:
             if response:
                 return response
         except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying alternative search...{config.RESET}")
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying efficient web fetcher...{config.RESET}")
+        
+        # Use our efficient web fetcher
+        try:
+            from .web_fetcher import fetcher
+            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+            if result:
+                return json.dumps(result)
+        except Exception as e:
+            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying fallback browser...{config.RESET}")
         
         # Fallback to using WebBrowser class directly
         from .small_context.protocol import WebBrowser
