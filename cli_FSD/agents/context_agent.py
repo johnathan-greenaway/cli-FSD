@@ -37,7 +37,7 @@ class ContextAgent:
         return {
             "prompt": f"""Analyze this request: "{request}"
 
-You are an expert in tool selection and content analysis. Your task is to determine the best way to handle this request.
+You are an expert in tool selection and content analysis with a strong preference for using your built-in knowledge whenever possible. Your task is to determine the best way to handle this request.
 
 Respond with a JSON object in this format:
 {{
@@ -59,40 +59,48 @@ Respond with a JSON object in this format:
 }}
 
 Response types:
-1. direct_knowledge: Use when you can confidently answer with your latent knowledge
-2. tool_based: Use when a tool is clearly needed to provide an accurate response
-3. hybrid: Use when you can provide a partial answer from latent knowledge but a tool would provide more complete information
+1. direct_knowledge: STRONGLY PREFERRED - Use whenever you can reasonably answer with your built-in knowledge
+2. tool_based: Use ONLY when a tool is ABSOLUTELY NECESSARY to provide an accurate response
+3. hybrid: Use when you can provide a substantial answer from built-in knowledge but specific details require tool support
 
 Available tools and operations:
 1. small_context
-   - browse_web: For web browsing and content extraction
+   - browse_web: For web browsing and content extraction - ONLY use for very specific current information or data that you cannot possibly know
    - create_context: For managing conversation context
 2. fetch: For data retrieval
 3. sequential_thinking: For complex reasoning
 4. default: For simple commands. USE THIS FOR WEATHER REQUESTS.
 
 Guidelines:
-1. For web browsing:
+1. STRONG PREFERENCE FOR BUILT-IN KNOWLEDGE:
+   - For coding tasks like "create a Next.js project", "write a Python script", etc., ALWAYS use direct_knowledge response
+   - For general technical questions about frameworks, languages, or common development practices, use direct_knowledge
+   - For explanations of concepts, algorithms, or patterns, use direct_knowledge
+   - Always set a high confidence (0.8-0.95) when using direct_knowledge for technical/programming questions
+
+2. For web browsing (use SPARINGLY):
+   - ONLY use for highly specific current information like "latest React release notes"
+   - ONLY use for specific documentation lookups that require exact details from a recent version
+   - ONLY use when the user explicitly asks for content from a specific website
    - Always include complete URLs with https://
-   - Choose authoritative sources
-   - Consider the type of content needed
-2. For context management:
+   - Never use web browsing for general programming knowledge or how-to questions
+   - Never use web browsing for tasks you can perform with your built-in knowledge
+
+3. For context management:
    - Set appropriate priority level
    - Identify relevant entities
    - Track relationships between concepts
-3. For tool selection:
-   - Consider the complexity of the request
-   - Evaluate need for context preservation
-   - Assess if external data is needed
-   - Set confidence level based on how certain you are that the selected approach is optimal
+
 4. IMPORTANT: For specific commands:
    - Queries that mention weather: Use 'curl wttr.in/[location]' command instead of web browsing
    - Time queries: Use appropriate system commands
    - File operations: Use standard Unix commands
+
 5. For hybrid responses:
    - Provide a confidence score between 0.5-0.8 (indicating partial confidence)
    - Select the tool that would provide the most complete information
-   - The system will provide a preview of latent knowledge while preparing the tool response""",
+   - The system will provide a preview of built-in knowledge while preparing the tool response
+   - Only use hybrid when you are confident your built-in knowledge covers 75% of what's needed""",
             "requires_llm_processing": True
         }
     

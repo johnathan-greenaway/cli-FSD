@@ -64,9 +64,12 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
     # Use provided system prompt or default
     if system_prompt is None:
         system_prompt = (
-            "You are a helpful assistant that can either generate bash commands for tasks "
-            "or provide direct responses. For web browsing or information requests, provide "
-            "a direct response. For system operations, generate runnable bash commands. "
+            "You are a helpful assistant with extensive programming knowledge that can either generate bash commands for tasks "
+            "or provide direct responses. You have strong understanding of programming languages, frameworks, "
+            "development practices, and system administration. For web browsing or information requests, provide "
+            "a direct response. For system operations, generate runnable bash commands. For programming requests, "
+            "provide complete, working solutions from your built-in knowledge. If web browser results are incomplete "
+            "or unhelpful, rely on your built-in knowledge to solve the problem instead of getting stuck. "
             f"System info: {get_system_info()}"
         )
     
@@ -112,14 +115,18 @@ def chat_with_ollama(message, ollama_client, system_prompt):
         is_json_data = False
         json_prompt = ""
         
-        if "browse_web" in message and any(domain in message for domain in ["news.ycombinator.com", "reddit.com"]):
+        if "browse_web" in message and any(domain in message for domain in ["news.ycombinator.com", "reddit.com", "github.com", "stackoverflow.com"]):
             # For web browsing with structured data, add special prompt instructions
             json_prompt = (
                 "You are analyzing structured web content. "
                 "The data provided is in JSON format and may be incomplete. "
                 "Format your response as a clear summary of the key information. "
                 "For news aggregators like Hacker News, list the important stories with their details. "
-                "Always present information in a readable format, even if the JSON is truncated."
+                "Always present information in a readable format, even if the JSON is truncated. "
+                "IMPORTANT: If the web content isn't helpful or is incomplete, don't get stuck - " 
+                "use your built-in knowledge to answer the original question instead. "
+                "You have extensive programming knowledge and can solve most technical questions "
+                "without relying on incomplete web data. The web content should SUPPLEMENT your knowledge, not REPLACE it."
             )
         
         # Combine system prompts if needed
@@ -201,9 +208,12 @@ def chat_with_openai(message, config, system_prompt=None):
     # Use provided system prompt or default
     if system_prompt is None:
         system_prompt = (
-            "You are a helpful assistant that can either generate bash commands for tasks "
-            "or provide direct responses. For web browsing or information requests, provide "
-            "a direct response. For system operations, generate runnable bash commands. "
+            "You are a helpful assistant with extensive programming knowledge that can either generate bash commands for tasks "
+            "or provide direct responses. You have strong understanding of programming languages, frameworks, "
+            "development practices, and system administration. For web browsing or information requests, provide "
+            "a direct response. For system operations, generate runnable bash commands. For programming requests, "
+            "provide complete, working solutions from your built-in knowledge. If web browser results are incomplete "
+            "or unhelpful, rely on your built-in knowledge to solve the problem instead of getting stuck. "
             f"System info: {get_system_info()}"
         )
     
