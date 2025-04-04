@@ -160,8 +160,23 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
             # Try to use our efficient fetcher
             result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
             if result:
+                # Format for better Ollama compatibility - reduce nesting and complexity
+                if "url" in arguments and "news.ycombinator.com" in arguments["url"]:
+                    # Custom formatting for Hacker News
+                    simplified_result = []
+                    if isinstance(result, dict) and "structured_content" in result:
+                        for item in result.get("structured_content", []):
+                            if item.get("type") == "story":
+                                simplified_result.append({
+                                    "title": item.get("title", ""),
+                                    "url": item.get("url", ""),
+                                    "metadata": item.get("metadata", {})
+                                })
+                    return json.dumps(simplified_result)
                 return json.dumps(result)
-        except Exception:
+        except Exception as e:
+            # Log the exception for debugging
+            print(f"WebFetcher error: {str(e)}", file=sys.stderr)
             # If our fetcher fails, continue with MCP tool
             pass
     

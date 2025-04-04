@@ -110,10 +110,47 @@ class WebContentAgent:
                 "relationships": []
             }
         
+        # Check if it's an array (special case for HN and other sites)
+        if isinstance(content, list):
+            # Handle list of items (e.g., HN stories)
+            main_content = "Content summary:\n\n"
+            entities = []
+            relationships = []
+            
+            for i, item in enumerate(content[:15]):  # Limit to first 15 items for reasonable context
+                if isinstance(item, dict):
+                    # Handle story format
+                    if "title" in item:
+                        main_content += f"{i+1}. {item.get('title', 'No title')}"
+                        if "url" in item and item["url"]:
+                            main_content += f" - {item['url']}\n"
+                            entities.append(item["url"])
+                        else:
+                            main_content += "\n"
+                            
+                        # Add metadata if available
+                        if "metadata" in item and isinstance(item["metadata"], dict):
+                            meta_string = ", ".join([f"{k}: {v}" for k, v in item["metadata"].items()])
+                            if meta_string:
+                                main_content += f"   {meta_string}\n"
+                        main_content += "\n"
+            
+            # Rough token count estimate
+            token_count = len(main_content) // 4
+            
+            return {
+                "timestamp": content[0].get("timestamp", 0) if content and isinstance(content[0], dict) else 0,
+                "priority": priority,
+                "token_count": token_count,
+                "content": main_content,
+                "entities": entities,
+                "relationships": relationships
+            }
+        
         # Create formatted message based on content type
         if content.get("content_type") == "webpage":
             # Basic info about the page
-            main_content = f"URL: {content['url']}\nTitle: {content['title']}\n\n"
+            main_content = f"URL: {content.get('url', 'Unknown URL')}\nTitle: {content.get('title', 'No title')}\n\n"
             
             # Add structured content based on what's available
             if "text_content" in content and content["text_content"]:
@@ -131,9 +168,18 @@ class WebContentAgent:
                         for list_item in item.get("items", []):
                             main_content += f"- {list_item}\n"
                         main_content += "\n"
+                    elif item.get("type") == "story":
+                        # Handle special story format (e.g., from HN)
+                        main_content += f"\n## {item.get('title', 'No title')}\n"
+                        if item.get("url"):
+                            main_content += f"URL: {item['url']}\n"
+                        if "metadata" in item and isinstance(item["metadata"], dict):
+                            for key, value in item["metadata"].items():
+                                main_content += f"{key}: {value}\n"
+                        main_content += "\n"
             
             # Add links if available
-            entities = [content["url"]]
+            entities = [content.get("url", "")]
             relationships = []
             
             if "links" in content and isinstance(content["links"], list):
@@ -144,7 +190,7 @@ class WebContentAgent:
                         main_content += f"- {link_text}: {link['url']}\n"
                         entities.append(link["url"])
                         relationships.append({
-                            "source": content["url"],
+                            "source": content.get("url", ""),
                             "target": link["url"],
                             "type": "links_to"
                         })
@@ -152,7 +198,7 @@ class WebContentAgent:
                         main_content += f"- {link}\n"
                         entities.append(link)
                         relationships.append({
-                            "source": content["url"],
+                            "source": content.get("url", ""),
                             "target": link,
                             "type": "links_to"
                         })

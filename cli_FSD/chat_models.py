@@ -107,10 +107,28 @@ def chat_with_ollama(message, ollama_client, system_prompt):
     try:
         # Use the running model if available, otherwise fallback to a default
         model = getattr(ollama_client, 'running_model', 'llama3.1:8b')
+        
+        # Check if the message contains JSON data from web browsing
+        is_json_data = False
+        json_prompt = ""
+        
+        if "browse_web" in message and any(domain in message for domain in ["news.ycombinator.com", "reddit.com"]):
+            # For web browsing with structured data, add special prompt instructions
+            json_prompt = (
+                "You are analyzing structured web content. "
+                "The data provided is in JSON format and may be incomplete. "
+                "Format your response as a clear summary of the key information. "
+                "For news aggregators like Hacker News, list the important stories with their details. "
+                "Always present information in a readable format, even if the JSON is truncated."
+            )
+        
+        # Combine system prompts if needed
+        full_system_prompt = json_prompt + "\n\n" + system_prompt if json_prompt else system_prompt
+        
         response = ollama_client.chat(
             model=model,
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": full_system_prompt},
                 {"role": "user", "content": message},
             ]
         )
