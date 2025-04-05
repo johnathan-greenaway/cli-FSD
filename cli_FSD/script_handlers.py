@@ -439,7 +439,9 @@ def handle_cli_command(query: str, config, chat_models) -> str:
     
     if "NO_CLI_COMMAND" not in response:
         print(f"{config.CYAN}Generated CLI command, evaluating...{config.RESET}")
-        return process_response(query, response, config, chat_models, response_type="cli")
+        processed_response = process_response(query, response, config, chat_models, response_type="cli")
+        # Ensure CLI commands are returned properly
+        return processed_response
     return response
 
 def handle_web_search(query: str, response: str, config, chat_models) -> str:
@@ -587,7 +589,7 @@ def process_input_based_on_mode(query, config, chat_models):
                             "Format your answer clearly with appropriate headings, bullet points, and paragraphs as needed."
                         )
                     )
-                    print_streamed_message(llm_response, config.CYAN)
+                    print_streamed_message(llm_response, config.CYAN, config)
                     return llm_response
                     
                 # Handle hybrid response
@@ -683,7 +685,7 @@ def process_input_based_on_mode(query, config, chat_models):
                     else:
                         print(f"{config.RED}Error preparing hybrid response: {result.get('error', 'Unknown error')}{config.RESET}")
                         llm_response = chat_with_model(query, config, chat_models)
-                        print_streamed_message(llm_response, config.CYAN)
+                        print_streamed_message(llm_response, config.CYAN, config)
                         return llm_response
                 
                 # Handle tool-based response (default)
@@ -784,7 +786,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
+                                    print_streamed_message(llm_response, config.CYAN, config)
                                     
                                     # Print interaction hint
                                     print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
@@ -796,7 +798,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
+                                    print_streamed_message(llm_response, config.CYAN, config)
                                     return llm_response
                             else:
                                 formatted_response = str(content)
@@ -805,7 +807,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                     config=config,
                                     chat_models=chat_models
                                 )
-                                print_streamed_message(llm_response, config.CYAN)
+                                print_streamed_message(llm_response, config.CYAN, config)
                                 return llm_response
                         except json.JSONDecodeError:
                             # Handle raw response directly
@@ -814,11 +816,11 @@ def process_input_based_on_mode(query, config, chat_models):
                                 config=config,
                                 chat_models=chat_models
                             )
-                            print_streamed_message(llm_response, config.CYAN)
+                            print_streamed_message(llm_response, config.CYAN, config)
                             return llm_response
                     else:
                         llm_response = f"Error: {result.get('error', 'Unknown error')}"
-                        print_streamed_message(llm_response, config.CYAN)
+                        print_streamed_message(llm_response, config.CYAN, config)
                         return llm_response
                 elif selected_tool == "default":
                     # Handle default tool case - generate a shell script for simple commands
@@ -857,7 +859,7 @@ def process_input_based_on_mode(query, config, chat_models):
                             )
                         )
                     
-                    print_streamed_message(llm_response, config.CYAN)
+                    print_streamed_message(llm_response, config.CYAN, config)
                     return llm_response
                 else:
                     # Default to standard LLM processing
@@ -1402,7 +1404,9 @@ def handle_cli_command(query: str, config, chat_models) -> str:
     
     if "NO_CLI_COMMAND" not in response:
         print(f"{config.CYAN}Generated CLI command, evaluating...{config.RESET}")
-        return process_response(query, response, config, chat_models, response_type="cli")
+        processed_response = process_response(query, response, config, chat_models, response_type="cli")
+        # Ensure CLI commands are returned properly
+        return processed_response
     return response
 
 def handle_web_search(query: str, response: str, config, chat_models) -> str:
@@ -1644,7 +1648,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
+                                    print_streamed_message(llm_response, config.CYAN, config)
                                     
                                     # Print interaction hint
                                     print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
@@ -1656,7 +1660,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
+                                    print_streamed_message(llm_response, config.CYAN, config)
                                     return None
                             else:
                                 formatted_response = str(content)
@@ -1665,7 +1669,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                     config=config,
                                     chat_models=chat_models
                                 )
-                                print_streamed_message(llm_response, config.CYAN)
+                                print_streamed_message(llm_response, config.CYAN, config)
                                 return None
                         except json.JSONDecodeError:
                             # Handle raw response directly
@@ -1674,11 +1678,11 @@ def process_input_based_on_mode(query, config, chat_models):
                                 config=config,
                                 chat_models=chat_models
                             )
-                            print_streamed_message(llm_response, config.CYAN)
+                            print_streamed_message(llm_response, config.CYAN, config)
                             return None
                     else:
                         llm_response = f"Error: {result.get('error', 'Unknown error')}"
-                        print_streamed_message(llm_response, config.CYAN)
+                        print_streamed_message(llm_response, config.CYAN, config)
                         return None
                 elif selected_tool == "default":
                     # Handle default tool case - generate a shell script for simple commands
@@ -1717,7 +1721,7 @@ def process_input_based_on_mode(query, config, chat_models):
                             )
                         )
                     
-                    print_streamed_message(llm_response, config.CYAN)
+                    print_streamed_message(llm_response, config.CYAN, config)
                     return None
                 else:
                     # Default to standard LLM processing

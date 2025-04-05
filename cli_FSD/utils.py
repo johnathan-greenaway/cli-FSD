@@ -73,11 +73,15 @@ def print_instructions_once_per_day():
         print_instructions()
 
 
-def print_streamed_message(message, color=CYAN):
+def print_streamed_message(message, color=CYAN, config=None):
     for char in message:
         print(f"{color}{char}{RESET}", end='', flush=True)
         time.sleep(0.03)
     print()
+    
+    # Mark that this response was streamed so we don't double-print it
+    if config:
+        config._response_was_streamed = True
 
 
 def get_weather():

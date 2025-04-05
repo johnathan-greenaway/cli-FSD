@@ -161,8 +161,16 @@ def main():
                 logging.info("Switched to normal mode.")
             else:
                 try:
-                    config.last_response = process_input_based_on_mode(user_input, config, chat_models)
+                    response = process_input_based_on_mode(user_input, config, chat_models)
+                    config.last_response = response if response else "No response generated"
                     logging.info(f"Processed command: {user_input}")
+                    
+                    # Make sure the response is actually shown to the user if it wasn't already printed
+                    if response:
+                        # Don't double-print if it was already streamed
+                        if not hasattr(config, '_response_was_streamed') or not config._response_was_streamed:
+                            print(f"{config.CYAN}{response}{config.RESET}")
+                        config._response_was_streamed = False
                 except Exception as e:
                     error_message = f"Error processing command '{user_input}': {e}"
                     print(f"{config.RED}Error processing command: {e}{config.RESET}")
