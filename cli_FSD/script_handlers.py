@@ -463,8 +463,8 @@ def _validate_query(query: str) -> bool:
 
 def process_input_based_on_mode(query, config, chat_models):
     """Process user input based on the current mode and query type."""
-    global _response_context
-    global _content_cache
+    # Access global variables, but don't declare them global since we're not reassigning them
+    # Using them as read-only doesn't require global declaration
     
     # Reset browser attempts counter for new queries
     _response_context['browser_attempts'] = 0
@@ -969,7 +969,7 @@ def clean_up_llm_response(llm_response):
 
 def handle_script_cleanup(config):
     """Handle cleanup of assembled scripts with option to save."""
-    global _assembled_scripts
+    # Using _assembled_scripts but not reassigning it, so no global needed
     
     if not _assembled_scripts:
         return
@@ -1134,7 +1134,7 @@ def execute_script_directly(script, file_extension, config):
 
 def cleanup_assembled_scripts():
     """Clean up any remaining assembled scripts without prompting."""
-    global _assembled_scripts
+    # Using _assembled_scripts but not reassigning it, so no global needed
     for script in _assembled_scripts.copy():
         try:
             if os.path.exists(script):

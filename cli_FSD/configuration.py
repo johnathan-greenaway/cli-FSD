@@ -2,10 +2,11 @@ import os
 import json
 from dotenv import load_dotenv, set_key
 from pathlib import Path
+from .version import __version__  # Import version from central location
 
 class Config:
     def __init__(self):
-        self.VERSION = "1.8.2"  # Version from setup.py
+        self.VERSION = __version__  # Use imported version
         self.CYAN = "\033[96m"
         self.YELLOW = "\033[93m"
         self.BOLD = "\033[1m"

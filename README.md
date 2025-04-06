@@ -121,6 +121,17 @@ v0.52
 - [ ] - automation schedules and background states
 
 
+### Version Management
+
+The project uses a central version management system:
+
+1. The authoritative version is stored in `cli_FSD/version.py`
+2. To update the version, use the provided script:
+   ```bash
+   python scripts/bump_version.py [major|minor|patch]
+   ```
+3. This will automatically update the version displayed in the UI and used in setup.py
+
 ### Contributing
 
 Contributions to this project are welcome. Please fork the repository, make your changes, and submit a pull request for review.
