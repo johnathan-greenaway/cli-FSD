@@ -284,28 +284,75 @@ def format_browser_response(query: str, response: str, config, chat_models) -> s
     """
     print(f"{config.CYAN}Formatting raw browser/MCP response...{config.RESET}")
     
-    # Truncate very long responses for processing
-    truncated_response = response[:5000] if len(response) > 5000 else response
+    # Handle empty or None response
+    if not response:
+        return "No browser response received. Please try a different query."
     
-    formatted_response = chat_with_model(
-        message=(
-            f"The following is a raw response from a browser/MCP tool for the query: '{query}'\n\n"
-            f"{truncated_response}\n\n"
-            "Please format this information into a clear, concise, and well-structured response that directly "
-            "answers the user's query. Include all relevant information from the raw response."
-        ),
-        config=config,
-        chat_models=chat_models,
-        system_prompt=(
-            "You are an expert at formatting raw web data into helpful responses. "
-            "Focus on extracting the most relevant information and presenting it clearly."
-        )
-    )
+    # Handle response based on type and size
+    try:
+        # If response is already a string and seems reasonable in size, use it directly
+        if isinstance(response, str):
+            # For very long responses, truncate them first
+            if len(response) > 5000:
+                truncated_response = response[:5000] + "... [content truncated]"
+            else:
+                truncated_response = response
+            
+            # Check if it appears to be JSON
+            if response.strip().startswith('{') or response.strip().startswith('['):
+                try:
+                    # Try to parse as JSON to make it more readable
+                    parsed_json = json.loads(response)
+                    # Format JSON nicely with minimal indentation for token efficiency
+                    truncated_response = json.dumps(parsed_json, indent=1)[:5000]
+                except (json.JSONDecodeError, TypeError):
+                    # Not valid JSON or couldn't be parsed, use as is
+                    pass
+        else:
+            # For non-string responses, convert to string
+            try:
+                truncated_response = json.dumps(response, indent=1)[:5000]
+            except (TypeError, OverflowError):
+                truncated_response = str(response)[:5000]
+        
+        # Only send to LLM for formatting if it seems to be a complex response
+        # that would benefit from structuring
+        if len(truncated_response) > 200:
+            try:
+                formatted_response = chat_with_model(
+                    message=(
+                        f"The following is a raw response from a browser/MCP tool for the query: '{query}'\n\n"
+                        f"{truncated_response}\n\n"
+                        "Please format this information into a clear, concise, and well-structured response that directly "
+                        "answers the user's query. Include all relevant information from the raw response."
+                    ),
+                    config=config,
+                    chat_models=chat_models,
+                    system_prompt=(
+                        "You are an expert at formatting raw web data into helpful responses. "
+                        "Focus on extracting the most relevant information and presenting it clearly."
+                    )
+                )
+                
+                # Store the formatted response in context
+                _response_context['collected_info']['formatted_browser'] = formatted_response[:500]
+                
+                return formatted_response
+            except Exception as e:
+                print(f"{config.YELLOW}Error using LLM for formatting: {str(e)}. Using simplified response.{config.RESET}")
+                # If LLM formatting fails, return a simplified version
+                return f"Information from web search for '{query}':\n\n{truncated_response}"
+        else:
+            # For short responses, don't bother with LLM formatting
+            return f"Information from web search for '{query}':\n\n{truncated_response}"
     
-    # Store the formatted response in context
-    _response_context['collected_info']['formatted_browser'] = formatted_response[:500]
-    
-    return formatted_response
+    except Exception as e:
+        print(f"{config.RED}Error formatting browser response: {str(e)}{config.RESET}")
+        # Return a helpful error message with whatever we can salvage
+        if isinstance(response, str) and response:
+            return f"Error formatting browser response: {str(e)}. Raw data:\n\n{response[:1000]}..."
+        else:
+            return f"Error formatting browser response: {str(e)}. Unable to display raw data."
 
 def process_response(query: str, response: str, config, chat_models, allow_browser_fallback=True, response_type="general") -> str:
     """
@@ -322,54 +369,78 @@ def process_response(query: str, response: str, config, chat_models, allow_brows
     """
     # For raw browser/MCP responses, format them first
     if response_type in ["browser", "mcp"] or is_raw_mcp_response(response):
-        return format_browser_response(query, response, config, chat_models)
+        try:
+            return format_browser_response(query, response, config, chat_models)
+        except Exception as e:
+            print(f"{config.YELLOW}Error formatting browser response: {str(e)}. Using raw response.{config.RESET}")
+            # Return at least something if formatting fails
+            if isinstance(response, str) and len(response) > 500:
+                return f"Error formatting response: {str(e)}. Raw data (truncated):\n\n{response[:500]}..."
+            return f"Error formatting response: {str(e)}. Please try a different query."
     
     # For general and CLI responses, evaluate and use fallbacks if needed
-    if not evaluate_response(query, response, config, chat_models, response_type):
-        print(f"{config.YELLOW}Initial response was inadequate. Getting better response...{config.RESET}")
-        
-        # Try fallback LLM first
-        improved_response = get_fallback_response(query, response, config, chat_models)
-        
-        # If fallback still inadequate and browser fallback is allowed, try browser
-        # But be more conservative with programming/technical requests
-        if (allow_browser_fallback and 
-            not evaluate_response(query, improved_response, config, chat_models, response_type) and
-            not any(term in query.lower() for term in ['create', 'build', 'make', 'code', 'program', 'python', 'javascript', 'java', 'typescript', 'next.js', 'react'])):
-            if _response_context['browser_attempts'] < 2:  # Limit browser attempts
-                print(f"{config.YELLOW}Fallback response still inadequate. Trying browser search...{config.RESET}")
-                _response_context['browser_attempts'] += 1
-                
-                # Try browser search
-                browser_response = try_browser_search(query, config, chat_models)
-                if browser_response:
-                    # Store browser result in context
-                    _response_context['collected_info']['browser_search'] = browser_response[:500]  # Store truncated version
+    try:
+        if not evaluate_response(query, response, config, chat_models, response_type):
+            print(f"{config.YELLOW}Initial response was inadequate. Getting better response...{config.RESET}")
+            
+            # Try fallback LLM first
+            try:
+                improved_response = get_fallback_response(query, response, config, chat_models)
+            except Exception as e:
+                print(f"{config.YELLOW}Error getting fallback response: {str(e)}. Using original response.{config.RESET}")
+                improved_response = response
+            
+            # If fallback still inadequate and browser fallback is allowed, try browser
+            # But be more conservative with programming/technical requests
+            if (allow_browser_fallback and 
+                not evaluate_response(query, improved_response, config, chat_models, response_type) and
+                not any(term in query.lower() for term in ['create', 'build', 'make', 'code', 'program', 'python', 'javascript', 'java', 'typescript', 'next.js', 'react'])):
+                if _response_context['browser_attempts'] < 2:  # Limit browser attempts
+                    print(f"{config.YELLOW}Fallback response still inadequate. Trying browser search...{config.RESET}")
+                    _response_context['browser_attempts'] += 1
                     
-                    # Format the browser response
-                    formatted_browser = format_browser_response(query, browser_response, config, chat_models)
-                    
-                    # Combine browser results with previous knowledge
-                    final_response = chat_with_model(
-                        message=(
-                            f"Original query: {query}\n\n"
-                            f"Previous responses: {improved_response}\n\n"
-                            f"Browser search results: {formatted_browser}\n\n"
-                            "Combine all this information to provide the most accurate and complete response."
-                        ),
-                        config=config,
-                        chat_models=chat_models,
-                        system_prompt=(
-                            "You are a helpful expert assistant. Synthesize information from multiple sources "
-                            "to provide the most accurate and complete response to the user's query."
-                        )
-                    )
-                    return final_response
-            else:
-                print(f"{config.YELLOW}Maximum browser attempts reached. Using best available response.{config.RESET}")
-        
-        return improved_response
-    return response
+                    # Try browser search
+                    try:
+                        browser_response = try_browser_search(query, config, chat_models)
+                        if browser_response:
+                            # Store browser result in context
+                            _response_context['collected_info']['browser_search'] = browser_response[:500]  # Store truncated version
+                            
+                            try:
+                                # Format the browser response
+                                formatted_browser = format_browser_response(query, browser_response, config, chat_models)
+                                
+                                # Combine browser results with previous knowledge
+                                final_response = chat_with_model(
+                                    message=(
+                                        f"Original query: {query}\n\n"
+                                        f"Previous responses: {improved_response}\n\n"
+                                        f"Browser search results: {formatted_browser}\n\n"
+                                        "Combine all this information to provide the most accurate and complete response."
+                                    ),
+                                    config=config,
+                                    chat_models=chat_models,
+                                    system_prompt=(
+                                        "You are a helpful expert assistant. Synthesize information from multiple sources "
+                                        "to provide the most accurate and complete response to the user's query."
+                                    )
+                                )
+                                return final_response
+                            except Exception as e:
+                                print(f"{config.YELLOW}Error combining responses: {str(e)}. Using browser response.{config.RESET}")
+                                # If combination fails, return the browser response directly
+                                return f"Information from web search:\n\n{browser_response[:1000]}..."
+                    except Exception as e:
+                        print(f"{config.YELLOW}Browser search failed: {str(e)}. Using fallback response.{config.RESET}")
+                else:
+                    print(f"{config.YELLOW}Maximum browser attempts reached. Using best available response.{config.RESET}")
+            
+            return improved_response
+        return response
+    except Exception as e:
+        print(f"{config.RED}Error processing response: {str(e)}{config.RESET}")
+        # Return original response if processing fails
+        return f"Error processing response: {str(e)}. Original response: {response[:500]}..."
 
 def try_browser_search(query: str, config, chat_models) -> str:
     """
@@ -392,7 +463,16 @@ def try_browser_search(query: str, config, chat_models) -> str:
     print(f"{config.CYAN}Trying browser search for: {search_query}{config.RESET}")
     
     try:
-        # Try MCP browser tool first
+        # Use our efficient web fetcher first (more reliable than MCP)
+        try:
+            from .web_fetcher import fetcher
+            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+            if result:
+                return json.dumps(result)
+        except Exception as e:
+            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying MCP browser...{config.RESET}")
+        
+        # Try MCP browser tool as fallback
         try:
             response = use_mcp_tool(
                 server_name="small-context",
@@ -402,25 +482,16 @@ def try_browser_search(query: str, config, chat_models) -> str:
             if response:
                 return response
         except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying efficient web fetcher...{config.RESET}")
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying WebBrowser fallback...{config.RESET}")
         
-        # Use our efficient web fetcher
-        try:
-            from .web_fetcher import fetcher
-            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
-            if result:
-                return json.dumps(result)
-        except Exception as e:
-            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying fallback browser...{config.RESET}")
-        
-        # Fallback to using WebBrowser class directly
+        # Last resort: WebBrowser class directly
         from .small_context.protocol import WebBrowser
         browser = WebBrowser()
         result = browser.browse(url)
         return json.dumps(result)
     except Exception as e:
-        print(f"{config.YELLOW}Browser search failed: {str(e)}{config.RESET}")
-        return ""
+        print(f"{config.YELLOW}All browser search methods failed: {str(e)}{config.RESET}")
+        return f"Browser search failed. Please try a different query or check your connection. Error: {str(e)}"
 
 def handle_cli_command(query: str, config, chat_models) -> str:
     """Handle CLI command generation and evaluation."""
@@ -636,8 +707,8 @@ def process_input_based_on_mode(query, config, chat_models):
             chat_models=chat_models,
             system_prompt=(
                 "You are a tool selection expert with excellent programming knowledge. Analyze the user's request and determine "
-                "which tool would be most effective. For web browsing requests, use the small_context tool with browse_web operation. "
-                "When using browse_web, ensure the response excludes technical details about servers, responses, or parsing. "
+                "which tool would be most effective. For web browsing requests BE PREPPARED TO PARSE JSON, use the small_context tool with browse_web operation. "
+                "When using browse_web, ensure the response ALWAYS INCLUDES A URL AND  excludes technical details about servers, responses, or parsing. "
                 "Focus only on the actual content. Respond with a JSON object containing your analysis and selection. "
                 "Be precise and follow the specified format.\n\n"
                 "IMPORTANT: For each request, decide if you should:\n"
