@@ -165,3 +165,4 @@ cython_debug/
 #.idea/
 last_instructions_display.txt
 dump.rdb
+CLAUDE.md

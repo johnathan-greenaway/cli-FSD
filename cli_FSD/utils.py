@@ -73,11 +73,15 @@ def print_instructions_once_per_day():
         print_instructions()
 
 
-def print_streamed_message(message, color=CYAN):
+def print_streamed_message(message, color=CYAN, config=None):
     for char in message:
         print(f"{color}{char}{RESET}", end='', flush=True)
         time.sleep(0.03)
     print()
+    
+    # Mark that this response was streamed so we don't double-print it
+    if config:
+        config._response_was_streamed = True
 
 
 def get_weather():
@@ -152,6 +156,36 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     Returns:
         Tool execution result as a string
     """
+    import json  # Import json at the top level to ensure it's available
+
+    # For browse_web operation, try to use our efficient WebContentFetcher first
+    if tool_name == "browse_web" and "url" in arguments:
+        try:
+            from .web_fetcher import fetcher
+            url = arguments["url"]
+            # Try to use our efficient fetcher
+            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+            if result:
+                # Format for better Ollama compatibility - reduce nesting and complexity
+                if "url" in arguments and "news.ycombinator.com" in arguments["url"]:
+                    # Custom formatting for Hacker News
+                    simplified_result = []
+                    if isinstance(result, dict) and "structured_content" in result:
+                        for item in result.get("structured_content", []):
+                            if item.get("type") == "story":
+                                simplified_result.append({
+                                    "title": item.get("title", ""),
+                                    "url": item.get("url", ""),
+                                    "metadata": item.get("metadata", {})
+                                })
+                    return json.dumps(simplified_result)
+                return json.dumps(result)
+        except Exception as e:
+            # Log the exception for debugging
+            print(f"WebFetcher error: {str(e)}", file=sys.stderr)
+            # If our fetcher fails, continue with MCP tool
+            pass
+    
     try:
         import json
         import subprocess

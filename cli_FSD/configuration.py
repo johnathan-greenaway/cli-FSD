@@ -5,7 +5,7 @@ from pathlib import Path
 
 class Config:
     def __init__(self):
-        self.VERSION = "1.7.8"  # Version from setup.py
+        self.VERSION = "1.8.2"  # Version from setup.py
         self.CYAN = "\033[96m"
         self.YELLOW = "\033[93m"
         self.BOLD = "\033[1m"

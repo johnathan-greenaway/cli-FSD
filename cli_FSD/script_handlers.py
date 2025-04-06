@@ -190,8 +190,8 @@ def evaluate_response(query: str, response: str, config, chat_models, response_t
         strictness = "Be very strict in your evaluation. Only accept responses that fully and accurately answer the question."
         threshold = 0.9  # Higher threshold for acceptance
     else:  # medium (default)
-        strictness = "Use balanced judgment in your evaluation. Accept responses that adequately address the main points."
-        threshold = 0.75  # Moderate threshold
+        strictness = "Use balanced judgment in your evaluation. For programming and technical questions, strongly prefer to accept built-in knowledge responses rather than forcing web searches. Accept responses that adequately address the main points."
+        threshold = 0.85  # Higher threshold for direct knowledge answers to reduce browser fallback
     
     evaluation = chat_with_model(
         message=(
@@ -334,7 +334,10 @@ def process_response(query: str, response: str, config, chat_models, allow_brows
         improved_response = get_fallback_response(query, response, config, chat_models)
         
         # If fallback still inadequate and browser fallback is allowed, try browser
-        if allow_browser_fallback and not evaluate_response(query, improved_response, config, chat_models, response_type):
+        # But be more conservative with programming/technical requests
+        if (allow_browser_fallback and 
+            not evaluate_response(query, improved_response, config, chat_models, response_type) and
+            not any(term in query.lower() for term in ['create', 'build', 'make', 'code', 'program', 'python', 'javascript', 'java', 'typescript', 'next.js', 'react'])):
             if _response_context['browser_attempts'] < 2:  # Limit browser attempts
                 print(f"{config.YELLOW}Fallback response still inadequate. Trying browser search...{config.RESET}")
                 _response_context['browser_attempts'] += 1
@@ -401,7 +404,16 @@ def try_browser_search(query: str, config, chat_models) -> str:
             if response:
                 return response
         except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying alternative search...{config.RESET}")
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying efficient web fetcher...{config.RESET}")
+        
+        # Use our efficient web fetcher
+        try:
+            from .web_fetcher import fetcher
+            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+            if result:
+                return json.dumps(result)
+        except Exception as e:
+            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying fallback browser...{config.RESET}")
         
         # Fallback to using WebBrowser class directly
         from .small_context.protocol import WebBrowser
@@ -427,7 +439,9 @@ def handle_cli_command(query: str, config, chat_models) -> str:
     
     if "NO_CLI_COMMAND" not in response:
         print(f"{config.CYAN}Generated CLI command, evaluating...{config.RESET}")
-        return process_response(query, response, config, chat_models, response_type="cli")
+        processed_response = process_response(query, response, config, chat_models, response_type="cli")
+        # Ensure CLI commands are returned properly
+        return processed_response
     return response
 
 def handle_web_search(query: str, response: str, config, chat_models) -> str:
@@ -527,16 +541,17 @@ def process_input_based_on_mode(query, config, chat_models):
             config=config,
             chat_models=chat_models,
             system_prompt=(
-                "You are a tool selection expert. Analyze the user's request and determine "
-                "which tool would be most effective. For web browsing requests, always select "
-                "the small_context tool with browse_web operation. When using browse_web, "
-                "ensure the response excludes technical details about servers, responses, or parsing. "
-                "Focus only on the actual content. Respond with a JSON object containing your "
-                "analysis and selection. Be precise and follow the specified format.\n\n"
+                "You are a tool selection expert with excellent programming knowledge. Analyze the user's request and determine "
+                "which tool would be most effective. For web browsing requests, use the small_context tool with browse_web operation. "
+                "When using browse_web, ensure the response excludes technical details about servers, responses, or parsing. "
+                "Focus only on the actual content. Respond with a JSON object containing your analysis and selection. "
+                "Be precise and follow the specified format.\n\n"
                 "IMPORTANT: For each request, decide if you should:\n"
-                "1. Answer with your latent knowledge (direct_knowledge)\n"
-                "2. Use a tool to get information (tool_based)\n"
-                "3. Provide a hybrid response with both latent knowledge and tool-based information (hybrid)\n\n"
+                "1. Answer with your built-in knowledge (direct_knowledge) - STRONGLY PREFERRED FOR PROGRAMMING QUESTIONS\n"
+                "2. Use a tool to get information (tool_based) - ONLY USE FOR VERY SPECIFIC CURRENT DATA\n"
+                "3. Provide a hybrid response with both built-in knowledge and tool-based information (hybrid)\n\n"
+                "For programming tasks like creating projects, writing code, explaining frameworks, or technical concepts, "
+                "ALWAYS use direct_knowledge with high confidence (0.85+).\n"
                 "For hybrid responses, set confidence between 0.5-0.8 to indicate partial confidence."
             )
         )
@@ -574,7 +589,7 @@ def process_input_based_on_mode(query, config, chat_models):
                             "Format your answer clearly with appropriate headings, bullet points, and paragraphs as needed."
                         )
                     )
-                    print_streamed_message(llm_response, config.CYAN)
+                    print_streamed_message(llm_response, config.CYAN, config)
                     return llm_response
                     
                 # Handle hybrid response
@@ -670,7 +685,7 @@ def process_input_based_on_mode(query, config, chat_models):
                     else:
                         print(f"{config.RED}Error preparing hybrid response: {result.get('error', 'Unknown error')}{config.RESET}")
                         llm_response = chat_with_model(query, config, chat_models)
-                        print_streamed_message(llm_response, config.CYAN)
+                        print_streamed_message(llm_response, config.CYAN, config)
                         return llm_response
                 
                 # Handle tool-based response (default)
@@ -771,7 +786,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
+                                    print_streamed_message(llm_response, config.CYAN, config)
                                     
                                     # Print interaction hint
                                     print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
@@ -783,7 +798,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
+                                    print_streamed_message(llm_response, config.CYAN, config)
                                     return llm_response
                             else:
                                 formatted_response = str(content)
@@ -792,7 +807,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                     config=config,
                                     chat_models=chat_models
                                 )
-                                print_streamed_message(llm_response, config.CYAN)
+                                print_streamed_message(llm_response, config.CYAN, config)
                                 return llm_response
                         except json.JSONDecodeError:
                             # Handle raw response directly
@@ -801,11 +816,11 @@ def process_input_based_on_mode(query, config, chat_models):
                                 config=config,
                                 chat_models=chat_models
                             )
-                            print_streamed_message(llm_response, config.CYAN)
+                            print_streamed_message(llm_response, config.CYAN, config)
                             return llm_response
                     else:
                         llm_response = f"Error: {result.get('error', 'Unknown error')}"
-                        print_streamed_message(llm_response, config.CYAN)
+                        print_streamed_message(llm_response, config.CYAN, config)
                         return llm_response
                 elif selected_tool == "default":
                     # Handle default tool case - generate a shell script for simple commands
@@ -844,7 +859,7 @@ def process_input_based_on_mode(query, config, chat_models):
                             )
                         )
                     
-                    print_streamed_message(llm_response, config.CYAN)
+                    print_streamed_message(llm_response, config.CYAN, config)
                     return llm_response
                 else:
                     # Default to standard LLM processing
@@ -1140,8 +1155,8 @@ def evaluate_response(query: str, response: str, config, chat_models, response_t
         strictness = "Be very strict in your evaluation. Only accept responses that fully and accurately answer the question."
         threshold = 0.9  # Higher threshold for acceptance
     else:  # medium (default)
-        strictness = "Use balanced judgment in your evaluation. Accept responses that adequately address the main points."
-        threshold = 0.75  # Moderate threshold
+        strictness = "Use balanced judgment in your evaluation. For programming and technical questions, strongly prefer to accept built-in knowledge responses rather than forcing web searches. Accept responses that adequately address the main points."
+        threshold = 0.85  # Higher threshold for direct knowledge answers to reduce browser fallback
     
     evaluation = chat_with_model(
         message=(
@@ -1284,7 +1299,10 @@ def process_response(query: str, response: str, config, chat_models, allow_brows
         improved_response = get_fallback_response(query, response, config, chat_models)
         
         # If fallback still inadequate and browser fallback is allowed, try browser
-        if allow_browser_fallback and not evaluate_response(query, improved_response, config, chat_models, response_type):
+        # But be more conservative with programming/technical requests
+        if (allow_browser_fallback and 
+            not evaluate_response(query, improved_response, config, chat_models, response_type) and
+            not any(term in query.lower() for term in ['create', 'build', 'make', 'code', 'program', 'python', 'javascript', 'java', 'typescript', 'next.js', 'react'])):
             if _response_context['browser_attempts'] < 2:  # Limit browser attempts
                 print(f"{config.YELLOW}Fallback response still inadequate. Trying browser search...{config.RESET}")
                 _response_context['browser_attempts'] += 1
@@ -1351,7 +1369,16 @@ def try_browser_search(query: str, config, chat_models) -> str:
             if response:
                 return response
         except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying alternative search...{config.RESET}")
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying efficient web fetcher...{config.RESET}")
+        
+        # Use our efficient web fetcher
+        try:
+            from .web_fetcher import fetcher
+            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+            if result:
+                return json.dumps(result)
+        except Exception as e:
+            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying fallback browser...{config.RESET}")
         
         # Fallback to using WebBrowser class directly
         from .small_context.protocol import WebBrowser
@@ -1377,7 +1404,9 @@ def handle_cli_command(query: str, config, chat_models) -> str:
     
     if "NO_CLI_COMMAND" not in response:
         print(f"{config.CYAN}Generated CLI command, evaluating...{config.RESET}")
-        return process_response(query, response, config, chat_models, response_type="cli")
+        processed_response = process_response(query, response, config, chat_models, response_type="cli")
+        # Ensure CLI commands are returned properly
+        return processed_response
     return response
 
 def handle_web_search(query: str, response: str, config, chat_models) -> str:
@@ -1485,16 +1514,17 @@ def process_input_based_on_mode(query, config, chat_models):
             config=config,
             chat_models=chat_models,
             system_prompt=(
-                "You are a tool selection expert. Analyze the user's request and determine "
-                "which tool would be most effective. For web browsing requests, always select "
-                "the small_context tool with browse_web operation. When using browse_web, "
-                "ensure the response excludes technical details about servers, responses, or parsing. "
-                "Focus only on the actual content. Respond with a JSON object containing your "
-                "analysis and selection. Be precise and follow the specified format.\n\n"
+                "You are a tool selection expert with excellent programming knowledge. Analyze the user's request and determine "
+                "which tool would be most effective. For web browsing requests, use the small_context tool with browse_web operation. "
+                "When using browse_web, ensure the response excludes technical details about servers, responses, or parsing. "
+                "Focus only on the actual content. Respond with a JSON object containing your analysis and selection. "
+                "Be precise and follow the specified format.\n\n"
                 "IMPORTANT: For each request, decide if you should:\n"
-                "1. Answer with your latent knowledge (direct_knowledge)\n"
-                "2. Use a tool to get information (tool_based)\n"
-                "3. Provide a hybrid response with both latent knowledge and tool-based information (hybrid)\n\n"
+                "1. Answer with your built-in knowledge (direct_knowledge) - STRONGLY PREFERRED FOR PROGRAMMING QUESTIONS\n"
+                "2. Use a tool to get information (tool_based) - ONLY USE FOR VERY SPECIFIC CURRENT DATA\n"
+                "3. Provide a hybrid response with both built-in knowledge and tool-based information (hybrid)\n\n"
+                "For programming tasks like creating projects, writing code, explaining frameworks, or technical concepts, "
+                "ALWAYS use direct_knowledge with high confidence (0.85+).\n"
                 "For hybrid responses, set confidence between 0.5-0.8 to indicate partial confidence."
             )
         )
@@ -1618,7 +1648,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
+                                    print_streamed_message(llm_response, config.CYAN, config)
                                     
                                     # Print interaction hint
                                     print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
@@ -1630,7 +1660,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                         config=config,
                                         chat_models=chat_models
                                     )
-                                    print_streamed_message(llm_response, config.CYAN)
+                                    print_streamed_message(llm_response, config.CYAN, config)
                                     return None
                             else:
                                 formatted_response = str(content)
@@ -1639,7 +1669,7 @@ def process_input_based_on_mode(query, config, chat_models):
                                     config=config,
                                     chat_models=chat_models
                                 )
-                                print_streamed_message(llm_response, config.CYAN)
+                                print_streamed_message(llm_response, config.CYAN, config)
                                 return None
                         except json.JSONDecodeError:
                             # Handle raw response directly
@@ -1648,11 +1678,11 @@ def process_input_based_on_mode(query, config, chat_models):
                                 config=config,
                                 chat_models=chat_models
                             )
-                            print_streamed_message(llm_response, config.CYAN)
+                            print_streamed_message(llm_response, config.CYAN, config)
                             return None
                     else:
                         llm_response = f"Error: {result.get('error', 'Unknown error')}"
-                        print_streamed_message(llm_response, config.CYAN)
+                        print_streamed_message(llm_response, config.CYAN, config)
                         return None
                 elif selected_tool == "default":
                     # Handle default tool case - generate a shell script for simple commands
@@ -1691,7 +1721,7 @@ def process_input_based_on_mode(query, config, chat_models):
                             )
                         )
                     
-                    print_streamed_message(llm_response, config.CYAN)
+                    print_streamed_message(llm_response, config.CYAN, config)
                     return None
                 else:
                     # Default to standard LLM processing
