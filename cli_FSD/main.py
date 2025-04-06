@@ -58,7 +58,42 @@ def main():
 
     while True:
         try:
-            user_input = input(f"{config.YELLOW}@{config.SMALL_FONT}(v{config.VERSION}){config.RESET}{config.YELLOW}:{config.RESET} ").strip()
+            # Build a more informative prompt with session status indicators
+            prompt_parts = []
+            
+            # Add model indicator with color coding
+            if config.session_model:
+                if config.session_model == 'claude':
+                    model_indicator = f"{config.GREEN}C{config.RESET}"
+                elif config.session_model == 'ollama':
+                    model_indicator = f"{config.YELLOW}O{config.RESET}"
+                elif config.session_model == 'groq':
+                    model_indicator = f"{config.CYAN}G{config.RESET}"
+                else:
+                    model_indicator = f"{config.RED}?{config.RESET}"
+                prompt_parts.append(model_indicator)
+            
+            # Add mode indicators
+            if config.safe_mode:
+                prompt_parts.append(f"{config.GREEN}S{config.RESET}")
+            if config.autopilot_mode:
+                prompt_parts.append(f"{config.RED}A{config.RESET}")
+            
+            # Add cache indicator if browser content is available
+            from .script_handlers import _content_cache
+            if _content_cache['raw_content']:
+                prompt_parts.append(f"{config.CYAN}🌐{config.RESET}")
+                
+            # Add history count if available
+            if hasattr(config, 'session_history') and config.session_history:
+                history_count = len(config.session_history)
+                prompt_parts.append(f"{config.YELLOW}[{history_count}]{config.RESET}")
+            
+            # Build the final prompt
+            status_indicators = "".join(prompt_parts)
+            
+            # Get input with the enhanced prompt
+            user_input = input(f"{config.YELLOW}{status_indicators}@{config.SMALL_FONT}(v{config.VERSION}){config.RESET}{config.YELLOW}:{config.RESET} ").strip()
 
             if not user_input:
                 continue  # Skip empty inputs

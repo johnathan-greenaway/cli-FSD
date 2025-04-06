@@ -502,6 +502,79 @@ def process_input_based_on_mode(query, config, chat_models):
     if _content_cache['raw_content'] and any(word in query.lower() for word in ['show', 'view', 'read', 'tell', 'about']):
         matching_content = _find_matching_content(query)
         if matching_content:
+            # Box dimensions - adjust based on content
+            headline = matching_content['headline']
+            box_width = min(80, max(60, len(headline) + 10))
+            
+            # Print header with border
+            print(f"\n{config.CYAN}╭─{'─' * box_width}╮{config.RESET}")
+            print(f"{config.CYAN}│ {config.BOLD}{config.YELLOW}MATCHED CONTENT{' ' * (box_width - 16)}│{config.RESET}")
+            print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+            
+            # Print headline
+            print(f"{config.CYAN}│ {config.BOLD}HEADLINE:{' ' * (box_width - 11)}│{config.RESET}")
+            
+            # Split headline into multiple lines if needed
+            remaining = headline
+            while remaining:
+                line = remaining[:box_width - 4]
+                padding = ' ' * (box_width - len(line) - 2)
+                print(f"{config.CYAN}│ {config.GREEN}{line}{config.RESET}{padding}{config.CYAN}│{config.RESET}")
+                remaining = remaining[box_width - 4:]
+            
+            # Main content section
+            if matching_content['content']:
+                print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+                print(f"{config.CYAN}│ {config.BOLD}CONTENT:{' ' * (box_width - 10)}│{config.RESET}")
+                
+                # Format content paragraphs
+                paragraphs = matching_content['content'].split('\n\n')
+                for i, paragraph in enumerate(paragraphs):
+                    if i > 0:
+                        # Add paragraph separator
+                        print(f"{config.CYAN}│{' ' * (box_width - 1)}│{config.RESET}")
+                    
+                    # Split paragraph into lines
+                    remaining = paragraph
+                    while remaining:
+                        line = remaining[:box_width - 4]
+                        padding = ' ' * (box_width - len(line) - 2)
+                        print(f"{config.CYAN}│ {config.RESET}{line}{padding}{config.CYAN}│{config.RESET}")
+                        remaining = remaining[box_width - 4:]
+            
+            # Additional details section
+            if matching_content.get('details'):
+                print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+                print(f"{config.CYAN}│ {config.BOLD}DETAILS:{' ' * (box_width - 10)}│{config.RESET}")
+                
+                # Format details paragraphs
+                details = matching_content['details']
+                remaining = details
+                while remaining:
+                    line = remaining[:box_width - 4]
+                    padding = ' ' * (box_width - len(line) - 2)
+                    print(f"{config.CYAN}│ {config.YELLOW}{line}{config.RESET}{padding}{config.CYAN}│{config.RESET}")
+                    remaining = remaining[box_width - 4:]
+            
+            # Links section
+            if matching_content.get('links') and matching_content['links']:
+                print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+                print(f"{config.CYAN}│ {config.BOLD}LINKS:{' ' * (box_width - 8)}│{config.RESET}")
+                
+                # Display each link
+                for link in matching_content['links']:
+                    remaining = f"• {link}"
+                    while remaining:
+                        line = remaining[:box_width - 4]
+                        padding = ' ' * (box_width - len(line) - 2)
+                        print(f"{config.CYAN}│ {config.RESET}{line}{padding}{config.CYAN}│{config.RESET}")
+                        remaining = remaining[box_width - 4:]
+            
+            # Print footer with tip
+            print(f"{config.CYAN}╰─{'─' * box_width}╯{config.RESET}")
+            print(f"{config.YELLOW}Tip: Ask follow-up questions about this content for more details{config.RESET}\n")
+            
+            # Return formatted text for history
             result = []
             result.append(f"Found relevant content:")
             result.append(f"\nHeadline: {matching_content['headline']}")
@@ -514,9 +587,7 @@ def process_input_based_on_mode(query, config, chat_models):
                 for link in matching_content['links']:
                     result.append(f"- {link}")
             
-            formatted_result = "\n".join(result)
-            print(f"\n{config.CYAN}{formatted_result}{config.RESET}")
-            return formatted_result
+            return "\n".join(result)
     
     # Check if this is a follow-up question about cached content
     if _content_cache['formatted_content'] and not query.lower().startswith(("get", "fetch", "find")):
@@ -1168,7 +1239,12 @@ def display_session_history(config):
         print(f"{config.YELLOW}{message}{config.RESET}")
         return message
     
-    result = ["Session History:"]
+    # Print header with border
+    print(f"\n{config.CYAN}╭─{'─' * 50}╮{config.RESET}")
+    print(f"{config.CYAN}│ {config.BOLD}Session History{' ' * 35}│{config.RESET}")
+    print(f"{config.CYAN}├─{'─' * 50}┤{config.RESET}")
+    
+    # Print history items
     for i, item in enumerate(config.session_history):
         # Format timestamp nicely
         try:
@@ -1179,14 +1255,38 @@ def display_session_history(config):
             
         # Truncate long queries/responses
         query = item['query']
+        if len(query) > 42:  # Adjusted for box width
+            query = query[:39] + "..."
+        
+        # Left-pad index for alignment    
+        idx_str = f"{i}".rjust(2)
+        
+        # Add color coding based on even/odd rows for easier scanning
+        if i % 2 == 0:
+            print(f"{config.CYAN}│ {config.YELLOW}{idx_str}{config.RESET}: [{time_str}] {query}{' ' * (43 - len(query))}{config.CYAN}│{config.RESET}")
+        else:
+            print(f"{config.CYAN}│ {config.GREEN}{idx_str}{config.RESET}: [{time_str}] {query}{' ' * (43 - len(query))}{config.CYAN}│{config.RESET}")
+    
+    # Print footer
+    print(f"{config.CYAN}╰─{'─' * 50}╯{config.RESET}")
+    print(f"\n{config.YELLOW}Tip: Use 'recall N' to view the full content of an item{config.RESET}\n")
+    
+    # Return formatted string for history
+    result = ["Session History:"]
+    for i, item in enumerate(config.session_history):
+        try:
+            timestamp = datetime.fromisoformat(item['timestamp'])
+            time_str = timestamp.strftime("%H:%M:%S")
+        except (ValueError, TypeError):
+            time_str = "Unknown time"
+            
+        query = item['query']
         if len(query) > 50:
             query = query[:47] + "..."
             
         result.append(f"{i}: [{time_str}] {query}")
     
-    formatted_result = "\n".join(result)
-    print(f"{config.CYAN}{formatted_result}{config.RESET}")
-    return formatted_result
+    return "\n".join(result)
 
 def recall_history_item(config, index):
     """Recall and display a specific history item."""
@@ -1197,14 +1297,74 @@ def recall_history_item(config, index):
     
     try:
         item = config.session_history[index]
+        
+        # Get timestamp in readable format
+        try:
+            timestamp = datetime.fromisoformat(item['timestamp'])
+            time_str = timestamp.strftime("%H:%M:%S")
+        except (ValueError, TypeError):
+            time_str = "Unknown time"
+        
+        # Calculate box width based on query length
+        query = item['query']
+        box_width = min(80, max(50, len(query) + 10))  # Dynamic width based on content
+        
+        # Print header with border
+        print(f"\n{config.CYAN}╭─{'─' * box_width}╮{config.RESET}")
+        print(f"{config.CYAN}│ {config.BOLD}History Item #{index} • {time_str}{' ' * (box_width - 19 - len(str(index)) - len(time_str))}│{config.RESET}")
+        print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+        
+        # Print query with label
+        print(f"{config.CYAN}│ {config.YELLOW}QUERY:{' ' * (box_width - 8)}{config.CYAN}│{config.RESET}")
+        
+        # Split query into multiple lines if needed
+        query_lines = []
+        remaining = query
+        while remaining:
+            # Take up to box_width - 4 chars (accounting for margins)
+            line = remaining[:box_width - 4]
+            query_lines.append(line)
+            remaining = remaining[box_width - 4:]
+        
+        for line in query_lines:
+            padding = ' ' * (box_width - len(line) - 2)
+            print(f"{config.CYAN}│ {config.RESET}{line}{padding}{config.CYAN}│{config.RESET}")
+        
+        # Divider between query and response
+        print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+        
+        # Print response with label
+        print(f"{config.CYAN}│ {config.GREEN}RESPONSE:{' ' * (box_width - 11)}{config.CYAN}│{config.RESET}")
+        
+        # Split response into multiple lines
+        response = item['response']
+        response_lines = []
+        remaining = response
+        while remaining:
+            line = remaining[:box_width - 4]
+            response_lines.append(line)
+            remaining = remaining[box_width - 4:]
+        
+        # Display first 15 lines max to avoid flooding terminal
+        max_lines = 15
+        for i, line in enumerate(response_lines[:max_lines]):
+            padding = ' ' * (box_width - len(line) - 2)
+            print(f"{config.CYAN}│ {config.RESET}{line}{padding}{config.CYAN}│{config.RESET}")
+        
+        # If response is truncated, show indicator
+        if len(response_lines) > max_lines:
+            print(f"{config.CYAN}│ {config.YELLOW}... {len(response_lines) - max_lines} more lines ...{' ' * (box_width - 24 - len(str(len(response_lines) - max_lines)))}{config.CYAN}│{config.RESET}")
+        
+        # Print footer
+        print(f"{config.CYAN}╰─{'─' * box_width}╯{config.RESET}\n")
+        
+        # Format result for return
         result = [
             f"Query: {item['query']}",
             "",
             f"Response: {item['response']}"
         ]
-        formatted_result = "\n".join(result)
-        print(f"{config.CYAN}{formatted_result}{config.RESET}")
-        return formatted_result
+        return "\n".join(result)
     except IndexError:
         message = f"No history item at index {index}."
         print(f"{config.YELLOW}{message}{config.RESET}")
@@ -1212,17 +1372,112 @@ def recall_history_item(config, index):
 
 def display_session_status(config):
     """Display current session status."""
+    # Box dimensions
+    box_width = 60
+    
+    # Headers for each section
+    model_header = "🤖 MODEL"
+    cache_header = "💾 CACHE"
+    history_header = "📜 HISTORY"
+    settings_header = "⚙️ SETTINGS"
+    
+    # Print title box
+    print(f"\n{config.CYAN}╭─{'─' * box_width}╮{config.RESET}")
+    print(f"{config.CYAN}│ {config.BOLD}{config.YELLOW}SESSION STATUS DASHBOARD{' ' * (box_width - 24)}│{config.RESET}")
+    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    
+    # MODEL SECTION
+    print(f"{config.CYAN}│ {config.BOLD}{model_header}{' ' * (box_width - len(model_header) - 2)}│{config.RESET}")
+    print(f"{config.CYAN}│{config.RESET} • Active Model: {config.GREEN}{config.session_model or 'Default'}{config.RESET}{' ' * (box_width - 16 - len(config.session_model or 'Default'))}{config.CYAN}│{config.RESET}")
+    
+    model_status = []
+    if hasattr(config, 'use_claude') and config.use_claude:
+        model_status.append(f"{config.GREEN}Claude{config.RESET}")
+    else:
+        model_status.append(f"{config.RED}Claude{config.RESET}")
+        
+    if hasattr(config, 'use_ollama') and config.use_ollama:
+        model_status.append(f"{config.GREEN}Ollama{config.RESET}")
+    else:
+        model_status.append(f"{config.RED}Ollama{config.RESET}")
+        
+    if hasattr(config, 'use_groq') and config.use_groq:
+        model_status.append(f"{config.GREEN}Groq{config.RESET}")
+    else:
+        model_status.append(f"{config.RED}Groq{config.RESET}")
+    
+    print(f"{config.CYAN}│{config.RESET} • Available: {' | '.join(model_status)}{' ' * (box_width - 14 - len(' | '.join(['Claude', 'Ollama', 'Groq'])))}{config.CYAN}│{config.RESET}")
+    
+    # Divider
+    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    
+    # CACHE SECTION
+    print(f"{config.CYAN}│ {config.BOLD}{cache_header}{' ' * (box_width - len(cache_header) - 2)}│{config.RESET}")
+    
+    # Browser cache status
+    has_browser_cache = bool(_content_cache['raw_content'])
+    cache_status = f"{config.GREEN}Available{config.RESET}" if has_browser_cache else f"{config.RED}Empty{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Browser Cache: {cache_status}{' ' * (box_width - 17 - len('Available' if has_browser_cache else 'Empty'))}{config.CYAN}│{config.RESET}")
+    
+    # Show formatted content status
+    has_formatted = bool(_content_cache['formatted_content'])
+    formatted_status = f"{config.GREEN}Yes{config.RESET}" if has_formatted else f"{config.RED}No{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Formatted Content: {formatted_status}{' ' * (box_width - 21 - len('Yes' if has_formatted else 'No'))}{config.CYAN}│{config.RESET}")
+    
+    # Divider
+    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    
+    # HISTORY SECTION
+    print(f"{config.CYAN}│ {config.BOLD}{history_header}{' ' * (box_width - len(history_header) - 2)}│{config.RESET}")
+    
+    # History count
+    history_count = len(config.session_history) if hasattr(config, 'session_history') else 0
+    print(f"{config.CYAN}│{config.RESET} • Items: {config.YELLOW}{history_count}{config.RESET}{' ' * (box_width - 9 - len(str(history_count)))}{config.CYAN}│{config.RESET}")
+    
+    # Context items count
+    context_count = len(_response_context['previous_responses'])
+    print(f"{config.CYAN}│{config.RESET} • Context Items: {config.YELLOW}{context_count}{config.RESET}{' ' * (box_width - 17 - len(str(context_count)))}{config.CYAN}│{config.RESET}")
+    
+    # Divider
+    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    
+    # SETTINGS SECTION
+    print(f"{config.CYAN}│ {config.BOLD}{settings_header}{' ' * (box_width - len(settings_header) - 2)}│{config.RESET}")
+    
+    # Tolerance level with appropriate color
+    tolerance = _response_context['tolerance_level']
+    if tolerance == 'strict':
+        tolerance_display = f"{config.RED}strict{config.RESET}"
+    elif tolerance == 'lenient':
+        tolerance_display = f"{config.GREEN}lenient{config.RESET}"
+    else:
+        tolerance_display = f"{config.YELLOW}medium{config.RESET}"
+    
+    print(f"{config.CYAN}│{config.RESET} • Response Tolerance: {tolerance_display}{' ' * (box_width - 21 - len(tolerance))}{config.CYAN}│{config.RESET}")
+    
+    # Modes with appropriate colors
+    safe_mode = f"{config.GREEN}Enabled{config.RESET}" if config.safe_mode else f"{config.RED}Disabled{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Safe Mode: {safe_mode}{' ' * (box_width - 13 - len('Enabled' if config.safe_mode else 'Disabled'))}{config.CYAN}│{config.RESET}")
+    
+    autopilot_mode = f"{config.GREEN}Enabled{config.RESET}" if config.autopilot_mode else f"{config.RED}Disabled{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Autopilot Mode: {autopilot_mode}{' ' * (box_width - 18 - len('Enabled' if config.autopilot_mode else 'Disabled'))}{config.CYAN}│{config.RESET}")
+    
+    scriptreviewer = f"{config.GREEN}Enabled{config.RESET}" if hasattr(config, 'scriptreviewer_on') and config.scriptreviewer_on else f"{config.RED}Disabled{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Script Reviewer: {scriptreviewer}{' ' * (box_width - 19 - len('Enabled' if hasattr(config, 'scriptreviewer_on') and config.scriptreviewer_on else 'Disabled'))}{config.CYAN}│{config.RESET}")
+    
+    # Print footer
+    print(f"{config.CYAN}╰─{'─' * box_width}╯{config.RESET}\n")
+    
+    # Return formatted string for status
     result = ["Current Session Status:"]
     
     # Model information
     result.append(f"Model: {config.session_model or 'Default'}")
     
     # Browser cache status
-    has_browser_cache = bool(_content_cache['raw_content'])
     result.append(f"Browser cache: {'Available' if has_browser_cache else 'Empty'}")
     
     # History count
-    history_count = len(config.session_history) if hasattr(config, 'session_history') else 0
     result.append(f"History items: {history_count}")
     
     # Tolerance level
@@ -1232,6 +1487,4 @@ def display_session_status(config):
     result.append(f"Safe mode: {'Enabled' if config.safe_mode else 'Disabled'}")
     result.append(f"Autopilot mode: {'Enabled' if config.autopilot_mode else 'Disabled'}")
     
-    formatted_result = "\n".join(result)
-    print(f"{config.CYAN}{formatted_result}{config.RESET}")
-    return formatted_result
+    return "\n".join(result)
