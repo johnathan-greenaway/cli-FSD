@@ -3,6 +3,7 @@
 import argparse
 import sys
 import logging
+from datetime import datetime
 from . import configuration
 from .configuration import initialize_config
 
@@ -25,6 +26,13 @@ def main():
     )
 
     logging.info("cli-FSD started")
+
+    # Initialize web fetcher early
+    try:
+        from .web_fetcher import fetcher
+        logging.info("Initialized WebContentFetcher")
+    except Exception as e:
+        logging.error(f"Failed to initialize WebContentFetcher: {e}")
 
     args = parse_arguments()
     config = initialize_config(args)
@@ -51,7 +59,42 @@ def main():
 
     while True:
         try:
-            user_input = input(f"{config.YELLOW}@{config.SMALL_FONT}(v{config.VERSION}){config.RESET}{config.YELLOW}:{config.RESET} ").strip()
+            # Build a more informative prompt with session status indicators
+            prompt_parts = []
+            
+            # Add model indicator with color coding
+            if config.session_model:
+                if config.session_model == 'claude':
+                    model_indicator = f"{config.GREEN}C{config.RESET}"
+                elif config.session_model == 'ollama':
+                    model_indicator = f"{config.YELLOW}O{config.RESET}"
+                elif config.session_model == 'groq':
+                    model_indicator = f"{config.CYAN}G{config.RESET}"
+                else:
+                    model_indicator = f"{config.RED}?{config.RESET}"
+                prompt_parts.append(model_indicator)
+            
+            # Add mode indicators
+            if config.safe_mode:
+                prompt_parts.append(f"{config.GREEN}S{config.RESET}")
+            if config.autopilot_mode:
+                prompt_parts.append(f"{config.RED}A{config.RESET}")
+            
+            # Add cache indicator if browser content is available
+            from .script_handlers import _content_cache
+            if _content_cache['raw_content']:
+                prompt_parts.append(f"{config.CYAN}🌐{config.RESET}")
+                
+            # Add history count if available
+            if hasattr(config, 'session_history') and config.session_history:
+                history_count = len(config.session_history)
+                prompt_parts.append(f"{config.YELLOW}[{history_count}]{config.RESET}")
+            
+            # Build the final prompt
+            status_indicators = "".join(prompt_parts)
+            
+            # Get input with the enhanced prompt
+            user_input = input(f"{config.YELLOW}{status_indicators}@{config.SMALL_FONT}(v{config.VERSION}){config.RESET}{config.YELLOW}:{config.RESET} ").strip()
 
             if not user_input:
                 continue  # Skip empty inputs
@@ -154,8 +197,33 @@ def main():
                 logging.info("Switched to normal mode.")
             else:
                 try:
-                    config.last_response = process_input_based_on_mode(user_input, config, chat_models)
+                    # Process the input and get the response
+                    response = process_input_based_on_mode(user_input, config, chat_models)
+                    
+                    # Update session history with this interaction
+                    if not hasattr(config, 'session_history'):
+                        config.session_history = []
+                    
+                    # Store interaction in session history
+                    config.session_history.append({
+                        'query': user_input,
+                        'response': response if response else "No response generated",
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    
+                    # Store last response for reference
+                    config.last_response = response if response else "No response generated"
                     logging.info(f"Processed command: {user_input}")
+                    
+                    # Make sure the response is actually shown to the user if it wasn't already printed
+                    if response:
+                        # Don't double-print if it was already streamed
+                        if not hasattr(config, '_response_was_streamed') or not config._response_was_streamed:
+                            print(f"{config.CYAN}{response}{config.RESET}")
+                        config._response_was_streamed = False
+                    
+                    # Always reset this flag for next input
+                    config._response_was_streamed = False
                 except Exception as e:
                     error_message = f"Error processing command '{user_input}': {e}"
                     print(f"{config.RED}Error processing command: {e}{config.RESET}")

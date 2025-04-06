@@ -6,6 +6,7 @@ from datetime import datetime, date
 import glob
 import os
 import re
+import json
 
 # Color constants
 CYAN = "\033[96m"
@@ -73,11 +74,15 @@ def print_instructions_once_per_day():
         print_instructions()
 
 
-def print_streamed_message(message, color=CYAN):
+def print_streamed_message(message, color=CYAN, config=None):
     for char in message:
         print(f"{color}{char}{RESET}", end='', flush=True)
         time.sleep(0.03)
     print()
+    
+    # Mark that this response was streamed so we don't double-print it
+    if config:
+        config._response_was_streamed = True
 
 
 def get_weather():
@@ -103,15 +108,34 @@ def display_greeting():
     with open(last_run_file, "w") as file:
         file.write(str(today))
 
+    from . import configuration
+    config = configuration.Config()
+    
     if str(today) != last_run:
-        from . import configuration
-        config = configuration.Config()
         weather = get_weather()
         system_info = get_system_info()
         print(f"{BOLD}Terminal Companion with Full Self Drive Mode {config.SMALL_FONT}(v{config.VERSION}){RESET}")
         print(f"{weather}")
         print(f"{system_info}")
-        print("What would you like to do today?")
+        
+        # Add decorated box for session commands
+        box_width = 60
+        print(f"\n{CYAN}╭─{'─' * box_width}╮{RESET}")
+        print(f"{CYAN}│ {BOLD}{YELLOW}SESSION MANAGEMENT COMMANDS{' ' * (box_width - 27)}│{RESET}")
+        print(f"{CYAN}├─{'─' * box_width}┤{RESET}")
+        print(f"{CYAN}│ {GREEN}• history{RESET}{' ' * (box_width - 10)}│{RESET}")
+        print(f"{CYAN}│   View list of past interactions{' ' * (box_width - 32)}│{RESET}")
+        print(f"{CYAN}│ {GREEN}• recall N{RESET}{' ' * (box_width - 11)}│{RESET}")
+        print(f"{CYAN}│   Display full content of history item N{' ' * (box_width - 40)}│{RESET}")
+        print(f"{CYAN}│ {GREEN}• session status{RESET}{' ' * (box_width - 17)}│{RESET}")
+        print(f"{CYAN}│   Show current session information{' ' * (box_width - 35)}│{RESET}")
+        print(f"{CYAN}│ {GREEN}• set tolerance [strict|medium|lenient]{RESET}{' ' * (box_width - 39)}│{RESET}")
+        print(f"{CYAN}│   Adjust how strictly responses are evaluated{' ' * (box_width - 46)}│{RESET}")
+        print(f"{CYAN}╰─{'─' * box_width}╯{RESET}")
+        print("\nWhat would you like to do today?")
+    else:
+        # For returning users, just show a minimal reminder
+        print(f"{GREEN}Tip: Use 'history', 'recall N', or 'session status' to manage your session{RESET}")
 
     sys.stdout.flush()
 
@@ -152,6 +176,36 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     Returns:
         Tool execution result as a string
     """
+    import json  # Import json at the top level to ensure it's available
+
+    # For browse_web operation, try to use our efficient WebContentFetcher first
+    if tool_name == "browse_web" and "url" in arguments:
+        try:
+            from .web_fetcher import fetcher
+            url = arguments["url"]
+            # Try to use our efficient fetcher
+            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+            if result:
+                # Format for better Ollama compatibility - reduce nesting and complexity
+                if "url" in arguments and "news.ycombinator.com" in arguments["url"]:
+                    # Custom formatting for Hacker News
+                    simplified_result = []
+                    if isinstance(result, dict) and "structured_content" in result:
+                        for item in result.get("structured_content", []):
+                            if item.get("type") == "story":
+                                simplified_result.append({
+                                    "title": item.get("title", ""),
+                                    "url": item.get("url", ""),
+                                    "metadata": item.get("metadata", {})
+                                })
+                    return json.dumps(simplified_result)
+                return json.dumps(result)
+        except Exception as e:
+            # Log the exception for debugging
+            print(f"WebFetcher error: {str(e)}", file=sys.stderr)
+            # If our fetcher fails, continue with MCP tool
+            pass
+    
     try:
         import json
         import subprocess

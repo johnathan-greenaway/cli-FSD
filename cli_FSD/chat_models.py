@@ -64,9 +64,12 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
     # Use provided system prompt or default
     if system_prompt is None:
         system_prompt = (
-            "You are a helpful assistant that can either generate bash commands for tasks "
-            "or provide direct responses. For web browsing or information requests, provide "
-            "a direct response. For system operations, generate runnable bash commands. "
+            "You are a helpful assistant with extensive programming knowledge that can either generate bash commands for tasks "
+            "or provide direct responses. You have strong understanding of programming languages, frameworks, "
+            "development practices, and system administration. For web browsing or information requests, provide "
+            "a direct response. For system operations, generate runnable bash commands. For programming requests, "
+            "provide complete, working solutions from your built-in knowledge. If web browser results are incomplete "
+            "or unhelpful, rely on your built-in knowledge to solve the problem instead of getting stuck. "
             f"System info: {get_system_info()}"
         )
     
@@ -107,10 +110,32 @@ def chat_with_ollama(message, ollama_client, system_prompt):
     try:
         # Use the running model if available, otherwise fallback to a default
         model = getattr(ollama_client, 'running_model', 'llama3.1:8b')
+        
+        # Check if the message contains JSON data from web browsing
+        is_json_data = False
+        json_prompt = ""
+        
+        if "browse_web" in message and any(domain in message for domain in ["news.ycombinator.com", "reddit.com", "github.com", "stackoverflow.com"]):
+            # For web browsing with structured data, add special prompt instructions
+            json_prompt = (
+                "You are analyzing structured web content. "
+                "The data provided is in JSON format and may be incomplete. "
+                "Format your response as a clear summary of the key information. "
+                "For news aggregators like Hacker News, list the important stories with their details. "
+                "Always present information in a readable format, even if the JSON is truncated. "
+                "IMPORTANT: If the web content isn't helpful or is incomplete, don't get stuck - " 
+                "use your built-in knowledge to answer the original question instead. "
+                "You have extensive programming knowledge and can solve most technical questions "
+                "without relying on incomplete web data. The web content should SUPPLEMENT your knowledge, not REPLACE it."
+            )
+        
+        # Combine system prompts if needed
+        full_system_prompt = json_prompt + "\n\n" + system_prompt if json_prompt else system_prompt
+        
         response = ollama_client.chat(
             model=model,
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": full_system_prompt},
                 {"role": "user", "content": message},
             ]
         )
@@ -139,22 +164,57 @@ def chat_with_claude(message, config, system_prompt):
     if not anthropic_api_key:
         return "Anthropic API key missing."
     
+    # Get the current model from config, default to opus if not specified
+    model = config.models.get(config.current_model, "claude-3-opus-20240229")
+    if not model.startswith("claude-"):  # If not a Claude model, use default
+        model = "claude-3-opus-20240229"
+    
+    # Set headers based on model
     headers = {
         "x-api-key": anthropic_api_key,
         "content-type": "application/json",
         "anthropic-version": "2023-06-01"
     }
     
-    # Get the current model from config, default to opus if not specified
-    model = config.models.get(config.current_model, "claude-3-opus-20240229")
-    if not model.startswith("claude-"):  # If not a Claude model, use default
-        model = "claude-3-opus-20240229"
+    # Check message size - Claude has a limit on input size
+    if len(message) > 100000:
+        # Truncate long messages to prevent API errors
+        message = message[:100000] + "... [content truncated due to length]"
+        print(f"Warning: Message truncated to 100K characters for Claude API.")
     
+    # Check if message is JSON and handle specially
+    if message.strip().startswith('{') or message.strip().startswith('['):
+        try:
+            # Try to parse and simplify JSON to reduce token usage
+            json_data = json.loads(message)
+            # Keep track of original message for fallback
+            original_message = message
+            
+            # If it's a large JSON object, simplify it
+            if isinstance(json_data, dict):
+                # For browser content, extract the most relevant parts
+                if "url" in json_data and "text_content" in json_data:
+                    # It's likely a web page result
+                    simplified_message = (
+                        f"Web content from {json_data.get('url', 'unknown URL')}:\n\n"
+                        f"Title: {json_data.get('title', 'No title')}\n\n"
+                        f"Content: {json_data.get('text_content', '')[:50000]}"
+                    )
+                    message = simplified_message
+            
+            # If simplification failed or wasn't applicable, use the original but warn
+            if message == original_message:
+                print("Warning: Large JSON being sent to Claude API. This may cause token limit issues.")
+        except json.JSONDecodeError:
+            # Not valid JSON, leave as is
+            pass
+    
+    # Claude API expects system in the top level, not as a message
     data = {
         "model": model,
         "max_tokens": 1024,
+        "system": system_prompt,  # System prompt at the top level
         "messages": [
-            {"role": "system", "content": system_prompt},
             {"role": "user", "content": message}
         ]
     }
@@ -165,8 +225,50 @@ def chat_with_claude(message, config, system_prompt):
         response.raise_for_status()
         content_blocks = response.json().get('content', [])
         return ' '.join(block['text'] for block in content_blocks if block['type'] == 'text')
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"Error while chatting with Claude: {e}"
+        
+        # Check for specific error responses to provide better feedback
+        if e.response is not None:
+            try:
+                error_json = e.response.json()
+                if "error" in error_json:
+                    error_type = error_json.get("error", {}).get("type", "")
+                    error_message = error_json.get("error", {}).get("message", "")
+                    
+                    if "token" in error_message.lower() or "context_length" in error_type.lower():
+                        return "The message is too long for Claude to process. Please try with a shorter query or different content."
+                    elif "rate" in error_type.lower():
+                        return "Rate limit exceeded for Claude API. Please try again in a few moments."
+                    elif "credit" in error_message.lower():
+                        return "Claude API credit balance is too low. Please check your Anthropic account."
+                    # Handle specific formatting errors
+                    elif "unexpected role" in error_message.lower():
+                        # Try with an older API format as fallback
+                        try:
+                            fallback_data = {
+                                "model": model,
+                                "max_tokens": 1024,
+                                "messages": [
+                                    {"role": "user", "content": f"System instruction: {system_prompt}\n\nUser query: {message}"}
+                                ]
+                            }
+                            fallback_response = requests.post(endpoint, headers=headers, data=json.dumps(fallback_data))
+                            fallback_response.raise_for_status()
+                            content_blocks = fallback_response.json().get('content', [])
+                            return ' '.join(block['text'] for block in content_blocks if block['type'] == 'text')
+                        except Exception as fallback_error:
+                            return f"Claude API format error and fallback failed: {error_message}"
+                    else:
+                        return f"Claude API error: {error_message}"
+            except (ValueError, AttributeError):
+                pass  # Use the default error message if we can't parse the response
+                
+        return error_msg
     except requests.exceptions.RequestException as e:
-        return f"Error while chatting with Claude: {e}"
+        return f"Connection error while chatting with Claude: {e}"
+    except Exception as e:
+        return f"Unexpected error while chatting with Claude: {e}"
 
 def chat_with_openai(message, config, system_prompt=None):
     if not config.api_key:
@@ -183,9 +285,12 @@ def chat_with_openai(message, config, system_prompt=None):
     # Use provided system prompt or default
     if system_prompt is None:
         system_prompt = (
-            "You are a helpful assistant that can either generate bash commands for tasks "
-            "or provide direct responses. For web browsing or information requests, provide "
-            "a direct response. For system operations, generate runnable bash commands. "
+            "You are a helpful assistant with extensive programming knowledge that can either generate bash commands for tasks "
+            "or provide direct responses. You have strong understanding of programming languages, frameworks, "
+            "development practices, and system administration. For web browsing or information requests, provide "
+            "a direct response. For system operations, generate runnable bash commands. For programming requests, "
+            "provide complete, working solutions from your built-in knowledge. If web browser results are incomplete "
+            "or unhelpful, rely on your built-in knowledge to solve the problem instead of getting stuck. "
             f"System info: {get_system_info()}"
         )
     
