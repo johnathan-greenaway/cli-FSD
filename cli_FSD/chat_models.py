@@ -164,22 +164,57 @@ def chat_with_claude(message, config, system_prompt):
     if not anthropic_api_key:
         return "Anthropic API key missing."
     
+    # Get the current model from config, default to opus if not specified
+    model = config.models.get(config.current_model, "claude-3-opus-20240229")
+    if not model.startswith("claude-"):  # If not a Claude model, use default
+        model = "claude-3-opus-20240229"
+    
+    # Set headers based on model
     headers = {
         "x-api-key": anthropic_api_key,
         "content-type": "application/json",
         "anthropic-version": "2023-06-01"
     }
     
-    # Get the current model from config, default to opus if not specified
-    model = config.models.get(config.current_model, "claude-3-opus-20240229")
-    if not model.startswith("claude-"):  # If not a Claude model, use default
-        model = "claude-3-opus-20240229"
+    # Check message size - Claude has a limit on input size
+    if len(message) > 100000:
+        # Truncate long messages to prevent API errors
+        message = message[:100000] + "... [content truncated due to length]"
+        print(f"Warning: Message truncated to 100K characters for Claude API.")
     
+    # Check if message is JSON and handle specially
+    if message.strip().startswith('{') or message.strip().startswith('['):
+        try:
+            # Try to parse and simplify JSON to reduce token usage
+            json_data = json.loads(message)
+            # Keep track of original message for fallback
+            original_message = message
+            
+            # If it's a large JSON object, simplify it
+            if isinstance(json_data, dict):
+                # For browser content, extract the most relevant parts
+                if "url" in json_data and "text_content" in json_data:
+                    # It's likely a web page result
+                    simplified_message = (
+                        f"Web content from {json_data.get('url', 'unknown URL')}:\n\n"
+                        f"Title: {json_data.get('title', 'No title')}\n\n"
+                        f"Content: {json_data.get('text_content', '')[:50000]}"
+                    )
+                    message = simplified_message
+            
+            # If simplification failed or wasn't applicable, use the original but warn
+            if message == original_message:
+                print("Warning: Large JSON being sent to Claude API. This may cause token limit issues.")
+        except json.JSONDecodeError:
+            # Not valid JSON, leave as is
+            pass
+    
+    # Claude API expects system in the top level, not as a message
     data = {
         "model": model,
         "max_tokens": 1024,
+        "system": system_prompt,  # System prompt at the top level
         "messages": [
-            {"role": "system", "content": system_prompt},
             {"role": "user", "content": message}
         ]
     }
@@ -190,8 +225,50 @@ def chat_with_claude(message, config, system_prompt):
         response.raise_for_status()
         content_blocks = response.json().get('content', [])
         return ' '.join(block['text'] for block in content_blocks if block['type'] == 'text')
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"Error while chatting with Claude: {e}"
+        
+        # Check for specific error responses to provide better feedback
+        if e.response is not None:
+            try:
+                error_json = e.response.json()
+                if "error" in error_json:
+                    error_type = error_json.get("error", {}).get("type", "")
+                    error_message = error_json.get("error", {}).get("message", "")
+                    
+                    if "token" in error_message.lower() or "context_length" in error_type.lower():
+                        return "The message is too long for Claude to process. Please try with a shorter query or different content."
+                    elif "rate" in error_type.lower():
+                        return "Rate limit exceeded for Claude API. Please try again in a few moments."
+                    elif "credit" in error_message.lower():
+                        return "Claude API credit balance is too low. Please check your Anthropic account."
+                    # Handle specific formatting errors
+                    elif "unexpected role" in error_message.lower():
+                        # Try with an older API format as fallback
+                        try:
+                            fallback_data = {
+                                "model": model,
+                                "max_tokens": 1024,
+                                "messages": [
+                                    {"role": "user", "content": f"System instruction: {system_prompt}\n\nUser query: {message}"}
+                                ]
+                            }
+                            fallback_response = requests.post(endpoint, headers=headers, data=json.dumps(fallback_data))
+                            fallback_response.raise_for_status()
+                            content_blocks = fallback_response.json().get('content', [])
+                            return ' '.join(block['text'] for block in content_blocks if block['type'] == 'text')
+                        except Exception as fallback_error:
+                            return f"Claude API format error and fallback failed: {error_message}"
+                    else:
+                        return f"Claude API error: {error_message}"
+            except (ValueError, AttributeError):
+                pass  # Use the default error message if we can't parse the response
+                
+        return error_msg
     except requests.exceptions.RequestException as e:
-        return f"Error while chatting with Claude: {e}"
+        return f"Connection error while chatting with Claude: {e}"
+    except Exception as e:
+        return f"Unexpected error while chatting with Claude: {e}"
 
 def chat_with_openai(message, config, system_prompt=None):
     if not config.api_key:
