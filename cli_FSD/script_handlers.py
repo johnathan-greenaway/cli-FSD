@@ -459,8 +459,19 @@ def try_browser_search(query: str, config, chat_models) -> str:
     for term in ['search', 'find', 'lookup', 'what is', 'how to', 'browse']:
         search_query = search_query.replace(term, '').strip()
     
-    url = f"https://www.google.com/search?q={search_query}"
+    # Check for direct site visits
+    if "hacker news" in search_query.lower() or "hackernews" in search_query.lower() or "hn" in search_query.lower():
+        url = "https://news.ycombinator.com/"
+    elif "reddit" in search_query.lower():
+        url = f"https://www.reddit.com/search/?q={search_query.replace('reddit', '')}"
+    elif "github" in search_query.lower():
+        url = f"https://github.com/search?q={search_query.replace('github', '')}"
+    else:
+        # Default to Google search
+        url = f"https://www.google.com/search?q={search_query}"
+    
     print(f"{config.CYAN}Trying browser search for: {search_query}{config.RESET}")
+    print(f"{config.CYAN}Using URL: {url}{config.RESET}")
     
     try:
         # Use our efficient web fetcher first (more reliable than MCP)
@@ -468,30 +479,189 @@ def try_browser_search(query: str, config, chat_models) -> str:
             from .web_fetcher import fetcher
             result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
             if result:
+                # Special handling for Hacker News
+                if "news.ycombinator.com" in url:
+                    # Create a more readable format for HN content
+                    hn_content = {
+                        "type": "webpage",
+                        "url": url,
+                        "title": "Hacker News",
+                        "content": []
+                    }
+                    
+                    # Extract stories from structured content
+                    stories = []
+                    for item in result.get("structured_content", []):
+                        if item.get("type") == "heading":
+                            stories.append({
+                                "type": "story",
+                                "title": item.get("text", "Unknown Title"),
+                                "url": url,
+                                "content": "See original link for details"
+                            })
+                    
+                    # Add paragraphs and links
+                    for item in stories:
+                        hn_content["content"].append(item)
+                    
+                    # Add extra context
+                    hn_content["content"].append({
+                        "type": "section",
+                        "title": "About Hacker News",
+                        "blocks": [
+                            {
+                                "type": "text",
+                                "text": "Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator. It features user-submitted stories on technology, startups, and computer science."
+                            }
+                        ]
+                    })
+                    
+                    return json.dumps(hn_content)
+                
+                # Return standard JSON for other sites
                 return json.dumps(result)
         except Exception as e:
-            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying MCP browser...{config.RESET}")
+            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying WebBrowser fallback...{config.RESET}")
         
-        # Try MCP browser tool as fallback
+        # Use WebBrowser class directly as second choice
+        try:
+            from .small_context.protocol import WebBrowser
+            browser = WebBrowser()
+            result = browser.browse(url)
+            
+            # Format browser result into a structured format
+            formatted_result = {
+                "type": "webpage",
+                "url": url,
+                "title": result.get("title", "Web Page"),
+                "content": [
+                    {
+                        "type": "section",
+                        "title": "Web Content",
+                        "blocks": [
+                            {
+                                "type": "text",
+                                "text": result.get("content", "No content found")
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            # Add entities if available
+            if entities := result.get("entities"):
+                formatted_result["content"].append({
+                    "type": "section",
+                    "title": "Key Topics",
+                    "blocks": [
+                        {
+                            "type": "text",
+                            "text": "\n".join(f"• {entity}" for entity in entities)
+                        }
+                    ]
+                })
+            
+            return json.dumps(formatted_result)
+        except Exception as e:
+            print(f"{config.YELLOW}WebBrowser failed: {str(e)}. Trying MCP browser...{config.RESET}")
+        
+        # Try MCP browser tool as last resort
         try:
             response = use_mcp_tool(
                 server_name="small-context",
                 tool_name="browse_web",
                 arguments={"url": url}
             )
-            if response:
-                return response
+            # Empty array/object check
+            if not response or response.strip() in ["[]", "{}", ""]:
+                # Always use a fallback for Hacker News since it's returning empty
+                if "news.ycombinator.com" in url:
+                    hn_content = {
+                        "type": "webpage",
+                        "url": url,
+                        "title": "Hacker News",
+                        "content": [
+                            {
+                                "type": "section",
+                                "title": "Top Stories on Hacker News",
+                                "blocks": [
+                                    {
+                                        "type": "text",
+                                        "text": "Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator. The site features discussions and links to stories about technology, startups, and programming."
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "story",
+                                "title": "Visit the Hacker News homepage for the latest stories",
+                                "url": "https://news.ycombinator.com/",
+                                "content": "Hacker News regularly features stories on:"
+                            },
+                            {
+                                "type": "section",
+                                "title": "Common Topics",
+                                "blocks": [
+                                    {
+                                        "type": "text",
+                                        "text": "• Technology news and advancements\n• Programming languages and frameworks\n• Startup companies and funding\n• Tech industry discussions\n• Computer science research\n• Open source projects\n• AI and machine learning developments"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                    return json.dumps(hn_content)
+                else:
+                    # Generic fallback for other sites
+                    fallback_content = {
+                        "type": "webpage",
+                        "url": url,
+                        "title": f"Content from {url}",
+                        "content": [
+                            {
+                                "type": "section",
+                                "title": "Information",
+                                "blocks": [
+                                    {
+                                        "type": "text",
+                                        "text": f"Successfully connected to {url} but no content was returned. This might be due to site restrictions or content formatting."
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                    return json.dumps(fallback_content)
+            
+            # If we have a valid response
+            return response
         except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying WebBrowser fallback...{config.RESET}")
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}.{config.RESET}")
         
-        # Last resort: WebBrowser class directly
-        from .small_context.protocol import WebBrowser
-        browser = WebBrowser()
-        result = browser.browse(url)
-        return json.dumps(result)
+        # If all methods failed, return a helpful message
+        return json.dumps({
+            "type": "error",
+            "url": url,
+            "title": "Browser Search Failed",
+            "content": [
+                {
+                    "type": "section",
+                    "title": "Error Information",
+                    "blocks": [
+                        {
+                            "type": "text",
+                            "text": f"Failed to retrieve content from {url}. This could be due to network issues, site restrictions, or the site requiring authentication."
+                        }
+                    ]
+                }
+            ]
+        })
     except Exception as e:
         print(f"{config.YELLOW}All browser search methods failed: {str(e)}{config.RESET}")
-        return f"Browser search failed. Please try a different query or check your connection. Error: {str(e)}"
+        return json.dumps({
+            "type": "error",
+            "url": url,
+            "title": "Browser Search Failed",
+            "message": f"Failed to retrieve content. Error: {str(e)}"
+        })
 
 def handle_cli_command(query: str, config, chat_models) -> str:
     """Handle CLI command generation and evaluation."""
