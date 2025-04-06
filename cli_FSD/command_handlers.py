@@ -16,7 +16,7 @@ def handle_command_mode(config, chat_models):
 
 def process_command(command, config, chat_models):
     if command == 'reset':
-        reset_conversation()
+        reset_conversation(config)
         print(f"{config.CYAN}The conversation has been reset.{config.RESET}")
     elif command == 'save':
         save_last_response(config)
@@ -30,13 +30,38 @@ def process_command(command, config, chat_models):
         list_available_models(config)
     elif command == 'config':
         show_current_config(config)
+    elif command == 'history':
+        show_history(config)
+    elif command.startswith('recall '):
+        try:
+            index = int(command.replace('recall ', '').strip())
+            recall_item(config, index)
+        except ValueError:
+            print(f"{config.YELLOW}Please provide a valid index number.{config.RESET}")
+    elif command == 'session':
+        show_session_status(config)
+    elif command == 'clear history':
+        clear_history(config)
     else:
         print(f"{config.YELLOW}Unknown command. Type 'exit' to return to normal mode.{config.RESET}")
 
-def reset_conversation():
-    # This function should be implemented to reset the conversation history
-    # If you're not maintaining conversation history, this can be a placeholder
-    print("Conversation reset functionality not implemented.")
+def reset_conversation(config):
+    """Reset the conversation history."""
+    # Reset session history
+    if hasattr(config, 'session_history'):
+        config.session_history = []
+    
+    # Reset last response
+    config.last_response = None
+    
+    # Reset any cached content
+    from .script_handlers import _content_cache
+    _content_cache['raw_content'] = None
+    _content_cache['formatted_content'] = None
+    _content_cache['headlines'] = []
+    _content_cache['paragraphs'] = []
+    
+    print("Conversation history and cache have been reset.")
 
 def save_last_response(config):
     file_path = input("Enter the file path to save the last response: ")
@@ -89,4 +114,26 @@ def show_current_config(config):
     print(f"Using Groq: {'Yes' if config.use_groq else 'No'}")
     print(f"Script Reviewer: {'Enabled' if config.scriptreviewer_on else 'Disabled'}")
 
-# Additional helper functions can be added here if needed
+# Session management helper functions
+def show_history(config):
+    """Display the session history."""
+    from .script_handlers import display_session_history
+    display_session_history(config)
+
+def recall_item(config, index):
+    """Recall and display a specific history item."""
+    from .script_handlers import recall_history_item
+    recall_history_item(config, index)
+
+def show_session_status(config):
+    """Display current session status."""
+    from .script_handlers import display_session_status
+    display_session_status(config)
+
+def clear_history(config):
+    """Clear the session history."""
+    if hasattr(config, 'session_history'):
+        config.session_history = []
+        print(f"{config.GREEN}Session history has been cleared.{config.RESET}")
+    else:
+        print(f"{config.YELLOW}No session history to clear.{config.RESET}")

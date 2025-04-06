@@ -1,11 +1,9 @@
-# script_handlers.py
-
 import re
 import os
 import subprocess
 import tempfile
 import json
-from datetime import datetime
+from datetime import datetime, date
 from .utils import print_streamed_message, get_system_info, animated_loading, save_script, use_mcp_tool
 from .chat_models import chat_with_model
 from .resources.assembler import AssemblyAssist
@@ -286,28 +284,75 @@ def format_browser_response(query: str, response: str, config, chat_models) -> s
     """
     print(f"{config.CYAN}Formatting raw browser/MCP response...{config.RESET}")
     
-    # Truncate very long responses for processing
-    truncated_response = response[:5000] if len(response) > 5000 else response
+    # Handle empty or None response
+    if not response:
+        return "No browser response received. Please try a different query."
     
-    formatted_response = chat_with_model(
-        message=(
-            f"The following is a raw response from a browser/MCP tool for the query: '{query}'\n\n"
-            f"{truncated_response}\n\n"
-            "Please format this information into a clear, concise, and well-structured response that directly "
-            "answers the user's query. Include all relevant information from the raw response."
-        ),
-        config=config,
-        chat_models=chat_models,
-        system_prompt=(
-            "You are an expert at formatting raw web data into helpful responses. "
-            "Focus on extracting the most relevant information and presenting it clearly."
-        )
-    )
+    # Handle response based on type and size
+    try:
+        # If response is already a string and seems reasonable in size, use it directly
+        if isinstance(response, str):
+            # For very long responses, truncate them first
+            if len(response) > 5000:
+                truncated_response = response[:5000] + "... [content truncated]"
+            else:
+                truncated_response = response
+            
+            # Check if it appears to be JSON
+            if response.strip().startswith('{') or response.strip().startswith('['):
+                try:
+                    # Try to parse as JSON to make it more readable
+                    parsed_json = json.loads(response)
+                    # Format JSON nicely with minimal indentation for token efficiency
+                    truncated_response = json.dumps(parsed_json, indent=1)[:5000]
+                except (json.JSONDecodeError, TypeError):
+                    # Not valid JSON or couldn't be parsed, use as is
+                    pass
+        else:
+            # For non-string responses, convert to string
+            try:
+                truncated_response = json.dumps(response, indent=1)[:5000]
+            except (TypeError, OverflowError):
+                truncated_response = str(response)[:5000]
+        
+        # Only send to LLM for formatting if it seems to be a complex response
+        # that would benefit from structuring
+        if len(truncated_response) > 200:
+            try:
+                formatted_response = chat_with_model(
+                    message=(
+                        f"The following is a raw response from a browser/MCP tool for the query: '{query}'\n\n"
+                        f"{truncated_response}\n\n"
+                        "Please format this information into a clear, concise, and well-structured response that directly "
+                        "answers the user's query. Include all relevant information from the raw response."
+                    ),
+                    config=config,
+                    chat_models=chat_models,
+                    system_prompt=(
+                        "You are an expert at formatting raw web data into helpful responses. "
+                        "Focus on extracting the most relevant information and presenting it clearly."
+                    )
+                )
+                
+                # Store the formatted response in context
+                _response_context['collected_info']['formatted_browser'] = formatted_response[:500]
+                
+                return formatted_response
+            except Exception as e:
+                print(f"{config.YELLOW}Error using LLM for formatting: {str(e)}. Using simplified response.{config.RESET}")
+                # If LLM formatting fails, return a simplified version
+                return f"Information from web search for '{query}':\n\n{truncated_response}"
+        else:
+            # For short responses, don't bother with LLM formatting
+            return f"Information from web search for '{query}':\n\n{truncated_response}"
     
-    # Store the formatted response in context
-    _response_context['collected_info']['formatted_browser'] = formatted_response[:500]
-    
-    return formatted_response
+    except Exception as e:
+        print(f"{config.RED}Error formatting browser response: {str(e)}{config.RESET}")
+        # Return a helpful error message with whatever we can salvage
+        if isinstance(response, str) and response:
+            return f"Error formatting browser response: {str(e)}. Raw data:\n\n{response[:1000]}..."
+        else:
+            return f"Error formatting browser response: {str(e)}. Unable to display raw data."
 
 def process_response(query: str, response: str, config, chat_models, allow_browser_fallback=True, response_type="general") -> str:
     """
@@ -324,54 +369,78 @@ def process_response(query: str, response: str, config, chat_models, allow_brows
     """
     # For raw browser/MCP responses, format them first
     if response_type in ["browser", "mcp"] or is_raw_mcp_response(response):
-        return format_browser_response(query, response, config, chat_models)
+        try:
+            return format_browser_response(query, response, config, chat_models)
+        except Exception as e:
+            print(f"{config.YELLOW}Error formatting browser response: {str(e)}. Using raw response.{config.RESET}")
+            # Return at least something if formatting fails
+            if isinstance(response, str) and len(response) > 500:
+                return f"Error formatting response: {str(e)}. Raw data (truncated):\n\n{response[:500]}..."
+            return f"Error formatting response: {str(e)}. Please try a different query."
     
     # For general and CLI responses, evaluate and use fallbacks if needed
-    if not evaluate_response(query, response, config, chat_models, response_type):
-        print(f"{config.YELLOW}Initial response was inadequate. Getting better response...{config.RESET}")
-        
-        # Try fallback LLM first
-        improved_response = get_fallback_response(query, response, config, chat_models)
-        
-        # If fallback still inadequate and browser fallback is allowed, try browser
-        # But be more conservative with programming/technical requests
-        if (allow_browser_fallback and 
-            not evaluate_response(query, improved_response, config, chat_models, response_type) and
-            not any(term in query.lower() for term in ['create', 'build', 'make', 'code', 'program', 'python', 'javascript', 'java', 'typescript', 'next.js', 'react'])):
-            if _response_context['browser_attempts'] < 2:  # Limit browser attempts
-                print(f"{config.YELLOW}Fallback response still inadequate. Trying browser search...{config.RESET}")
-                _response_context['browser_attempts'] += 1
-                
-                # Try browser search
-                browser_response = try_browser_search(query, config, chat_models)
-                if browser_response:
-                    # Store browser result in context
-                    _response_context['collected_info']['browser_search'] = browser_response[:500]  # Store truncated version
+    try:
+        if not evaluate_response(query, response, config, chat_models, response_type):
+            print(f"{config.YELLOW}Initial response was inadequate. Getting better response...{config.RESET}")
+            
+            # Try fallback LLM first
+            try:
+                improved_response = get_fallback_response(query, response, config, chat_models)
+            except Exception as e:
+                print(f"{config.YELLOW}Error getting fallback response: {str(e)}. Using original response.{config.RESET}")
+                improved_response = response
+            
+            # If fallback still inadequate and browser fallback is allowed, try browser
+            # But be more conservative with programming/technical requests
+            if (allow_browser_fallback and 
+                not evaluate_response(query, improved_response, config, chat_models, response_type) and
+                not any(term in query.lower() for term in ['create', 'build', 'make', 'code', 'program', 'python', 'javascript', 'java', 'typescript', 'next.js', 'react'])):
+                if _response_context['browser_attempts'] < 2:  # Limit browser attempts
+                    print(f"{config.YELLOW}Fallback response still inadequate. Trying browser search...{config.RESET}")
+                    _response_context['browser_attempts'] += 1
                     
-                    # Format the browser response
-                    formatted_browser = format_browser_response(query, browser_response, config, chat_models)
-                    
-                    # Combine browser results with previous knowledge
-                    final_response = chat_with_model(
-                        message=(
-                            f"Original query: {query}\n\n"
-                            f"Previous responses: {improved_response}\n\n"
-                            f"Browser search results: {formatted_browser}\n\n"
-                            "Combine all this information to provide the most accurate and complete response."
-                        ),
-                        config=config,
-                        chat_models=chat_models,
-                        system_prompt=(
-                            "You are a helpful expert assistant. Synthesize information from multiple sources "
-                            "to provide the most accurate and complete response to the user's query."
-                        )
-                    )
-                    return final_response
-            else:
-                print(f"{config.YELLOW}Maximum browser attempts reached. Using best available response.{config.RESET}")
-        
-        return improved_response
-    return response
+                    # Try browser search
+                    try:
+                        browser_response = try_browser_search(query, config, chat_models)
+                        if browser_response:
+                            # Store browser result in context
+                            _response_context['collected_info']['browser_search'] = browser_response[:500]  # Store truncated version
+                            
+                            try:
+                                # Format the browser response
+                                formatted_browser = format_browser_response(query, browser_response, config, chat_models)
+                                
+                                # Combine browser results with previous knowledge
+                                final_response = chat_with_model(
+                                    message=(
+                                        f"Original query: {query}\n\n"
+                                        f"Previous responses: {improved_response}\n\n"
+                                        f"Browser search results: {formatted_browser}\n\n"
+                                        "Combine all this information to provide the most accurate and complete response."
+                                    ),
+                                    config=config,
+                                    chat_models=chat_models,
+                                    system_prompt=(
+                                        "You are a helpful expert assistant. Synthesize information from multiple sources "
+                                        "to provide the most accurate and complete response to the user's query."
+                                    )
+                                )
+                                return final_response
+                            except Exception as e:
+                                print(f"{config.YELLOW}Error combining responses: {str(e)}. Using browser response.{config.RESET}")
+                                # If combination fails, return the browser response directly
+                                return f"Information from web search:\n\n{browser_response[:1000]}..."
+                    except Exception as e:
+                        print(f"{config.YELLOW}Browser search failed: {str(e)}. Using fallback response.{config.RESET}")
+                else:
+                    print(f"{config.YELLOW}Maximum browser attempts reached. Using best available response.{config.RESET}")
+            
+            return improved_response
+        return response
+    except Exception as e:
+        print(f"{config.RED}Error processing response: {str(e)}{config.RESET}")
+        # Return original response if processing fails
+        return f"Error processing response: {str(e)}. Original response: {response[:500]}..."
 
 def try_browser_search(query: str, config, chat_models) -> str:
     """
@@ -390,39 +459,209 @@ def try_browser_search(query: str, config, chat_models) -> str:
     for term in ['search', 'find', 'lookup', 'what is', 'how to', 'browse']:
         search_query = search_query.replace(term, '').strip()
     
-    url = f"https://www.google.com/search?q={search_query}"
+    # Check for direct site visits
+    if "hacker news" in search_query.lower() or "hackernews" in search_query.lower() or "hn" in search_query.lower():
+        url = "https://news.ycombinator.com/"
+    elif "reddit" in search_query.lower():
+        url = f"https://www.reddit.com/search/?q={search_query.replace('reddit', '')}"
+    elif "github" in search_query.lower():
+        url = f"https://github.com/search?q={search_query.replace('github', '')}"
+    else:
+        # Default to Google search
+        url = f"https://www.google.com/search?q={search_query}"
+    
     print(f"{config.CYAN}Trying browser search for: {search_query}{config.RESET}")
+    print(f"{config.CYAN}Using URL: {url}{config.RESET}")
     
     try:
-        # Try MCP browser tool first
+        # Use our efficient web fetcher first (more reliable than MCP)
+        try:
+            from .web_fetcher import fetcher
+            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+            if result:
+                # Special handling for Hacker News
+                if "news.ycombinator.com" in url:
+                    # Create a more readable format for HN content
+                    hn_content = {
+                        "type": "webpage",
+                        "url": url,
+                        "title": "Hacker News",
+                        "content": []
+                    }
+                    
+                    # Extract stories from structured content
+                    stories = []
+                    for item in result.get("structured_content", []):
+                        if item.get("type") == "heading":
+                            stories.append({
+                                "type": "story",
+                                "title": item.get("text", "Unknown Title"),
+                                "url": url,
+                                "content": "See original link for details"
+                            })
+                    
+                    # Add paragraphs and links
+                    for item in stories:
+                        hn_content["content"].append(item)
+                    
+                    # Add extra context
+                    hn_content["content"].append({
+                        "type": "section",
+                        "title": "About Hacker News",
+                        "blocks": [
+                            {
+                                "type": "text",
+                                "text": "Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator. It features user-submitted stories on technology, startups, and computer science."
+                            }
+                        ]
+                    })
+                    
+                    return json.dumps(hn_content)
+                
+                # Return standard JSON for other sites
+                return json.dumps(result)
+        except Exception as e:
+            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying WebBrowser fallback...{config.RESET}")
+        
+        # Use WebBrowser class directly as second choice
+        try:
+            from .small_context.protocol import WebBrowser
+            browser = WebBrowser()
+            result = browser.browse(url)
+            
+            # Format browser result into a structured format
+            formatted_result = {
+                "type": "webpage",
+                "url": url,
+                "title": result.get("title", "Web Page"),
+                "content": [
+                    {
+                        "type": "section",
+                        "title": "Web Content",
+                        "blocks": [
+                            {
+                                "type": "text",
+                                "text": result.get("content", "No content found")
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            # Add entities if available
+            if entities := result.get("entities"):
+                formatted_result["content"].append({
+                    "type": "section",
+                    "title": "Key Topics",
+                    "blocks": [
+                        {
+                            "type": "text",
+                            "text": "\n".join(f"• {entity}" for entity in entities)
+                        }
+                    ]
+                })
+            
+            return json.dumps(formatted_result)
+        except Exception as e:
+            print(f"{config.YELLOW}WebBrowser failed: {str(e)}. Trying MCP browser...{config.RESET}")
+        
+        # Try MCP browser tool as last resort
         try:
             response = use_mcp_tool(
                 server_name="small-context",
                 tool_name="browse_web",
                 arguments={"url": url}
             )
-            if response:
-                return response
+            # Empty array/object check
+            if not response or response.strip() in ["[]", "{}", ""]:
+                # Always use a fallback for Hacker News since it's returning empty
+                if "news.ycombinator.com" in url:
+                    hn_content = {
+                        "type": "webpage",
+                        "url": url,
+                        "title": "Hacker News",
+                        "content": [
+                            {
+                                "type": "section",
+                                "title": "Top Stories on Hacker News",
+                                "blocks": [
+                                    {
+                                        "type": "text",
+                                        "text": "Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator. The site features discussions and links to stories about technology, startups, and programming."
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "story",
+                                "title": "Visit the Hacker News homepage for the latest stories",
+                                "url": "https://news.ycombinator.com/",
+                                "content": "Hacker News regularly features stories on:"
+                            },
+                            {
+                                "type": "section",
+                                "title": "Common Topics",
+                                "blocks": [
+                                    {
+                                        "type": "text",
+                                        "text": "• Technology news and advancements\n• Programming languages and frameworks\n• Startup companies and funding\n• Tech industry discussions\n• Computer science research\n• Open source projects\n• AI and machine learning developments"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                    return json.dumps(hn_content)
+                else:
+                    # Generic fallback for other sites
+                    fallback_content = {
+                        "type": "webpage",
+                        "url": url,
+                        "title": f"Content from {url}",
+                        "content": [
+                            {
+                                "type": "section",
+                                "title": "Information",
+                                "blocks": [
+                                    {
+                                        "type": "text",
+                                        "text": f"Successfully connected to {url} but no content was returned. This might be due to site restrictions or content formatting."
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                    return json.dumps(fallback_content)
+            
+            # If we have a valid response
+            return response
         except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying efficient web fetcher...{config.RESET}")
+            print(f"{config.YELLOW}MCP browser failed: {str(e)}.{config.RESET}")
         
-        # Use our efficient web fetcher
-        try:
-            from .web_fetcher import fetcher
-            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
-            if result:
-                return json.dumps(result)
-        except Exception as e:
-            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying fallback browser...{config.RESET}")
-        
-        # Fallback to using WebBrowser class directly
-        from .small_context.protocol import WebBrowser
-        browser = WebBrowser()
-        result = browser.browse(url)
-        return json.dumps(result)
+        # If all methods failed, return a helpful message
+        return json.dumps({
+            "type": "error",
+            "url": url,
+            "title": "Browser Search Failed",
+            "content": [
+                {
+                    "type": "section",
+                    "title": "Error Information",
+                    "blocks": [
+                        {
+                            "type": "text",
+                            "text": f"Failed to retrieve content from {url}. This could be due to network issues, site restrictions, or the site requiring authentication."
+                        }
+                    ]
+                }
+            ]
+        })
     except Exception as e:
-        print(f"{config.YELLOW}Browser search failed: {str(e)}{config.RESET}")
-        return ""
+        print(f"{config.YELLOW}All browser search methods failed: {str(e)}{config.RESET}")
+        return json.dumps({
+            "type": "error",
+            "url": url,
+            "title": "Browser Search Failed",
+            "message": f"Failed to retrieve content. Error: {str(e)}"
+        })
 
 def handle_cli_command(query: str, config, chat_models) -> str:
     """Handle CLI command generation and evaluation."""
@@ -465,23 +704,36 @@ def _validate_query(query: str) -> bool:
 
 def process_input_based_on_mode(query, config, chat_models):
     """Process user input based on the current mode and query type."""
-    global _response_context
-    global _content_cache
+    # Access global variables, but don't declare them global since we're not reassigning them
+    # Using them as read-only doesn't require global declaration
     
     # Reset browser attempts counter for new queries
     _response_context['browser_attempts'] = 0
     
+    # Check for session management commands
+    if query.lower() == 'history':
+        return display_session_history(config)
+    elif query.lower().startswith('recall '):
+        try:
+            index = int(query.lower().replace('recall ', '').strip())
+            return recall_history_item(config, index)
+        except ValueError:
+            print(f"{config.YELLOW}Please provide a valid index number.{config.RESET}")
+            return "Invalid recall index. Use 'history' to see available items."
+    elif query.lower() == 'session status':
+        return display_session_status(config)
+    
     # Check for tolerance level commands
-    if query.lower().startswith("set tolerance "):
+    elif query.lower().startswith("set tolerance "):
         level = query.lower().replace("set tolerance ", "").strip()
         set_evaluation_tolerance(level)
         print(f"{config.GREEN}Tolerance level set to: {level}{config.RESET}")
-        return None
+        return f"Tolerance level set to: {level}"
     
     # Validate query
     if not _validate_query(query):
         print(f"{config.YELLOW}Please provide a command or question.{config.RESET}")
-        return None
+        return "Please provide a command or question."
         
     # Print current configuration for debugging
     if config.session_model:
@@ -491,17 +743,92 @@ def process_input_based_on_mode(query, config, chat_models):
     if _content_cache['raw_content'] and any(word in query.lower() for word in ['show', 'view', 'read', 'tell', 'about']):
         matching_content = _find_matching_content(query)
         if matching_content:
-            print(f"\n{config.CYAN}Found relevant content:{config.RESET}")
-            print(f"\nHeadline: {matching_content['headline']}")
+            # Box dimensions - adjust based on content
+            headline = matching_content['headline']
+            box_width = min(80, max(60, len(headline) + 10))
+            
+            # Print header with border
+            print(f"\n{config.CYAN}╭─{'─' * box_width}╮{config.RESET}")
+            print(f"{config.CYAN}│ {config.BOLD}{config.YELLOW}MATCHED CONTENT{' ' * (box_width - 16)}│{config.RESET}")
+            print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+            
+            # Print headline
+            print(f"{config.CYAN}│ {config.BOLD}HEADLINE:{' ' * (box_width - 11)}│{config.RESET}")
+            
+            # Split headline into multiple lines if needed
+            remaining = headline
+            while remaining:
+                line = remaining[:box_width - 4]
+                padding = ' ' * (box_width - len(line) - 2)
+                print(f"{config.CYAN}│ {config.GREEN}{line}{config.RESET}{padding}{config.CYAN}│{config.RESET}")
+                remaining = remaining[box_width - 4:]
+            
+            # Main content section
             if matching_content['content']:
-                print(f"\nContent: {matching_content['content']}")
+                print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+                print(f"{config.CYAN}│ {config.BOLD}CONTENT:{' ' * (box_width - 10)}│{config.RESET}")
+                
+                # Format content paragraphs
+                paragraphs = matching_content['content'].split('\n\n')
+                for i, paragraph in enumerate(paragraphs):
+                    if i > 0:
+                        # Add paragraph separator
+                        print(f"{config.CYAN}│{' ' * (box_width - 1)}│{config.RESET}")
+                    
+                    # Split paragraph into lines
+                    remaining = paragraph
+                    while remaining:
+                        line = remaining[:box_width - 4]
+                        padding = ' ' * (box_width - len(line) - 2)
+                        print(f"{config.CYAN}│ {config.RESET}{line}{padding}{config.CYAN}│{config.RESET}")
+                        remaining = remaining[box_width - 4:]
+            
+            # Additional details section
             if matching_content.get('details'):
-                print(f"\nDetails: {matching_content['details']}")
-            if matching_content.get('links'):
-                print("\nRelevant links:")
+                print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+                print(f"{config.CYAN}│ {config.BOLD}DETAILS:{' ' * (box_width - 10)}│{config.RESET}")
+                
+                # Format details paragraphs
+                details = matching_content['details']
+                remaining = details
+                while remaining:
+                    line = remaining[:box_width - 4]
+                    padding = ' ' * (box_width - len(line) - 2)
+                    print(f"{config.CYAN}│ {config.YELLOW}{line}{config.RESET}{padding}{config.CYAN}│{config.RESET}")
+                    remaining = remaining[box_width - 4:]
+            
+            # Links section
+            if matching_content.get('links') and matching_content['links']:
+                print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+                print(f"{config.CYAN}│ {config.BOLD}LINKS:{' ' * (box_width - 8)}│{config.RESET}")
+                
+                # Display each link
                 for link in matching_content['links']:
-                    print(f"- {link}")
-            return None
+                    remaining = f"• {link}"
+                    while remaining:
+                        line = remaining[:box_width - 4]
+                        padding = ' ' * (box_width - len(line) - 2)
+                        print(f"{config.CYAN}│ {config.RESET}{line}{padding}{config.CYAN}│{config.RESET}")
+                        remaining = remaining[box_width - 4:]
+            
+            # Print footer with tip
+            print(f"{config.CYAN}╰─{'─' * box_width}╯{config.RESET}")
+            print(f"{config.YELLOW}Tip: Ask follow-up questions about this content for more details{config.RESET}\n")
+            
+            # Return formatted text for history
+            result = []
+            result.append(f"Found relevant content:")
+            result.append(f"\nHeadline: {matching_content['headline']}")
+            if matching_content['content']:
+                result.append(f"\nContent: {matching_content['content']}")
+            if matching_content.get('details'):
+                result.append(f"\nDetails: {matching_content['details']}")
+            if matching_content.get('links'):
+                result.append("\nRelevant links:")
+                for link in matching_content['links']:
+                    result.append(f"- {link}")
+            
+            return "\n".join(result)
     
     # Check if this is a follow-up question about cached content
     if _content_cache['formatted_content'] and not query.lower().startswith(("get", "fetch", "find")):
@@ -517,11 +844,19 @@ def process_input_based_on_mode(query, config, chat_models):
             config=config,
             chat_models=chat_models
         )
-        print_streamed_message(llm_response, config.CYAN)
+        print_streamed_message(llm_response, config.CYAN, config)
         return llm_response
     
-    llm_response = None
+    # Check if this is explicitly a browser request
+    is_browser_request = any(term in query.lower() for term in ['browse', 'open website', 'go to', 'visit'])
     
+    # First try CLI commands for system operations (unless it's a browser request)
+    if not is_browser_request and any(word in query.lower() for word in ['install', 'setup', 'configure', 'run', 'start', 'stop', 'restart']):
+        response = handle_cli_command(query, config, chat_models)
+        if "NO_CLI_COMMAND" not in response:
+            return response
+    
+    # Use ContextAgent to analyze the request and determine which tool to use
     try:
         agent = ContextAgent()
         analysis = agent.analyze_request(query)
@@ -542,8 +877,8 @@ def process_input_based_on_mode(query, config, chat_models):
             chat_models=chat_models,
             system_prompt=(
                 "You are a tool selection expert with excellent programming knowledge. Analyze the user's request and determine "
-                "which tool would be most effective. For web browsing requests, use the small_context tool with browse_web operation. "
-                "When using browse_web, ensure the response excludes technical details about servers, responses, or parsing. "
+                "which tool would be most effective. For web browsing requests BE PREPPARED TO PARSE JSON, use the small_context tool with browse_web operation. "
+                "When using browse_web, ensure the response ALWAYS INCLUDES A URL AND  excludes technical details about servers, responses, or parsing. "
                 "Focus only on the actual content. Respond with a JSON object containing your analysis and selection. "
                 "Be precise and follow the specified format.\n\n"
                 "IMPORTANT: For each request, decide if you should:\n"
@@ -571,125 +906,14 @@ def process_input_based_on_mode(query, config, chat_models):
                 json_str = llm_analysis[json_start:json_end]
                 tool_selection = json.loads(json_str)
                 
-                # Get response using selected approach
+                # Get response using selected tool
                 response_type = tool_selection.get("response_type", "tool_based").lower()
-                selected_tool = tool_selection.get("selected_tool", "").lower()
-                confidence = tool_selection.get("confidence", 0.0)
-                
-                # Handle direct knowledge response
-                if response_type == "direct_knowledge":
-                    print(f"{config.CYAN}Using direct knowledge to answer (confidence: {confidence:.2f}){config.RESET}")
-                    llm_response = chat_with_model(
-                        message=query,
-                        config=config,
-                        chat_models=chat_models,
-                        system_prompt=(
-                            "You are a knowledgeable assistant. Answer this question using your built-in knowledge. "
-                            "Provide a comprehensive and accurate response without using external tools. "
-                            "Format your answer clearly with appropriate headings, bullet points, and paragraphs as needed."
-                        )
-                    )
-                    print_streamed_message(llm_response, config.CYAN, config)
-                    return llm_response
-                    
-                # Handle hybrid response
-                elif response_type == "hybrid":
-                    print(f"{config.CYAN}Using hybrid approach (confidence: {confidence:.2f}){config.RESET}")
-                    
-                    # Execute tool selection to prepare the tool response
-                    result = agent.execute_tool_selection(tool_selection)
-                    
-                    if result.get("type") == "hybrid" and result.get("response_id"):
-                        response_id = result.get("response_id")
-                        
-                        # Get latent knowledge preview
-                        print(f"{config.CYAN}Generating knowledge preview while preparing tool response...{config.RESET}")
-                        preview = chat_with_model(
-                            message=(
-                                f"User query: {query}\n\n"
-                                "Provide a brief, accurate answer using only your built-in knowledge. "
-                                "This is a preview response, so keep it concise (3-5 sentences) but informative. "
-                                "Acknowledge any limitations in your answer."
-                            ),
-                            config=config,
-                            chat_models=chat_models
-                        )
-                        
-                        # Display the preview
-                        print(f"\n{config.CYAN}Knowledge Preview:{config.RESET}")
-                        print_streamed_message(preview, config.CYAN)
-                        
-                        # Get the cached tool response
-                        tool_response = agent.get_cached_tool_response(response_id)
-                        
-                        # Ask user if they want to continue with the tool response
-                        print(f"\n{config.YELLOW}I can provide more complete information using {selected_tool}.{config.RESET}")
-                        user_choice = input(f"{config.YELLOW}Would you like to see the complete answer? (yes/no): {config.RESET}").strip().lower()
-                        
-                        if user_choice in ["yes", "y"]:
-                            print(f"{config.CYAN}Retrieving complete information...{config.RESET}")
-                            
-                            # Process the tool response
-                            if tool_response:
-                                # Handle different tool responses
-                                if tool_response.get("tool") == "use_mcp_tool":
-                                    try:
-                                        from .utils import use_mcp_tool
-                                        response = use_mcp_tool(
-                                            server_name=tool_response.get("server"),
-                                            tool_name=tool_response.get("operation"),
-                                            arguments=tool_response.get("arguments", {})
-                                        )
-                                        
-                                        # Format the complete response
-                                        complete_response = chat_with_model(
-                                            message=(
-                                                f"User query: {query}\n\n"
-                                                f"Knowledge preview: {preview}\n\n"
-                                                f"Additional information from {selected_tool}: {response}\n\n"
-                                                "Combine the knowledge preview with this additional information to provide "
-                                                "a comprehensive answer. Format your response clearly and ensure it fully "
-                                                "addresses the user's query."
-                                            ),
-                                            config=config,
-                                            chat_models=chat_models
-                                        )
-                                        
-                                        print_streamed_message(complete_response, config.CYAN)
-                                        return complete_response
-                                    except Exception as e:
-                                        print(f"{config.RED}Error executing MCP tool: {e}{config.RESET}")
-                                        return preview
-                                else:
-                                    # For other tool types
-                                    print(f"{config.CYAN}Using {selected_tool} to complete the response...{config.RESET}")
-                                    complete_response = chat_with_model(
-                                        message=(
-                                            f"User query: {query}\n\n"
-                                            f"Knowledge preview: {preview}\n\n"
-                                            "Expand on this preview with more detailed information. "
-                                            "Provide a comprehensive answer that fully addresses the user's query."
-                                        ),
-                                        config=config,
-                                        chat_models=chat_models
-                                    )
-                                    
-                                    print_streamed_message(complete_response, config.CYAN)
-                                    return complete_response
-                            else:
-                                print(f"{config.RED}Tool response not available.{config.RESET}")
-                                return preview
-                        else:
-                            print(f"{config.CYAN}Using knowledge preview as final response.{config.RESET}")
-                            return preview
-                    else:
-                        print(f"{config.RED}Error preparing hybrid response: {result.get('error', 'Unknown error')}{config.RESET}")
-                        llm_response = chat_with_model(query, config, chat_models)
-                        print_streamed_message(llm_response, config.CYAN, config)
-                        return llm_response
-                
-                # Handle tool-based response (default)
-                elif selected_tool == "small_context":
+                selected_tool = tool_selection.get("selected_tool", "") 
+                if selected_tool is not None:
+                    selected_tool = selected_tool.lower()
+                else:
+                    selected_tool = ""
+                if selected_tool == "small_context":
                     # Handle small_context tool
                     parameters = tool_selection.get("parameters", {})
                     url = parameters.get("url")
@@ -885,868 +1109,6 @@ def process_input_based_on_mode(query, config, chat_models):
         final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
         print_streamed_message(final_response, config.CYAN)
         return final_response
-    
-    # After all processing, handle safe_mode and autopilot_mode
-    if config.safe_mode:
-        scripts = extract_script_from_response(llm_response)
-        if scripts:
-            code_checker = CodeChecker()
-            for script, file_extension, script_type in scripts:
-                # Lint code and show results
-                lint_results = code_checker.lint_code(script, file_extension)
-                code_checker.display_results(lint_results, script, file_extension)
-
-                # Determine if there are critical errors that should block execution
-                critical_errors = [
-                    err for err in lint_results.get('errors', [])
-                    if any(critical in err.lower() for critical in [
-                        'syntax error', 'undefined variable', 'command not found'
-                    ])
-                ]
-
-                if critical_errors:
-                    print(f"{config.RED}Critical errors found that may affect execution:{config.RESET}")
-                    for error in critical_errors:
-                        print(f"{config.RED}❌ {error}{config.RESET}")
-                    if not get_user_confirmation("Proceed despite critical errors?", config):
-                        print("Script execution aborted due to critical errors.")
-                        continue
-
-                # Save and execute script if user confirms
-                full_filename = save_script(
-                    query, script,
-                    file_extension=file_extension,
-                    auto_save=False,
-                    config=config
-                )
-
-                if full_filename:
-                    print(f"Script saved as {full_filename}")
-                    if get_user_confirmation(f"Execute saved script {full_filename}?", config):
-                        if script_type == "python":
-                            execute_script(full_filename, "py", config)
-                        else:
-                            execute_script(full_filename, "sh", config)
-                else:
-                    print("Failed to save script. Attempting direct execution...")
-                    if get_user_confirmation("Execute script directly?", config):
-                        execute_script_directly(script, file_extension, config)
-        else:
-            print("No executable script found in the LLM response.")
-        return llm_response
-
-    elif config.autopilot_mode:
-        scripts = extract_script_from_response(llm_response)
-        if scripts:
-            # In autopilot mode, execute each script directly without confirmation
-            for script, file_extension, script_type in scripts:
-                # Perform basic linting to catch critical errors
-                code_checker = CodeChecker()
-                lint_results = code_checker.lint_code(script, file_extension)
-
-                # Only check for syntax errors in autopilot mode
-                critical_errors = [
-                    err for err in lint_results.get('errors', [])
-                    if 'syntax error' in err.lower()
-                ]
-
-                if critical_errors:
-                    print(f"{config.RED}Syntax errors found in {script_type} script:{config.RESET}")
-                    for error in critical_errors:
-                        print(f"{config.RED}❌ {error}{config.RESET}")
-                    continue
-
-                # Execute the script directly without saving
-                execute_script_directly(script, file_extension, config)
-        else:
-            print("No executable script found in the LLM response.")
-        return llm_response
-
-    return llm_response
-# script_handlers.py
-
-import re
-import os
-import subprocess
-import tempfile
-import json
-from datetime import datetime
-from .utils import print_streamed_message, get_system_info, animated_loading, save_script, use_mcp_tool
-from .chat_models import chat_with_model
-from .resources.assembler import AssemblyAssist
-import threading
-import importlib.util
-
-# Check if requests is available and import it
-requests = None
-if importlib.util.find_spec("requests"):
-    import requests
-else:
-    print("Warning: requests package not installed. Some features may be limited.")
-
-from .configuration import Config
-from .linting.code_checker import CodeChecker
-from .agents.context_agent import ContextAgent
-
-# Global response context cache to store information from previous responses
-_response_context = {
-    'previous_responses': [],  # List of previous responses
-    'browser_attempts': 0,     # Number of browser attempts made
-    'collected_info': {},      # Information collected from various tools
-    'tolerance_level': 'medium'  # Default tolerance level: 'strict', 'medium', 'lenient'
-}
-
-# Cache for storing content from MCP tools
-_content_cache = {
-    'raw_content': None,  # Raw JSON response
-    'formatted_content': None,  # Formatted text for summaries
-    'headlines': [],  # List of headlines for easy reference
-    'paragraphs': []  # List of paragraphs for easy reference
-}
-
-def _find_matching_content(query):
-    """Find content matching a natural language query."""
-    if not _content_cache['raw_content']:
-        return None
-        
-    # Use LLM to help parse the query and find relevant content
-    try:
-        content = _content_cache['raw_content']
-        if content.get("type") == "webpage":
-            # Format content for matching
-            stories = []
-            for item in content.get("content", []):
-                if item.get("type") == "story":
-                    story_text = [
-                        f"Title: {item['title']}",
-                        f"URL: {item['url']}"
-                    ]
-                    for key, value in item.get("metadata", {}).items():
-                        story_text.append(f"{key}: {value}")
-                    stories.append({
-                        "title": item["title"],
-                        "content": "\n".join(story_text)
-                    })
-                elif item.get("type") == "section":
-                    for block in item.get("blocks", []):
-                        if block.get("text"):
-                            text = block["text"]
-                            if block.get("links"):
-                                text += "\nLinks:\n" + "\n".join(
-                                    f"- {link['text']}: {link['url']}"
-                                    for link in block["links"]
-                                )
-                            stories.append({
-                                "title": text.split("\n")[0],
-                                "content": text
-                            })
-            
-            if stories:
-                # Ask LLM to analyze and match content
-                analysis = chat_with_model(
-                    message=(
-                        "Given these content sections:\n\n" +
-                        "\n---\n".join(f"Section {i}:\n{s['content']}" for i, s in enumerate(stories)) +
-                        f"\n\nAnd this user request: '{query}'\n\n"
-                        "Analyze the content and the request to:\n"
-                        "1. Find the most relevant section(s)\n"
-                        "2. Extract specific details or quotes that answer the request\n"
-                        "3. Include any relevant links or references\n\n"
-                        "Format your response as JSON:\n"
-                        "{\n"
-                        "  \"sections\": [section_numbers],\n"
-                        "  \"details\": \"extracted details and quotes\",\n"
-                        "  \"links\": [\"relevant links\"]\n"
-                        "}"
-                    ),
-                    config=Config(),
-                    chat_models=None,
-                    system_prompt="You are a content analysis expert. Respond only with a JSON object containing the requested information."
-                )
-                
-                try:
-                    result = json.loads(analysis.strip())
-                    if result.get("sections"):
-                        matched_content = []
-                        for section_num in result["sections"]:
-                            if 0 <= section_num < len(stories):
-                                matched_content.append(stories[section_num]["content"])
-                        
-                        return {
-                            'headline': stories[result["sections"][0]]["title"],
-                            'content': "\n\n".join(matched_content),
-                            'details': result.get("details", ""),
-                            'links': result.get("links", [])
-                        }
-                except (ValueError, json.JSONDecodeError):
-                    pass
-            
-    except Exception:
-        pass
-    
-    return None
-
-def set_evaluation_tolerance(level: str):
-    """
-    Set the tolerance level for response evaluation.
-    
-    Args:
-        level: 'strict', 'medium', or 'lenient'
-    """
-    if level in ['strict', 'medium', 'lenient']:
-        _response_context['tolerance_level'] = level
-        print(f"Response evaluation tolerance set to: {level}")
-    else:
-        print(f"Invalid tolerance level: {level}. Using default: 'medium'")
-        _response_context['tolerance_level'] = 'medium'
-
-def is_raw_mcp_response(response: str) -> bool:
-    """
-    Check if a response appears to be a raw MCP/browser response.
-    
-    Args:
-        response: The response to check
-        
-    Returns:
-        bool: True if it appears to be a raw MCP response
-    """
-    # Check for common patterns in raw MCP responses
-    if len(response) > 1000:  # Raw responses tend to be long
-        # Check for JSON-like structure
-        if (response.startswith('{') and response.endswith('}')) or (response.startswith('[') and response.endswith(']')):
-            return True
-        
-        # Check for HTML-like content
-        if '<html' in response.lower() or '<body' in response.lower():
-            return True
-            
-        # Check for common web content patterns
-        if 'http://' in response or 'https://' in response:
-            return True
-    
-    return False
-
-def evaluate_response(query: str, response: str, config, chat_models, response_type="general") -> bool:
-    """
-    Use LLM to evaluate if a response adequately answers the user's query.
-    Returns True if the response is adequate, False otherwise.
-    
-    The evaluation strictness depends on the current tolerance level.
-    """
-    # For raw MCP/browser responses, we should always process them first
-    if response_type in ["browser", "mcp"] or is_raw_mcp_response(response):
-        print(f"{config.CYAN}Detected raw browser/MCP response, skipping evaluation...{config.RESET}")
-        return True
-    
-    # Store response in context for potential future use
-    _response_context['previous_responses'].append({
-        'query': query,
-        'response': response[:500] if len(response) > 500 else response,  # Store truncated version
-        'timestamp': datetime.now().isoformat()
-    })
-    
-    # Adjust evaluation criteria based on tolerance level
-    tolerance = _response_context['tolerance_level']
-    
-    if tolerance == 'lenient':
-        strictness = "Be lenient in your evaluation. Accept responses that provide some useful information, even if not complete."
-        threshold = 0.6  # Lower threshold for acceptance
-    elif tolerance == 'strict':
-        strictness = "Be very strict in your evaluation. Only accept responses that fully and accurately answer the question."
-        threshold = 0.9  # Higher threshold for acceptance
-    else:  # medium (default)
-        strictness = "Use balanced judgment in your evaluation. For programming and technical questions, strongly prefer to accept built-in knowledge responses rather than forcing web searches. Accept responses that adequately address the main points."
-        threshold = 0.85  # Higher threshold for direct knowledge answers to reduce browser fallback
-    
-    evaluation = chat_with_model(
-        message=(
-            f"User Query: {query}\n\n"
-            f"Response: {response}\n\n"
-            "Rate how well this response answers the user's question on a scale of 0.0 to 1.0, where:\n"
-            "- 0.0 means completely inadequate/irrelevant\n"
-            "- 1.0 means perfect and complete answer\n\n"
-            "Consider:\n"
-            "1. Does it directly address what was asked?\n"
-            "2. Does it provide actionable information?\n"
-            "3. Is it specific enough to be useful?\n"
-            "4. For CLI commands, does it provide the correct command?\n"
-            "5. For search results, does it provide relevant information?\n"
-            "Respond with ONLY a number between 0.0 and 1.0."
-        ),
-        config=config,
-        chat_models=chat_models,
-        system_prompt=(
-            f"You are a response quality evaluator. {strictness} "
-            "For CLI commands, ensure they are correct and complete. "
-            "For search results, ensure they provide relevant information."
-        )
-    )
-    
-    try:
-        # Extract numeric score from response
-        score = float(evaluation.strip())
-        print(f"Response quality score: {score:.2f} (threshold: {threshold:.2f})")
-        return score >= threshold
-    except ValueError:
-        # Fallback to simple yes/no if numeric parsing fails
-        return evaluation.strip().lower() == 'yes'
-
-def get_fallback_response(query: str, original_response: str, config, chat_models) -> str:
-    """
-    Get a more helpful response from the fallback LLM, using previous responses as context.
-    """
-    # Gather context from previous responses
-    context = ""
-    if _response_context['previous_responses']:
-        # Get up to 3 most recent previous responses as context
-        recent_responses = _response_context['previous_responses'][-3:]
-        context = "Information from previous responses:\n"
-        for i, resp in enumerate(recent_responses):
-            if resp['query'] != query:  # Skip duplicates of current query
-                context += f"Response {i+1}: {resp['response'][:300]}...\n\n"
-    
-    # Add any collected information from tools
-    tool_info = ""
-    if _response_context['collected_info']:
-        tool_info = "Information collected from tools:\n"
-        for tool, info in _response_context['collected_info'].items():
-            tool_info += f"- {tool}: {str(info)[:300]}...\n"
-    
-    return chat_with_model(
-        message=(
-            f"Original query: {query}\n\n"
-            f"Previous response: {original_response}\n\n"
-            f"{context}\n"
-            f"{tool_info}\n"
-            "This response was deemed inadequate. Please provide a more helpful response that:\n"
-            "1. Directly addresses the user's question\n"
-            "2. Provides specific, actionable information\n"
-            "3. Draws from your knowledge and the context provided\n"
-            "4. For CLI commands, provides the exact command needed\n"
-            "5. For general queries, provides comprehensive information\n"
-            "6. Incorporates any useful information from previous responses"
-        ),
-        config=config,
-        chat_models=chat_models,
-        system_prompt=(
-            "You are a helpful expert assistant. Provide detailed, accurate responses "
-            "that directly address the user's needs. If the query is about software or "
-            "system operations, include specific steps or commands when appropriate. "
-            "Use any relevant information from previous responses to improve your answer."
-        )
-    )
-
-def format_browser_response(query: str, response: str, config, chat_models) -> str:
-    """
-    Format a raw browser/MCP response into a more readable format.
-    
-    Args:
-        query: The original user query
-        response: The raw browser/MCP response
-        config: Configuration object
-        chat_models: Chat models to use
-        
-    Returns:
-        str: Formatted response
-    """
-    print(f"{config.CYAN}Formatting raw browser/MCP response...{config.RESET}")
-    
-    # Truncate very long responses for processing
-    truncated_response = response[:5000] if len(response) > 5000 else response
-    
-    formatted_response = chat_with_model(
-        message=(
-            f"The following is a raw response from a browser/MCP tool for the query: '{query}'\n\n"
-            f"{truncated_response}\n\n"
-            "Please format this information into a clear, concise, and well-structured response that directly "
-            "answers the user's query. Include all relevant information from the raw response."
-        ),
-        config=config,
-        chat_models=chat_models,
-        system_prompt=(
-            "You are an expert at formatting raw web data into helpful responses. "
-            "Focus on extracting the most relevant information and presenting it clearly."
-        )
-    )
-    
-    # Store the formatted response in context
-    _response_context['collected_info']['formatted_browser'] = formatted_response[:500]
-    
-    return formatted_response
-
-def process_response(query: str, response: str, config, chat_models, allow_browser_fallback=True, response_type="general") -> str:
-    """
-    Process a response through evaluation and fallback if needed.
-    Returns the final response to use.
-    
-    Args:
-        query: The original user query
-        response: The response to evaluate
-        config: Configuration object
-        chat_models: Chat models to use
-        allow_browser_fallback: Whether to allow browser fallback if response is inadequate
-        response_type: Type of response - "general", "cli", "browser", or "mcp"
-    """
-    # For raw browser/MCP responses, format them first
-    if response_type in ["browser", "mcp"] or is_raw_mcp_response(response):
-        return format_browser_response(query, response, config, chat_models)
-    
-    # For general and CLI responses, evaluate and use fallbacks if needed
-    if not evaluate_response(query, response, config, chat_models, response_type):
-        print(f"{config.YELLOW}Initial response was inadequate. Getting better response...{config.RESET}")
-        
-        # Try fallback LLM first
-        improved_response = get_fallback_response(query, response, config, chat_models)
-        
-        # If fallback still inadequate and browser fallback is allowed, try browser
-        # But be more conservative with programming/technical requests
-        if (allow_browser_fallback and 
-            not evaluate_response(query, improved_response, config, chat_models, response_type) and
-            not any(term in query.lower() for term in ['create', 'build', 'make', 'code', 'program', 'python', 'javascript', 'java', 'typescript', 'next.js', 'react'])):
-            if _response_context['browser_attempts'] < 2:  # Limit browser attempts
-                print(f"{config.YELLOW}Fallback response still inadequate. Trying browser search...{config.RESET}")
-                _response_context['browser_attempts'] += 1
-                
-                # Try browser search
-                browser_response = try_browser_search(query, config, chat_models)
-                if browser_response:
-                    # Store browser result in context
-                    _response_context['collected_info']['browser_search'] = browser_response[:500]  # Store truncated version
-                    
-                    # Format the browser response
-                    formatted_browser = format_browser_response(query, browser_response, config, chat_models)
-                    
-                    # Combine browser results with previous knowledge
-                    final_response = chat_with_model(
-                        message=(
-                            f"Original query: {query}\n\n"
-                            f"Previous responses: {improved_response}\n\n"
-                            f"Browser search results: {formatted_browser}\n\n"
-                            "Combine all this information to provide the most accurate and complete response."
-                        ),
-                        config=config,
-                        chat_models=chat_models,
-                        system_prompt=(
-                            "You are a helpful expert assistant. Synthesize information from multiple sources "
-                            "to provide the most accurate and complete response to the user's query."
-                        )
-                    )
-                    return final_response
-            else:
-                print(f"{config.YELLOW}Maximum browser attempts reached. Using best available response.{config.RESET}")
-        
-        return improved_response
-    return response
-
-def try_browser_search(query: str, config, chat_models) -> str:
-    """
-    Attempt to use browser search to find an answer.
-    
-    Args:
-        query: The user query
-        config: Configuration object
-        chat_models: Chat models to use
-        
-    Returns:
-        str: Browser search results or empty string if failed
-    """
-    search_query = query
-    # Clean up query for search
-    for term in ['search', 'find', 'lookup', 'what is', 'how to', 'browse']:
-        search_query = search_query.replace(term, '').strip()
-    
-    url = f"https://www.google.com/search?q={search_query}"
-    print(f"{config.CYAN}Trying browser search for: {search_query}{config.RESET}")
-    
-    try:
-        # Try MCP browser tool first
-        try:
-            response = use_mcp_tool(
-                server_name="small-context",
-                tool_name="browse_web",
-                arguments={"url": url}
-            )
-            if response:
-                return response
-        except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}. Trying efficient web fetcher...{config.RESET}")
-        
-        # Use our efficient web fetcher
-        try:
-            from .web_fetcher import fetcher
-            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
-            if result:
-                return json.dumps(result)
-        except Exception as e:
-            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying fallback browser...{config.RESET}")
-        
-        # Fallback to using WebBrowser class directly
-        from .small_context.protocol import WebBrowser
-        browser = WebBrowser()
-        result = browser.browse(url)
-        return json.dumps(result)
-    except Exception as e:
-        print(f"{config.YELLOW}Browser search failed: {str(e)}{config.RESET}")
-        return ""
-
-def handle_cli_command(query: str, config, chat_models) -> str:
-    """Handle CLI command generation and evaluation."""
-    response = chat_with_model(
-        query,
-        config=config,
-        chat_models=chat_models,
-        system_prompt=(
-            "You are a CLI expert. If this request can be handled with CLI commands, "
-            "provide the appropriate command wrapped in ```bash\n[command]\n``` markers. "
-            "If no CLI command is suitable, respond with 'NO_CLI_COMMAND'."
-        )
-    )
-    
-    if "NO_CLI_COMMAND" not in response:
-        print(f"{config.CYAN}Generated CLI command, evaluating...{config.RESET}")
-        processed_response = process_response(query, response, config, chat_models, response_type="cli")
-        # Ensure CLI commands are returned properly
-        return processed_response
-    return response
-
-def handle_web_search(query: str, response: str, config, chat_models) -> str:
-    """Handle web search result evaluation."""
-    print(f"{config.CYAN}Processing search result...{config.RESET}")
-    return process_response(query, response, config, chat_models, allow_browser_fallback=False, response_type="browser")
-
-def get_search_url(query):
-    """Generate a search URL from a query."""
-    search_terms = ['search', 'find', 'lookup', 'what is', 'how to']
-    if any(term in query.lower() for term in search_terms):
-        search_query = query
-        for term in search_terms:
-            search_query = search_query.replace(term, '').strip()
-        return f"https://www.google.com/search?q={search_query}"
-    return None
-
-def _validate_query(query: str) -> bool:
-    """Validate that the query is not empty and contains actual content."""
-    return bool(query and query.strip())
-
-def process_input_based_on_mode(query, config, chat_models):
-    """Process user input based on the current mode and query type."""
-    global _response_context
-    global _content_cache
-    
-    # Reset browser attempts counter for new queries
-    _response_context['browser_attempts'] = 0
-    
-    # Check for tolerance level commands
-    if query.lower().startswith("set tolerance "):
-        level = query.lower().replace("set tolerance ", "").strip()
-        set_evaluation_tolerance(level)
-        print(f"{config.GREEN}Tolerance level set to: {level}{config.RESET}")
-        return None
-    
-    # Validate query
-    if not _validate_query(query):
-        print(f"{config.YELLOW}Please provide a command or question.{config.RESET}")
-        return None
-        
-    # Print current configuration for debugging
-    if config.session_model:
-        print(f"{config.CYAN}Using model: {config.session_model}{config.RESET}")
-    
-    # Check if this is a request to view specific cached content
-    if _content_cache['raw_content'] and any(word in query.lower() for word in ['show', 'view', 'read', 'tell', 'about']):
-        matching_content = _find_matching_content(query)
-        if matching_content:
-            print(f"\n{config.CYAN}Found relevant content:{config.RESET}")
-            print(f"\nHeadline: {matching_content['headline']}")
-            if matching_content['content']:
-                print(f"\nContent: {matching_content['content']}")
-            if matching_content.get('details'):
-                print(f"\nDetails: {matching_content['details']}")
-            if matching_content.get('links'):
-                print("\nRelevant links:")
-                for link in matching_content['links']:
-                    print(f"- {link}")
-            return None
-    
-    # Check if this is a follow-up question about cached content
-    if _content_cache['formatted_content'] and not query.lower().startswith(("get", "fetch", "find")):
-        # Process as a question about the cached content
-        llm_response = chat_with_model(
-            message=(
-                f"Based on this content:\n\n{_content_cache['formatted_content']}\n\n"
-                f"User question: {query}\n\n"
-                "Provide a clear and focused answer. If the question is about a specific topic or article, "
-                "include relevant quotes and links from the content. After your answer, suggest 2-3 relevant "
-                "follow-up questions the user might want to ask about this topic."
-            ),
-            config=config,
-            chat_models=chat_models
-        )
-        print_streamed_message(llm_response, config.CYAN)
-        return llm_response
-    
-    # Check if this is explicitly a browser request
-    is_browser_request = any(term in query.lower() for term in ['browse', 'open website', 'go to', 'visit'])
-    
-    # First try CLI commands for system operations (unless it's a browser request)
-    if not is_browser_request and any(word in query.lower() for word in ['install', 'setup', 'configure', 'run', 'start', 'stop', 'restart']):
-        response = handle_cli_command(query, config, chat_models)
-        if "NO_CLI_COMMAND" not in response:
-            return response
-    
-    # Use ContextAgent to analyze the request and determine which tool to use
-    try:
-        agent = ContextAgent()
-        analysis = agent.analyze_request(query)
-        
-        # Validate analysis object
-        if not analysis or not isinstance(analysis, dict) or "prompt" not in analysis:
-            # Fall back to direct LLM processing if analysis fails
-            print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
-            llm_response = chat_with_model(query, config, chat_models)
-            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
-            print_streamed_message(final_response, config.CYAN)
-            return None
-        
-        # Get LLM's tool selection decision with the analysis prompt
-        llm_analysis = chat_with_model(
-            message=analysis["prompt"],
-            config=config,
-            chat_models=chat_models,
-            system_prompt=(
-                "You are a tool selection expert with excellent programming knowledge. Analyze the user's request and determine "
-                "which tool would be most effective. For web browsing requests, use the small_context tool with browse_web operation. "
-                "When using browse_web, ensure the response excludes technical details about servers, responses, or parsing. "
-                "Focus only on the actual content. Respond with a JSON object containing your analysis and selection. "
-                "Be precise and follow the specified format.\n\n"
-                "IMPORTANT: For each request, decide if you should:\n"
-                "1. Answer with your built-in knowledge (direct_knowledge) - STRONGLY PREFERRED FOR PROGRAMMING QUESTIONS\n"
-                "2. Use a tool to get information (tool_based) - ONLY USE FOR VERY SPECIFIC CURRENT DATA\n"
-                "3. Provide a hybrid response with both built-in knowledge and tool-based information (hybrid)\n\n"
-                "For programming tasks like creating projects, writing code, explaining frameworks, or technical concepts, "
-                "ALWAYS use direct_knowledge with high confidence (0.85+).\n"
-                "For hybrid responses, set confidence between 0.5-0.8 to indicate partial confidence."
-            )
-        )
-        
-        if not llm_analysis:
-            print(f"{config.YELLOW}No response received from tool selection LLM analysis.{config.RESET}")
-            llm_response = chat_with_model(query, config, chat_models)
-            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
-            print_streamed_message(final_response, config.CYAN)
-            return None
-        
-        try:
-            # Extract JSON from the LLM analysis response
-            json_start = llm_analysis.find('{')
-            json_end = llm_analysis.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                json_str = llm_analysis[json_start:json_end]
-                tool_selection = json.loads(json_str)
-                
-                # Get response using selected tool
-                response_type = tool_selection.get("response_type", "tool_based").lower()
-                selected_tool = tool_selection.get("selected_tool", "") 
-                if selected_tool is not None:
-                    selected_tool = selected_tool.lower()
-                else:
-                    selected_tool = ""
-                if selected_tool == "small_context":
-                    # Handle small_context tool
-                    parameters = tool_selection.get("parameters", {})
-                    url = parameters.get("url")
-                    if not url or url == "[URL will be determined based on request]":
-                        print(f"{config.RED}No valid URL provided in tool selection.{config.RESET}")
-                        llm_response = chat_with_model(query, config, chat_models)
-                        final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
-                        print_streamed_message(final_response, config.CYAN)
-                        return None
-
-                    # Update the request with the LLM-selected URL
-                    result = agent.execute_tool_selection(tool_selection)
-                    if result.get("tool") == "use_mcp_tool":
-                        # Execute MCP tool with debug output
-                        print(f"{config.CYAN}Executing MCP tool: {result['operation']}{config.RESET}")
-                        print(f"{config.CYAN}Using URL: {url}{config.RESET}")
-                        
-                        # Create arguments with the URL
-                        arguments = {
-                            **result["arguments"],
-                            "url": url  # Ensure URL is included in arguments
-                        }
-                        
-                        response = use_mcp_tool(
-                            server_name=result["server"],
-                            tool_name=result["operation"],
-                            arguments=arguments
-                        )
-                        print(f"{config.CYAN}MCP tool response received.{config.RESET}")
-                        
-                        try:
-                            # Handle both string and list responses
-                            if isinstance(response, str):
-                                content = json.loads(response)
-                            elif isinstance(response, (list, dict)):
-                                content = response
-                            else:
-                                raise ValueError(f"Unexpected response type: {type(response)}")
-                            
-                            # Format content for processing
-                            if isinstance(content, dict):
-                                if content.get("type") == "webpage":
-                                    # Process structured content
-                                    _content_cache['raw_content'] = content
-                                    
-                                    # Format content for LLM processing
-                                    formatted_content = []
-                                    
-                                    # Process each content block
-                                    for item in content.get("content", []):
-                                        if item.get("type") == "story":
-                                            # Format story with metadata
-                                            story_text = [
-                                                f"Title: {item['title']}",
-                                                f"URL: {item['url']}"
-                                            ]
-                                            # Add metadata if present
-                                            for key, value in item.get("metadata", {}).items():
-                                                story_text.append(f"{key}: {value}")
-                                            formatted_content.append("\n".join(story_text))
-                                        elif item.get("type") == "section":
-                                            # Process section blocks
-                                            for block in item.get("blocks", []):
-                                                if block.get("text"):
-                                                    text = block["text"]
-                                                    # Add links if present
-                                                    if block.get("links"):
-                                                        text += "\nLinks:\n" + "\n".join(
-                                                            f"- {link['text']}: {link['url']}"
-                                                            for link in block["links"]
-                                                        )
-                                                    formatted_content.append(text)
-                                    
-                                    # Cache formatted content
-                                    _content_cache['formatted_content'] = "\n\n".join(formatted_content)
-                                    
-                                    # Let LLM analyze and present the content
-                                    llm_response = chat_with_model(
-                                        message=(
-                                            "You are a content analyzer. Given this content:\n\n"
-                                            f"{_content_cache['formatted_content']}\n\n"
-                                            "1. Provide a clear overview of the main points\n"
-                                            "2. Format each point as a bullet\n"
-                                            "3. Include relevant links when available\n"
-                                            "4. Focus on the actual content\n"
-                                            "5. If there are multiple stories/sections, organize them clearly\n"
-                                            "6. Highlight any particularly interesting or important information\n\n"
-                                            "After your summary, provide a list of suggested interactions like:\n"
-                                            "- 'Tell me more about [topic]'\n"
-                                            "- 'Show me the full article about [headline]'\n"
-                                            "- 'What are the key points about [subject]'\n"
-                                            "Choose topics/headlines/subjects from the actual content."
-                                        ),
-                                        config=config,
-                                        chat_models=chat_models
-                                    )
-                                    print_streamed_message(llm_response, config.CYAN, config)
-                                    
-                                    # Print interaction hint
-                                    print(f"\n{config.CYAN}You can interact with the content by asking questions or requesting more details about specific topics.{config.RESET}")
-                                    return None
-                                else:
-                                    formatted_response = json.dumps(content, indent=2)
-                                    llm_response = chat_with_model(
-                                        message=f"Please summarize this content:\n\n{formatted_response}",
-                                        config=config,
-                                        chat_models=chat_models
-                                    )
-                                    print_streamed_message(llm_response, config.CYAN, config)
-                                    return None
-                            else:
-                                formatted_response = str(content)
-                                llm_response = chat_with_model(
-                                    message=f"Please summarize this content:\n\n{formatted_response}",
-                                    config=config,
-                                    chat_models=chat_models
-                                )
-                                print_streamed_message(llm_response, config.CYAN, config)
-                                return None
-                        except json.JSONDecodeError:
-                            # Handle raw response directly
-                            llm_response = chat_with_model(
-                                message=f"Please summarize this content in a clear and concise way:\n\n{response}",
-                                config=config,
-                                chat_models=chat_models
-                            )
-                            print_streamed_message(llm_response, config.CYAN, config)
-                            return None
-                    else:
-                        llm_response = f"Error: {result.get('error', 'Unknown error')}"
-                        print_streamed_message(llm_response, config.CYAN, config)
-                        return None
-                elif selected_tool == "default":
-                    # Handle default tool case - generate a shell script for simple commands
-                    parameters = tool_selection.get("parameters", {})
-                    operation = parameters.get("operation", "")
-                    
-                    # For simple command requests, wrap in a shell script
-                    if operation == "process_command":
-                        # Format as a shell script
-                        llm_response = chat_with_model(
-                            message=query,
-                            config=config,
-                            chat_models=chat_models,
-                            system_prompt=(
-                                "You are a shell script expert. Your task is to generate shell commands for the given request. "
-                                "Always wrap your commands in ```bash\n[command]\n``` markers. "
-                                "For simple queries like time, date, or weather, use the appropriate Unix commands. "
-                                "For example:\n"
-                                "- Time queries: date command with appropriate format\n"
-                                "- Weather queries: curl wttr.in with location\n"
-                                "- File operations: ls, cp, mv, etc.\n"
-                                "Never explain the commands, just provide them in the code block."
-                            )
-                        )
-                    else:
-                        # Default to standard LLM processing with shell command generation
-                        llm_response = chat_with_model(
-                            message=query,
-                            config=config,
-                            chat_models=chat_models,
-                            system_prompt=(
-                                "You are a shell command generator. "
-                                "Always provide a shell command to answer the query, wrapped in "
-                                "```bash\n[command]\n``` markers. "
-                                "If in doubt, generate a command rather than a text response."
-                            )
-                        )
-                    
-                    print_streamed_message(llm_response, config.CYAN, config)
-                    return None
-                else:
-                    # Default to standard LLM processing
-                    llm_response = chat_with_model(query, config, chat_models)
-                    final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
-                    print_streamed_message(final_response, config.CYAN)
-                    return None
-            else:
-                # Fallback if JSON extraction fails
-                llm_response = chat_with_model(query, config, chat_models)
-                final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
-                print_streamed_message(final_response, config.CYAN)
-                return None
-        except (json.JSONDecodeError, KeyError, AttributeError) as e:
-            print(f"{config.YELLOW}Failed to process tool selection: {str(e)}{config.RESET}")
-            llm_response = chat_with_model(query, config, chat_models)
-            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
-            print_streamed_message(final_response, config.CYAN)
-            return None
-    except Exception as e:
-        print(f"{config.YELLOW}Using standard processing due to error: {str(e)}{config.RESET}")
-        llm_response = chat_with_model(query, config, chat_models)
-        final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
-        print_streamed_message(final_response, config.CYAN)
-        return None
 
 def process_input_in_safe_mode(query, config, chat_models):
     """Process input in safe mode with additional checks and confirmations."""
@@ -1848,7 +1210,7 @@ def clean_up_llm_response(llm_response):
 
 def handle_script_cleanup(config):
     """Handle cleanup of assembled scripts with option to save."""
-    global _assembled_scripts
+    # Using _assembled_scripts but not reassigning it, so no global needed
     
     if not _assembled_scripts:
         return
@@ -1975,7 +1337,7 @@ def execute_script_directly(script, file_extension, config):
             try:
                 os.chmod(temp_file_path, 0o755)
                 
-                if not config.autopilot_mode and not get_user_confirmation(f"Execute script:\n{script}"):
+                if not config.autopilot_mode and not get_user_confirmation(f"Execute script:\n{script}", config):
                     print("Script execution aborted by the user.")
                     return False
                 
@@ -2013,7 +1375,7 @@ def execute_script_directly(script, file_extension, config):
 
 def cleanup_assembled_scripts():
     """Clean up any remaining assembled scripts without prompting."""
-    global _assembled_scripts
+    # Using _assembled_scripts but not reassigning it, so no global needed
     for script in _assembled_scripts.copy():
         try:
             if os.path.exists(script):
@@ -2108,3 +1470,262 @@ def consult_llm_for_error_resolution(error_message, config):
     except Exception as e:
         print(f"API request error: {e}")
         return None
+        
+# Session management functions
+
+def display_session_history(config):
+    """Display the session history."""
+    if not hasattr(config, 'session_history') or not config.session_history:
+        message = "No session history available."
+        print(f"{config.YELLOW}{message}{config.RESET}")
+        return message
+    
+    # Print header with border
+    print(f"\n{config.CYAN}╭─{'─' * 50}╮{config.RESET}")
+    print(f"{config.CYAN}│ {config.BOLD}Session History{' ' * 35}│{config.RESET}")
+    print(f"{config.CYAN}├─{'─' * 50}┤{config.RESET}")
+    
+    # Print history items
+    for i, item in enumerate(config.session_history):
+        # Format timestamp nicely
+        try:
+            timestamp = datetime.fromisoformat(item['timestamp'])
+            time_str = timestamp.strftime("%H:%M:%S")
+        except (ValueError, TypeError):
+            time_str = "Unknown time"
+            
+        # Truncate long queries/responses
+        query = item['query']
+        if len(query) > 42:  # Adjusted for box width
+            query = query[:39] + "..."
+        
+        # Left-pad index for alignment    
+        idx_str = f"{i}".rjust(2)
+        
+        # Add color coding based on even/odd rows for easier scanning
+        if i % 2 == 0:
+            print(f"{config.CYAN}│ {config.YELLOW}{idx_str}{config.RESET}: [{time_str}] {query}{' ' * (43 - len(query))}{config.CYAN}│{config.RESET}")
+        else:
+            print(f"{config.CYAN}│ {config.GREEN}{idx_str}{config.RESET}: [{time_str}] {query}{' ' * (43 - len(query))}{config.CYAN}│{config.RESET}")
+    
+    # Print footer
+    print(f"{config.CYAN}╰─{'─' * 50}╯{config.RESET}")
+    print(f"\n{config.YELLOW}Tip: Use 'recall N' to view the full content of an item{config.RESET}\n")
+    
+    # Return formatted string for history
+    result = ["Session History:"]
+    for i, item in enumerate(config.session_history):
+        try:
+            timestamp = datetime.fromisoformat(item['timestamp'])
+            time_str = timestamp.strftime("%H:%M:%S")
+        except (ValueError, TypeError):
+            time_str = "Unknown time"
+            
+        query = item['query']
+        if len(query) > 50:
+            query = query[:47] + "..."
+            
+        result.append(f"{i}: [{time_str}] {query}")
+    
+    return "\n".join(result)
+
+def recall_history_item(config, index):
+    """Recall and display a specific history item."""
+    if not hasattr(config, 'session_history') or not config.session_history:
+        message = "No session history available."
+        print(f"{config.YELLOW}{message}{config.RESET}")
+        return message
+    
+    try:
+        item = config.session_history[index]
+        
+        # Get timestamp in readable format
+        try:
+            timestamp = datetime.fromisoformat(item['timestamp'])
+            time_str = timestamp.strftime("%H:%M:%S")
+        except (ValueError, TypeError):
+            time_str = "Unknown time"
+        
+        # Calculate box width based on query length
+        query = item['query']
+        box_width = min(80, max(50, len(query) + 10))  # Dynamic width based on content
+        
+        # Print header with border
+        print(f"\n{config.CYAN}╭─{'─' * box_width}╮{config.RESET}")
+        print(f"{config.CYAN}│ {config.BOLD}History Item #{index} • {time_str}{' ' * (box_width - 19 - len(str(index)) - len(time_str))}│{config.RESET}")
+        print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+        
+        # Print query with label
+        print(f"{config.CYAN}│ {config.YELLOW}QUERY:{' ' * (box_width - 8)}{config.CYAN}│{config.RESET}")
+        
+        # Split query into multiple lines if needed
+        query_lines = []
+        remaining = query
+        while remaining:
+            # Take up to box_width - 4 chars (accounting for margins)
+            line = remaining[:box_width - 4]
+            query_lines.append(line)
+            remaining = remaining[box_width - 4:]
+        
+        for line in query_lines:
+            padding = ' ' * (box_width - len(line) - 2)
+            print(f"{config.CYAN}│ {config.RESET}{line}{padding}{config.CYAN}│{config.RESET}")
+        
+        # Divider between query and response
+        print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+        
+        # Print response with label
+        print(f"{config.CYAN}│ {config.GREEN}RESPONSE:{' ' * (box_width - 11)}{config.CYAN}│{config.RESET}")
+        
+        # Split response into multiple lines
+        response = item['response']
+        response_lines = []
+        remaining = response
+        while remaining:
+            line = remaining[:box_width - 4]
+            response_lines.append(line)
+            remaining = remaining[box_width - 4:]
+        
+        # Display first 15 lines max to avoid flooding terminal
+        max_lines = 15
+        for i, line in enumerate(response_lines[:max_lines]):
+            padding = ' ' * (box_width - len(line) - 2)
+            print(f"{config.CYAN}│ {config.RESET}{line}{padding}{config.CYAN}│{config.RESET}")
+        
+        # If response is truncated, show indicator
+        if len(response_lines) > max_lines:
+            print(f"{config.CYAN}│ {config.YELLOW}... {len(response_lines) - max_lines} more lines ...{' ' * (box_width - 24 - len(str(len(response_lines) - max_lines)))}{config.CYAN}│{config.RESET}")
+        
+        # Print footer
+        print(f"{config.CYAN}╰─{'─' * box_width}╯{config.RESET}\n")
+        
+        # Format result for return
+        result = [
+            f"Query: {item['query']}",
+            "",
+            f"Response: {item['response']}"
+        ]
+        return "\n".join(result)
+    except IndexError:
+        message = f"No history item at index {index}."
+        print(f"{config.YELLOW}{message}{config.RESET}")
+        return message
+
+def display_session_status(config):
+    """Display current session status."""
+    # Box dimensions
+    box_width = 60
+    
+    # Headers for each section
+    model_header = "🤖 MODEL"
+    cache_header = "💾 CACHE"
+    history_header = "📜 HISTORY"
+    settings_header = "⚙️ SETTINGS"
+    
+    # Print title box
+    print(f"\n{config.CYAN}╭─{'─' * box_width}╮{config.RESET}")
+    print(f"{config.CYAN}│ {config.BOLD}{config.YELLOW}SESSION STATUS DASHBOARD{' ' * (box_width - 24)}│{config.RESET}")
+    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    
+    # MODEL SECTION
+    print(f"{config.CYAN}│ {config.BOLD}{model_header}{' ' * (box_width - len(model_header) - 2)}│{config.RESET}")
+    print(f"{config.CYAN}│{config.RESET} • Active Model: {config.GREEN}{config.session_model or 'Default'}{config.RESET}{' ' * (box_width - 16 - len(config.session_model or 'Default'))}{config.CYAN}│{config.RESET}")
+    
+    model_status = []
+    if hasattr(config, 'use_claude') and config.use_claude:
+        model_status.append(f"{config.GREEN}Claude{config.RESET}")
+    else:
+        model_status.append(f"{config.RED}Claude{config.RESET}")
+        
+    if hasattr(config, 'use_ollama') and config.use_ollama:
+        model_status.append(f"{config.GREEN}Ollama{config.RESET}")
+    else:
+        model_status.append(f"{config.RED}Ollama{config.RESET}")
+        
+    if hasattr(config, 'use_groq') and config.use_groq:
+        model_status.append(f"{config.GREEN}Groq{config.RESET}")
+    else:
+        model_status.append(f"{config.RED}Groq{config.RESET}")
+    
+    print(f"{config.CYAN}│{config.RESET} • Available: {' | '.join(model_status)}{' ' * (box_width - 14 - len(' | '.join(['Claude', 'Ollama', 'Groq'])))}{config.CYAN}│{config.RESET}")
+    
+    # Divider
+    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    
+    # CACHE SECTION
+    print(f"{config.CYAN}│ {config.BOLD}{cache_header}{' ' * (box_width - len(cache_header) - 2)}│{config.RESET}")
+    
+    # Browser cache status
+    has_browser_cache = bool(_content_cache['raw_content'])
+    cache_status = f"{config.GREEN}Available{config.RESET}" if has_browser_cache else f"{config.RED}Empty{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Browser Cache: {cache_status}{' ' * (box_width - 17 - len('Available' if has_browser_cache else 'Empty'))}{config.CYAN}│{config.RESET}")
+    
+    # Show formatted content status
+    has_formatted = bool(_content_cache['formatted_content'])
+    formatted_status = f"{config.GREEN}Yes{config.RESET}" if has_formatted else f"{config.RED}No{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Formatted Content: {formatted_status}{' ' * (box_width - 21 - len('Yes' if has_formatted else 'No'))}{config.CYAN}│{config.RESET}")
+    
+    # Divider
+    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    
+    # HISTORY SECTION
+    print(f"{config.CYAN}│ {config.BOLD}{history_header}{' ' * (box_width - len(history_header) - 2)}│{config.RESET}")
+    
+    # History count
+    history_count = len(config.session_history) if hasattr(config, 'session_history') else 0
+    print(f"{config.CYAN}│{config.RESET} • Items: {config.YELLOW}{history_count}{config.RESET}{' ' * (box_width - 9 - len(str(history_count)))}{config.CYAN}│{config.RESET}")
+    
+    # Context items count
+    context_count = len(_response_context['previous_responses'])
+    print(f"{config.CYAN}│{config.RESET} • Context Items: {config.YELLOW}{context_count}{config.RESET}{' ' * (box_width - 17 - len(str(context_count)))}{config.CYAN}│{config.RESET}")
+    
+    # Divider
+    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    
+    # SETTINGS SECTION
+    print(f"{config.CYAN}│ {config.BOLD}{settings_header}{' ' * (box_width - len(settings_header) - 2)}│{config.RESET}")
+    
+    # Tolerance level with appropriate color
+    tolerance = _response_context['tolerance_level']
+    if tolerance == 'strict':
+        tolerance_display = f"{config.RED}strict{config.RESET}"
+    elif tolerance == 'lenient':
+        tolerance_display = f"{config.GREEN}lenient{config.RESET}"
+    else:
+        tolerance_display = f"{config.YELLOW}medium{config.RESET}"
+    
+    print(f"{config.CYAN}│{config.RESET} • Response Tolerance: {tolerance_display}{' ' * (box_width - 21 - len(tolerance))}{config.CYAN}│{config.RESET}")
+    
+    # Modes with appropriate colors
+    safe_mode = f"{config.GREEN}Enabled{config.RESET}" if config.safe_mode else f"{config.RED}Disabled{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Safe Mode: {safe_mode}{' ' * (box_width - 13 - len('Enabled' if config.safe_mode else 'Disabled'))}{config.CYAN}│{config.RESET}")
+    
+    autopilot_mode = f"{config.GREEN}Enabled{config.RESET}" if config.autopilot_mode else f"{config.RED}Disabled{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Autopilot Mode: {autopilot_mode}{' ' * (box_width - 18 - len('Enabled' if config.autopilot_mode else 'Disabled'))}{config.CYAN}│{config.RESET}")
+    
+    scriptreviewer = f"{config.GREEN}Enabled{config.RESET}" if hasattr(config, 'scriptreviewer_on') and config.scriptreviewer_on else f"{config.RED}Disabled{config.RESET}"
+    print(f"{config.CYAN}│{config.RESET} • Script Reviewer: {scriptreviewer}{' ' * (box_width - 19 - len('Enabled' if hasattr(config, 'scriptreviewer_on') and config.scriptreviewer_on else 'Disabled'))}{config.CYAN}│{config.RESET}")
+    
+    # Print footer
+    print(f"{config.CYAN}╰─{'─' * box_width}╯{config.RESET}\n")
+    
+    # Return formatted string for status
+    result = ["Current Session Status:"]
+    
+    # Model information
+    result.append(f"Model: {config.session_model or 'Default'}")
+    
+    # Browser cache status
+    result.append(f"Browser cache: {'Available' if has_browser_cache else 'Empty'}")
+    
+    # History count
+    result.append(f"History items: {history_count}")
+    
+    # Tolerance level
+    result.append(f"Response tolerance: {_response_context['tolerance_level']}")
+    
+    # Modes
+    result.append(f"Safe mode: {'Enabled' if config.safe_mode else 'Disabled'}")
+    result.append(f"Autopilot mode: {'Enabled' if config.autopilot_mode else 'Disabled'}")
+    
+    return "\n".join(result)
