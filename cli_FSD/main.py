@@ -161,7 +161,21 @@ def main():
                 logging.info("Switched to normal mode.")
             else:
                 try:
+                    # Process the input and get the response
                     response = process_input_based_on_mode(user_input, config, chat_models)
+                    
+                    # Update session history with this interaction
+                    if not hasattr(config, 'session_history'):
+                        config.session_history = []
+                    
+                    # Store interaction in session history
+                    config.session_history.append({
+                        'query': user_input,
+                        'response': response if response else "No response generated",
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    
+                    # Store last response for reference
                     config.last_response = response if response else "No response generated"
                     logging.info(f"Processed command: {user_input}")
                     
@@ -171,6 +185,9 @@ def main():
                         if not hasattr(config, '_response_was_streamed') or not config._response_was_streamed:
                             print(f"{config.CYAN}{response}{config.RESET}")
                         config._response_was_streamed = False
+                    
+                    # Always reset this flag for next input
+                    config._response_was_streamed = False
                 except Exception as e:
                     error_message = f"Error processing command '{user_input}': {e}"
                     print(f"{config.RED}Error processing command: {e}{config.RESET}")
