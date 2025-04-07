@@ -667,6 +667,35 @@ def process_input_based_on_mode(query, config, chat_models):
     elif query.lower() == 'session status':
         return display_session_status(config)
     
+    # Direct command to browse a site (special handler for local models)
+    elif query.lower().startswith(('browse ', '@browse ', '@ browse ')):
+        # Extract the site name
+        site_query = query.lower().replace('browse', '').replace('@', '').strip()
+        print(f"{config.CYAN}Direct browse command detected for: {site_query}{config.RESET}")
+        
+        # Check for specific sites
+        if "hacker news" in site_query or "hackernews" in site_query or "hn" in site_query:
+            url = "https://news.ycombinator.com/"
+        elif "reddit" in site_query:
+            search_terms = site_query.replace('reddit', '').strip()
+            url = f"https://www.reddit.com/search/?q={search_terms}" if search_terms else "https://www.reddit.com/"
+        elif "github" in site_query:
+            search_terms = site_query.replace('github', '').strip()
+            url = f"https://github.com/search?q={search_terms}" if search_terms else "https://github.com/"
+        else:
+            # For any other site, treat as a search
+            url = f"https://www.google.com/search?q={site_query}"
+            
+        # Directly use the browser search function
+        print(f"{config.CYAN}Direct browsing: {url}{config.RESET}")
+        browser_response = try_browser_search(site_query, config, chat_models)
+        
+        if browser_response:
+            # Process the browser response directly
+            return format_browser_response(site_query, browser_response, config, chat_models)
+        else:
+            return f"Failed to browse {site_query}. Please try a different search term."
+    
     # Check for tolerance level commands
     elif query.lower().startswith("set tolerance "):
         level = query.lower().replace("set tolerance ", "").strip()
