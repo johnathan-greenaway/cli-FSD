@@ -114,20 +114,77 @@ def chat_with_ollama(message, ollama_client, system_prompt):
         # Check if the message contains JSON data from web browsing
         is_json_data = False
         json_prompt = ""
+        is_browse_request = False
         
-        if "browse_web" in message and any(domain in message for domain in ["news.ycombinator.com", "reddit.com", "github.com", "stackoverflow.com"]):
+        # Check if this is a browse request (we need to guide Ollama to use URLs)
+        if any(term in message.lower() for term in ['browse', 'search', 'find', 'lookup', 'check website', 'go to website', 'go to site', 'check out']):
+            is_browse_request = True
+            
+            # Extract any URLs from the message
+            import re
+            urls = re.findall(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+', message)
+            
+            # If we found a URL, add instructions to use the browse_web tool
+            if urls:
+                browse_url_prompt = (
+                    "The user wants you to browse the web for information. "
+                    f"Use the browse_web tool with the URL: {urls[0]}. "
+                    "Do not try to process the URL yourself. Instead, remember to pass the URL to the tool. "
+                    "When showing the results, highlight the most important information clearly and concisely."
+                )
+                json_prompt += browse_url_prompt
+            # If the user is asking to browse but didn't include a URL
+            else:
+                # Check for site names
+                site_names = []
+                if 'hacker news' in message.lower() or 'hackernews' in message.lower() or 'hn' in message.lower():
+                    site_names.append("https://news.ycombinator.com/")
+                if 'reddit' in message.lower():
+                    site_names.append("https://www.reddit.com/")
+                if 'github' in message.lower():
+                    site_names.append("https://github.com/")
+                
+                if site_names:
+                    browse_site_prompt = (
+                        "The user wants you to browse a specific website. "
+                        f"Use the browse_web tool with the URL: {site_names[0]}. "
+                        "Do not try to process the URL yourself. Pass the URL to the tool."
+                    )
+                    json_prompt += browse_site_prompt
+                else:
+                    # General search request
+                    browse_query = message.lower()
+                    for term in ['browse', 'search', 'find', 'lookup', 'what is', 'how to']:
+                        browse_query = browse_query.replace(term, '').strip()
+                    
+                    if browse_query:
+                        search_prompt = (
+                            "The user wants you to search for information. "
+                            f"Use the browse_web tool with an appropriate search engine URL like: https://www.google.com/search?q={browse_query.replace(' ', '+')}. "
+                            "Remember to pass the URL to the tool, do not try to process it yourself."
+                        )
+                        json_prompt += search_prompt
+        
+        # Check if the message contains JSON data from web browsing specific sites
+        if "browse_web" in message and any(domain in message for domain in ["reddit.com", "github.com", "stackoverflow.com", "news.ycombinator.com"]):
             # For web browsing with structured data, add special prompt instructions
-            json_prompt = (
+            web_handling_prompt = (
                 "You are analyzing structured web content. "
-                "The data provided is in JSON format and may be incomplete. "
-                "Format your response as a clear summary of the key information. "
-                "For news aggregators like Hacker News, list the important stories with their details. "
-                "Always present information in a readable format, even if the JSON is truncated. "
-                "IMPORTANT: If the web content isn't helpful or is incomplete, don't get stuck - " 
-                "use your built-in knowledge to answer the original question instead. "
-                "You have extensive programming knowledge and can solve most technical questions "
-                "without relying on incomplete web data. The web content should SUPPLEMENT your knowledge, not REPLACE it."
+                "The data provided is in JSON format. Focus on extracting and presenting the key information clearly. "
+                "For news aggregators like Hacker News, list the important stories with their titles, points, and links. "
+                "For Reddit, extract the main posts and their scores. "
+                "For Stack Overflow, focus on the questions and answers. "
+                "For GitHub, summarize repository information or search results. "
+                "\n\nSteps to process this web content:\n"
+                "1. Identify the type of content (news site, forum, documentation, etc.)\n"
+                "2. Extract the most relevant sections and ignore boilerplate text\n"
+                "3. Present information in a clear list format with headings and bullet points\n"
+                "4. Include direct quotes when useful\n"
+                "5. Always mention the source of information\n\n"
+                "IMPORTANT: If you see JSON with an empty array '[]' or if the content seems incomplete, "
+                "say 'The website content could not be properly retrieved' and try to answer from your knowledge instead."
             )
+            json_prompt += web_handling_prompt
         
         # Combine system prompts if needed
         full_system_prompt = json_prompt + "\n\n" + system_prompt if json_prompt else system_prompt

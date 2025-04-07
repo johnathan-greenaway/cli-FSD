@@ -165,6 +165,86 @@ def print_message(sender, message):
     print(f"{prefix}{message}")
 
 
+def direct_scrape_hacker_news(url):
+    """Direct HTML scraping specifically for Hacker News with simple text output."""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        
+        print(f"{CYAN}Using direct HTML scrape for Hacker News...{RESET}")
+        
+        # Fetch the page
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        page = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(page.content, 'html.parser')
+        
+        # Extract stories
+        stories = []
+        story_elements = soup.select('tr.athing')
+        
+        for i, story in enumerate(story_elements[:15]):  # Get top 15 stories
+            if i >= 15:  # Safety limit
+                break
+                
+            # Get the title and link
+            title_element = story.select_one('td.title > span.titleline > a')
+            if not title_element:
+                continue
+                
+            title = title_element.text.strip()
+            link = title_element.get('href', '')
+            
+            # Skip empty titles
+            if not title:
+                continue
+            
+            # Make link absolute if it's relative
+            if link and not link.startswith(('http://', 'https://')):
+                if link.startswith('/'):
+                    link = f"https://news.ycombinator.com{link}"
+                else:
+                    link = f"https://news.ycombinator.com/{link}"
+                
+            # Get the source/domain (if available)
+            source = ''
+            source_element = story.select_one('span.sitestr')
+            if source_element:
+                source = source_element.text.strip()
+                
+            # Find the next sibling row with score and comment info
+            score = "Unknown score"
+            comments = "0 comments"
+            
+            score_row = story.find_next_sibling('tr')
+            if score_row:
+                score_element = score_row.select_one('span.score')
+                if score_element:
+                    score = score_element.text.strip()
+                    
+                comments_element = score_row.select('a')
+                for a in comments_element:
+                    if 'comment' in a.text:
+                        comments = a.text.strip()
+                        break
+            
+            # Format as plain text
+            story_text = f"{i+1}. {title}"
+            if source:
+                story_text += f" ({source})"
+            stories.append(story_text)
+        
+        # Build a simple text response
+        response = "# Top Stories from Hacker News\n\n"
+        response += "\n".join(stories)
+        response += "\n\nSource: https://news.ycombinator.com/"
+        
+        return response
+    except Exception as e:
+        print(f"{YELLOW}Direct HTML scrape for Hacker News failed: {str(e)}{RESET}")
+        return None
+
 def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     """Use an MCP tool with the specified parameters.
     
@@ -178,27 +258,174 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     """
     import json  # Import json at the top level to ensure it's available
 
-    # For browse_web operation, try to use our efficient WebContentFetcher first
+    # For browse_web operation, use different fetching strategies
     if tool_name == "browse_web" and "url" in arguments:
+        url = arguments["url"]
+        from urllib.parse import urljoin  # For resolving relative URLs
+        
+        # Special handling for Hacker News
+        if "news.ycombinator.com" in url:
+            try:
+                # Direct HTML scrape approach for Hacker News
+                import requests
+                from bs4 import BeautifulSoup
+                
+                print(f"{CYAN}Using direct HTML scrape for Hacker News...{RESET}")
+                
+                # Fetch the page
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+                page = requests.get(url, headers=headers, timeout=10)
+                soup = BeautifulSoup(page.content, 'html.parser')
+                
+                # Extract stories
+                stories = []
+                story_elements = soup.select('tr.athing')
+                
+                for story in story_elements[:20]:  # Get top 20 stories
+                    # Get the title and link
+                    title_element = story.select_one('td.title > span.titleline > a')
+                    if not title_element:
+                        continue
+                        
+                    title = title_element.text.strip()
+                    link = title_element.get('href', '')
+                    
+                    # Make link absolute if it's relative
+                    if link and not link.startswith(('http://', 'https://')):
+                        if link.startswith('/'):
+                            link = f"https://news.ycombinator.com{link}"
+                        else:
+                            link = f"https://news.ycombinator.com/{link}"
+                        
+                    # Get the source/domain (if available)
+                    source = ''
+                    source_element = story.select_one('span.sitestr')
+                    if source_element:
+                        source = source_element.text.strip()
+                        
+                    # Find the next sibling row with score and comment info
+                    score = "Unknown score"
+                    comments = "0 comments"
+                    
+                    score_row = story.find_next_sibling('tr')
+                    if score_row:
+                        score_element = score_row.select_one('span.score')
+                        if score_element:
+                            score = score_element.text.strip()
+                            
+                        comments_element = score_row.select('a')
+                        for a in comments_element:
+                            if 'comment' in a.text:
+                                comments = a.text.strip()
+                                break
+                    
+                    # Add to our stories list
+                    stories.append({
+                        "type": "story",
+                        "title": title,
+                        "url": link,
+                        "metadata": {
+                            "source": source,
+                            "score": score,
+                            "comments": comments
+                        },
+                        "content": f"Source: {source}\nScore: {score}\nComments: {comments}"
+                    })
+                
+                # Build a structured response
+                hn_content = {
+                    "type": "webpage",
+                    "url": url,
+                    "title": "Hacker News - Current Top Stories",
+                    "content": []
+                }
+                
+                # Add an intro section
+                hn_content["content"].append({
+                    "type": "section",
+                    "title": "About Hacker News",
+                    "blocks": [
+                        {
+                            "type": "text",
+                            "text": "Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator. The site features discussions and links to stories about technology, startups, and programming."
+                        }
+                    ]
+                })
+                
+                # Add the stories
+                for story in stories:
+                    hn_content["content"].append(story)
+                    
+                return json.dumps(hn_content)
+            except Exception as e:
+                print(f"{YELLOW}Direct HTML scrape for Hacker News failed: {str(e)}{RESET}")
+                # Fall through to standard methods if scraping fails
+        
+        # Standard WebContentFetcher for all sites (or as fallback)
         try:
             from .web_fetcher import fetcher
-            url = arguments["url"]
             # Try to use our efficient fetcher
             result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
             if result:
-                # Format for better Ollama compatibility - reduce nesting and complexity
-                if "url" in arguments and "news.ycombinator.com" in arguments["url"]:
-                    # Custom formatting for Hacker News
-                    simplified_result = []
-                    if isinstance(result, dict) and "structured_content" in result:
-                        for item in result.get("structured_content", []):
-                            if item.get("type") == "story":
-                                simplified_result.append({
-                                    "title": item.get("title", ""),
-                                    "url": item.get("url", ""),
-                                    "metadata": item.get("metadata", {})
-                                })
-                    return json.dumps(simplified_result)
+                # Check if the result is empty or has minimal content
+                if not result.get("text_content") or len(result.get("text_content", "").strip()) < 100:
+                    print(f"{YELLOW}JSON result has minimal/empty content. Trying direct HTML scrape...{RESET}")
+                    # Try direct HTML scrape for any site that returns empty JSON
+                    try:
+                        import requests
+                        from bs4 import BeautifulSoup
+                        
+                        print(f"{CYAN}Using generic direct HTML scrape for {url}...{RESET}")
+                        
+                        # Fetch the page
+                        headers = {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        }
+                        page = requests.get(url, headers=headers, timeout=10)
+                        soup = BeautifulSoup(page.content, 'html.parser')
+                        
+                        # Get the title
+                        title = soup.title.string.strip() if soup.title else url
+                        
+                        # Get main content - paragraphs and headings
+                        main_content = []
+                        for element in soup.find_all(['h1', 'h2', 'h3', 'p']):
+                            text = element.get_text().strip()
+                            if text and len(text) > 15:  # Skip very short snippets
+                                main_content.append(text)
+                        
+                        # Extract links
+                        links = []
+                        for a in soup.find_all('a', href=True)[:10]:  # Limit to 10 links
+                            href = a['href']
+                            if not href.startswith(('http://', 'https://')):
+                                href = urljoin(url, href)
+                            
+                            link_text = a.get_text().strip()
+                            if link_text and href and len(link_text) > 3:
+                                links.append({"text": link_text, "url": href})
+                        
+                        # Build a new result
+                        new_result = {
+                            "url": url,
+                            "title": title,
+                            "text_content": "\n\n".join(main_content),
+                            "structured_content": [
+                                {
+                                    "type": "section",
+                                    "title": "Page Content",
+                                    "blocks": [{"text": content} for content in main_content]
+                                }
+                            ],
+                            "links": links
+                        }
+                        return json.dumps(new_result)
+                    except Exception as e:
+                        print(f"{YELLOW}Generic direct HTML scrape failed: {str(e)}. Using original result.{RESET}")
+                        
+                # Return the standard JSON result if it has content
                 return json.dumps(result)
         except Exception as e:
             # Log the exception for debugging
@@ -212,6 +439,78 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
         from pathlib import Path
         import os
         
+        # Try direct HTML scrape first for any site - as a general fallback
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+            
+            print(f"{CYAN}Trying direct HTML scrape for {url} as fallback method...{RESET}")
+            
+            # Fetch the page
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5'
+            }
+            page = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(page.content, 'html.parser')
+            
+            # Get the title
+            title = soup.title.string.strip() if soup.title else url
+            
+            # Get main content - paragraphs and headings
+            main_content = []
+            for element in soup.find_all(['h1', 'h2', 'h3', 'p']):
+                text = element.get_text().strip()
+                if text and len(text) > 15:  # Skip very short snippets
+                    main_content.append(text)
+            
+            # Build a structured response
+            site_content = {
+                "type": "webpage",
+                "url": url,
+                "title": title,
+                "content": [
+                    {
+                        "type": "section",
+                        "title": "Page Content",
+                        "blocks": [
+                            {
+                                "type": "text",
+                                "text": "\n\n".join(main_content[:15])  # Limit to 15 paragraphs
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            # Special handling for Ollama model - simplify content
+            try:
+                # Check if we're serving an Ollama model (could add other local models here)
+                is_local_model = "ollama" in server_name.lower() if server_name else False
+                
+                # If using Ollama, simplify the content even further to help parsing
+                if is_local_model:
+                    simplified_content = {
+                        "url": url,
+                        "title": title,
+                        "content": "\n\n".join([
+                            "WEBSITE CONTENT:",
+                            f"Title: {title}",
+                            "Main content:",
+                            "\n".join([f"• {text[:200]}{'...' if len(text) > 200 else ''}" for text in main_content[:10]])
+                        ])
+                    }
+                    return json.dumps(simplified_content)
+            except Exception:
+                # If any error in simplification, just use normal content
+                pass
+            
+            # Return the directly scraped content
+            return json.dumps(site_content)
+        except Exception as e:
+            print(f"{YELLOW}Final direct HTML scrape fallback failed: {str(e)}. Continuing with MCP tool...{RESET}")
+            
         # Get MCP settings from config directory
         try:
             config_dir = Path(__file__).parent / "config_files"
