@@ -479,46 +479,7 @@ def try_browser_search(query: str, config, chat_models) -> str:
             from .web_fetcher import fetcher
             result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
             if result:
-                # Special handling for Hacker News
-                if "news.ycombinator.com" in url:
-                    # Create a more readable format for HN content
-                    hn_content = {
-                        "type": "webpage",
-                        "url": url,
-                        "title": "Hacker News",
-                        "content": []
-                    }
-                    
-                    # Extract stories from structured content
-                    stories = []
-                    for item in result.get("structured_content", []):
-                        if item.get("type") == "heading":
-                            stories.append({
-                                "type": "story",
-                                "title": item.get("text", "Unknown Title"),
-                                "url": url,
-                                "content": "See original link for details"
-                            })
-                    
-                    # Add paragraphs and links
-                    for item in stories:
-                        hn_content["content"].append(item)
-                    
-                    # Add extra context
-                    hn_content["content"].append({
-                        "type": "section",
-                        "title": "About Hacker News",
-                        "blocks": [
-                            {
-                                "type": "text",
-                                "text": "Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator. It features user-submitted stories on technology, startups, and computer science."
-                            }
-                        ]
-                    })
-                    
-                    return json.dumps(hn_content)
-                
-                # Return standard JSON for other sites
+                # Return standard JSON for all sites
                 return json.dumps(result)
         except Exception as e:
             print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying WebBrowser fallback...{config.RESET}")
@@ -574,62 +535,25 @@ def try_browser_search(query: str, config, chat_models) -> str:
             )
             # Empty array/object check
             if not response or response.strip() in ["[]", "{}", ""]:
-                # Always use a fallback for Hacker News since it's returning empty
-                if "news.ycombinator.com" in url:
-                    hn_content = {
-                        "type": "webpage",
-                        "url": url,
-                        "title": "Hacker News",
-                        "content": [
-                            {
-                                "type": "section",
-                                "title": "Top Stories on Hacker News",
-                                "blocks": [
-                                    {
-                                        "type": "text",
-                                        "text": "Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator. The site features discussions and links to stories about technology, startups, and programming."
-                                    }
-                                ]
-                            },
-                            {
-                                "type": "story",
-                                "title": "Visit the Hacker News homepage for the latest stories",
-                                "url": "https://news.ycombinator.com/",
-                                "content": "Hacker News regularly features stories on:"
-                            },
-                            {
-                                "type": "section",
-                                "title": "Common Topics",
-                                "blocks": [
-                                    {
-                                        "type": "text",
-                                        "text": "• Technology news and advancements\n• Programming languages and frameworks\n• Startup companies and funding\n• Tech industry discussions\n• Computer science research\n• Open source projects\n• AI and machine learning developments"
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                    return json.dumps(hn_content)
-                else:
-                    # Generic fallback for other sites
-                    fallback_content = {
-                        "type": "webpage",
-                        "url": url,
-                        "title": f"Content from {url}",
-                        "content": [
-                            {
-                                "type": "section",
-                                "title": "Information",
-                                "blocks": [
-                                    {
-                                        "type": "text",
-                                        "text": f"Successfully connected to {url} but no content was returned. This might be due to site restrictions or content formatting."
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                    return json.dumps(fallback_content)
+                # Generic fallback for empty responses
+                fallback_content = {
+                    "type": "webpage",
+                    "url": url,
+                    "title": f"Content from {url}",
+                    "content": [
+                        {
+                            "type": "section",
+                            "title": "Information",
+                            "blocks": [
+                                {
+                                    "type": "text",
+                                    "text": f"Successfully connected to {url} but no content was returned. This might be due to site restrictions or content formatting."
+                                }
+                            ]
+                        }
+                    ]
+                }
+                return json.dumps(fallback_content)
             
             # If we have a valid response
             return response

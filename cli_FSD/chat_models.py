@@ -115,7 +115,8 @@ def chat_with_ollama(message, ollama_client, system_prompt):
         is_json_data = False
         json_prompt = ""
         
-        if "browse_web" in message and any(domain in message for domain in ["news.ycombinator.com", "reddit.com", "github.com", "stackoverflow.com"]):
+        # Check if the message contains JSON data from web browsing specific sites
+        if "browse_web" in message and any(domain in message for domain in ["reddit.com", "github.com", "stackoverflow.com"]):
             # For web browsing with structured data, add special prompt instructions
             json_prompt = (
                 "You are analyzing structured web content. "
@@ -123,7 +124,7 @@ def chat_with_ollama(message, ollama_client, system_prompt):
                 "Format your response as a clear summary of the key information. "
                 "For news aggregators like Hacker News, list the important stories with their details. "
                 "Always present information in a readable format, even if the JSON is truncated. "
-                "IMPORTANT: If the web content isn't helpful or is incomplete, don't get stuck - " 
+                "IMPORTANT: If the web content isn't helpful or is incomplete, don't get stuck - "
                 "use your built-in knowledge to answer the original question instead. "
                 "You have extensive programming knowledge and can solve most technical questions "
                 "without relying on incomplete web data. The web content should SUPPLEMENT your knowledge, not REPLACE it."
