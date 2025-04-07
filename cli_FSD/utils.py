@@ -404,6 +404,28 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
                 ]
             }
             
+            # Special handling for Ollama model - simplify content
+            try:
+                # Check if we're serving an Ollama model (could add other local models here)
+                is_local_model = "ollama" in server_name.lower() if server_name else False
+                
+                # If using Ollama, simplify the content even further to help parsing
+                if is_local_model:
+                    simplified_content = {
+                        "url": url,
+                        "title": title,
+                        "content": "\n\n".join([
+                            "WEBSITE CONTENT:",
+                            f"Title: {title}",
+                            "Main content:",
+                            "\n".join([f"• {text[:200]}{'...' if len(text) > 200 else ''}" for text in main_content[:10]])
+                        ])
+                    }
+                    return json.dumps(simplified_content)
+            except Exception:
+                # If any error in simplification, just use normal content
+                pass
+            
             # Return the directly scraped content
             return json.dumps(site_content)
         except Exception as e:

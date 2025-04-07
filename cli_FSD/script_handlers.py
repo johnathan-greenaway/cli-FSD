@@ -410,20 +410,40 @@ def process_response(query: str, response: str, config, chat_models, allow_brows
                                 # Format the browser response
                                 formatted_browser = format_browser_response(query, browser_response, config, chat_models)
                                 
-                                # Combine browser results with previous knowledge
-                                final_response = chat_with_model(
-                                    message=(
+                                # Determine if we're using a local model like Ollama
+                                is_local_model = config.session_model == 'ollama' if hasattr(config, 'session_model') else False
+                                
+                                if is_local_model:
+                                    # Simpler prompt structure for local models
+                                    message = (
+                                        f"Question: {query}\n\n"
+                                        f"Web content: {formatted_browser}\n\n"
+                                        "Provide a direct answer based on this information using bullet points. Be concise."
+                                    )
+                                    system_prompt = (
+                                        "You are summarizing web content. Present information as a clear, concise list. "
+                                        "Use bullet points for key information. If the content doesn't answer the question well, "
+                                        "state that clearly and use your built-in knowledge instead."
+                                    )
+                                else:
+                                    # Standard prompt for cloud models
+                                    message = (
                                         f"Original query: {query}\n\n"
                                         f"Previous responses: {improved_response}\n\n"
                                         f"Browser search results: {formatted_browser}\n\n"
                                         "Combine all this information to provide the most accurate and complete response."
-                                    ),
-                                    config=config,
-                                    chat_models=chat_models,
-                                    system_prompt=(
+                                    )
+                                    system_prompt = (
                                         "You are a helpful expert assistant. Synthesize information from multiple sources "
                                         "to provide the most accurate and complete response to the user's query."
                                     )
+                                
+                                # Combine browser results with previous knowledge
+                                final_response = chat_with_model(
+                                    message=message,
+                                    config=config,
+                                    chat_models=chat_models,
+                                    system_prompt=system_prompt
                                 )
                                 return final_response
                             except Exception as e:
