@@ -744,6 +744,14 @@ def process_input_based_on_mode(query, config, chat_models):
                     response += "\n\nSource: https://news.ycombinator.com/"
                     
                     print(f"{config.GREEN}Successfully scraped Hacker News directly.{config.RESET}")
+                    
+                    # In autopilot mode, ensure we print the response directly to console
+                    if hasattr(config, 'autopilot_mode') and config.autopilot_mode:
+                        print("\n" + response + "\n")
+                        
+                    # Also stream the message to ensure it's visible
+                    print_streamed_message(response, config.CYAN, config)
+                    
                     return response
                     
                 except Exception as e:
