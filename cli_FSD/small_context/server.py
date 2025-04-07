@@ -360,61 +360,35 @@ class SmallContextServer:
                 return block if block["text"] else None
 
             # Process content based on page structure
-            if "news.ycombinator.com" in url:
-                # Handle HN-specific structure
-                stories = soup.select('tr.athing')
-                for story in stories:
-                    title_cell = story.select_one('td.title > span.titleline')
-                    if title_cell and (title_link := title_cell.find('a')):
-                        story_block = {
-                            "type": "story",
-                            "title": title_link.get_text().strip(),
-                            "url": urljoin(url, title_link['href']) if title_link.get('href') else "",
-                            "metadata": {}
-                        }
-                        
-                        if meta_row := story.find_next_sibling('tr'):
-                            if meta := meta_row.select_one('td.subtext'):
-                                if points := meta.select_one('span.score'):
-                                    story_block["metadata"]["points"] = points.get_text()
-                                if author := meta.select_one('a.hnuser'):
-                                    story_block["metadata"]["author"] = author.get_text()
-                                if time_el := meta.select_one('span.age'):
-                                    story_block["metadata"]["time"] = time_el.get_text()
-                                if comments := meta.find_all('a')[-1]:
-                                    story_block["metadata"]["comments"] = comments.get_text()
-                        
-                        content["content"].append(story_block)
-            else:
-                # Handle generic webpage structure
-                for tag in soup.find_all(['article', 'main', '[role="main"]', '.content', '#content']):
-                    section = {
-                        "type": "section",
-                        "blocks": []
-                    }
-                    
-                    # Extract headings
-                    for heading in tag.find_all(['h1', 'h2', 'h3']):
-                        if block := extract_content_block(heading):
-                            block["type"] = "heading"
-                            section["blocks"].append(block)
-                    
-                    # Extract paragraphs and lists
-                    for element in tag.find_all(['p', 'div', 'section', 'ul', 'ol']):
-                        if block := extract_content_block(element):
-                            section["blocks"].append(block)
-                    
-                    if section["blocks"]:
-                        content["content"].append(section)
+            # Handle generic webpage structure
+            for tag in soup.find_all(['article', 'main', '[role="main"]', '.content', '#content']):
+                section = {
+                    "type": "section",
+                    "blocks": []
+                }
                 
-                # Fallback to any content if no structured content found
-                if not content["content"]:
-                    for tag in soup.find_all(['p', 'div', 'section']):
-                        if block := extract_content_block(tag):
-                            content["content"].append({
-                                "type": "section",
-                                "blocks": [block]
-                            })
+                # Extract headings
+                for heading in tag.find_all(['h1', 'h2', 'h3']):
+                    if block := extract_content_block(heading):
+                        block["type"] = "heading"
+                        section["blocks"].append(block)
+                
+                # Extract paragraphs and lists
+                for element in tag.find_all(['p', 'div', 'section', 'ul', 'ol']):
+                    if block := extract_content_block(element):
+                        section["blocks"].append(block)
+                
+                if section["blocks"]:
+                    content["content"].append(section)
+            
+            # Fallback to any content if no structured content found
+            if not content["content"]:
+                for tag in soup.find_all(['p', 'div', 'section']):
+                    if block := extract_content_block(tag):
+                        content["content"].append({
+                            "type": "section",
+                            "blocks": [block]
+                        })
             
             # Cache the content
             cached_content = CachedContent(

@@ -34,6 +34,24 @@ class ContextAgent:
             - prompt: The generated prompt for LLM analysis
             - requires_llm_processing: Whether LLM processing is needed
         """
+        # Prevent certain problematic requests that should be handled differently
+        if any(pattern in request.lower() for pattern in [
+            "browse news", "browse financial news", "browse stock", 
+            "open browser", "open a browser", "open web browser", "launch browser"
+        ]):
+            # Create a special direct knowledge prompt for browser-related requests
+            return {
+                "prompt": json.dumps({
+                    "response_type": "direct_knowledge",
+                    "confidence": 0.9,
+                    "selected_tool": "none",
+                    "reasoning": "User is asking to browse news/financial sites. Using built-in knowledge instead of browser instructions.",
+                    "parameters": {
+                        "content": request
+                    }
+                }),
+                "requires_llm_processing": False  # Skip further LLM processing
+            }
         return {
             "prompt": f"""Analyze this request: "{request}"
 
