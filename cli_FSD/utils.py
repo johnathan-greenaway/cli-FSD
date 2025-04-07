@@ -178,9 +178,10 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     """
     import json  # Import json at the top level to ensure it's available
 
-    # For browse_web operation, try to use our efficient WebContentFetcher first
+    # For browse_web operation, use different fetching strategies
     if tool_name == "browse_web" and "url" in arguments:
         url = arguments["url"]
+        from urllib.parse import urljoin  # For resolving relative URLs
         
         # Special handling for Hacker News
         if "news.ycombinator.com" in url:
@@ -288,7 +289,63 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
             # Try to use our efficient fetcher
             result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
             if result:
-                # Return the standard JSON result
+                # Check if the result is empty or has minimal content
+                if not result.get("text_content") or len(result.get("text_content", "").strip()) < 100:
+                    print(f"{YELLOW}JSON result has minimal/empty content. Trying direct HTML scrape...{RESET}")
+                    # Try direct HTML scrape for any site that returns empty JSON
+                    try:
+                        import requests
+                        from bs4 import BeautifulSoup
+                        
+                        print(f"{CYAN}Using generic direct HTML scrape for {url}...{RESET}")
+                        
+                        # Fetch the page
+                        headers = {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        }
+                        page = requests.get(url, headers=headers, timeout=10)
+                        soup = BeautifulSoup(page.content, 'html.parser')
+                        
+                        # Get the title
+                        title = soup.title.string.strip() if soup.title else url
+                        
+                        # Get main content - paragraphs and headings
+                        main_content = []
+                        for element in soup.find_all(['h1', 'h2', 'h3', 'p']):
+                            text = element.get_text().strip()
+                            if text and len(text) > 15:  # Skip very short snippets
+                                main_content.append(text)
+                        
+                        # Extract links
+                        links = []
+                        for a in soup.find_all('a', href=True)[:10]:  # Limit to 10 links
+                            href = a['href']
+                            if not href.startswith(('http://', 'https://')):
+                                href = urljoin(url, href)
+                            
+                            link_text = a.get_text().strip()
+                            if link_text and href and len(link_text) > 3:
+                                links.append({"text": link_text, "url": href})
+                        
+                        # Build a new result
+                        new_result = {
+                            "url": url,
+                            "title": title,
+                            "text_content": "\n\n".join(main_content),
+                            "structured_content": [
+                                {
+                                    "type": "section",
+                                    "title": "Page Content",
+                                    "blocks": [{"text": content} for content in main_content]
+                                }
+                            ],
+                            "links": links
+                        }
+                        return json.dumps(new_result)
+                    except Exception as e:
+                        print(f"{YELLOW}Generic direct HTML scrape failed: {str(e)}. Using original result.{RESET}")
+                        
+                # Return the standard JSON result if it has content
                 return json.dumps(result)
         except Exception as e:
             # Log the exception for debugging
@@ -302,6 +359,56 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
         from pathlib import Path
         import os
         
+        # Try direct HTML scrape first for any site - as a general fallback
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+            
+            print(f"{CYAN}Trying direct HTML scrape for {url} as fallback method...{RESET}")
+            
+            # Fetch the page
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5'
+            }
+            page = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(page.content, 'html.parser')
+            
+            # Get the title
+            title = soup.title.string.strip() if soup.title else url
+            
+            # Get main content - paragraphs and headings
+            main_content = []
+            for element in soup.find_all(['h1', 'h2', 'h3', 'p']):
+                text = element.get_text().strip()
+                if text and len(text) > 15:  # Skip very short snippets
+                    main_content.append(text)
+            
+            # Build a structured response
+            site_content = {
+                "type": "webpage",
+                "url": url,
+                "title": title,
+                "content": [
+                    {
+                        "type": "section",
+                        "title": "Page Content",
+                        "blocks": [
+                            {
+                                "type": "text",
+                                "text": "\n\n".join(main_content[:15])  # Limit to 15 paragraphs
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            # Return the directly scraped content
+            return json.dumps(site_content)
+        except Exception as e:
+            print(f"{YELLOW}Final direct HTML scrape fallback failed: {str(e)}. Continuing with MCP tool...{RESET}")
+            
         # Get MCP settings from config directory
         try:
             config_dir = Path(__file__).parent / "config_files"
