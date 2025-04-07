@@ -180,9 +180,111 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
 
     # For browse_web operation, try to use our efficient WebContentFetcher first
     if tool_name == "browse_web" and "url" in arguments:
+        url = arguments["url"]
+        
+        # Special handling for Hacker News
+        if "news.ycombinator.com" in url:
+            try:
+                # Direct HTML scrape approach for Hacker News
+                import requests
+                from bs4 import BeautifulSoup
+                
+                print(f"{CYAN}Using direct HTML scrape for Hacker News...{RESET}")
+                
+                # Fetch the page
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+                page = requests.get(url, headers=headers, timeout=10)
+                soup = BeautifulSoup(page.content, 'html.parser')
+                
+                # Extract stories
+                stories = []
+                story_elements = soup.select('tr.athing')
+                
+                for story in story_elements[:20]:  # Get top 20 stories
+                    # Get the title and link
+                    title_element = story.select_one('td.title > span.titleline > a')
+                    if not title_element:
+                        continue
+                        
+                    title = title_element.text.strip()
+                    link = title_element.get('href', '')
+                    
+                    # Make link absolute if it's relative
+                    if link and not link.startswith(('http://', 'https://')):
+                        if link.startswith('/'):
+                            link = f"https://news.ycombinator.com{link}"
+                        else:
+                            link = f"https://news.ycombinator.com/{link}"
+                        
+                    # Get the source/domain (if available)
+                    source = ''
+                    source_element = story.select_one('span.sitestr')
+                    if source_element:
+                        source = source_element.text.strip()
+                        
+                    # Find the next sibling row with score and comment info
+                    score = "Unknown score"
+                    comments = "0 comments"
+                    
+                    score_row = story.find_next_sibling('tr')
+                    if score_row:
+                        score_element = score_row.select_one('span.score')
+                        if score_element:
+                            score = score_element.text.strip()
+                            
+                        comments_element = score_row.select('a')
+                        for a in comments_element:
+                            if 'comment' in a.text:
+                                comments = a.text.strip()
+                                break
+                    
+                    # Add to our stories list
+                    stories.append({
+                        "type": "story",
+                        "title": title,
+                        "url": link,
+                        "metadata": {
+                            "source": source,
+                            "score": score,
+                            "comments": comments
+                        },
+                        "content": f"Source: {source}\nScore: {score}\nComments: {comments}"
+                    })
+                
+                # Build a structured response
+                hn_content = {
+                    "type": "webpage",
+                    "url": url,
+                    "title": "Hacker News - Current Top Stories",
+                    "content": []
+                }
+                
+                # Add an intro section
+                hn_content["content"].append({
+                    "type": "section",
+                    "title": "About Hacker News",
+                    "blocks": [
+                        {
+                            "type": "text",
+                            "text": "Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator. The site features discussions and links to stories about technology, startups, and programming."
+                        }
+                    ]
+                })
+                
+                # Add the stories
+                for story in stories:
+                    hn_content["content"].append(story)
+                    
+                return json.dumps(hn_content)
+            except Exception as e:
+                print(f"{YELLOW}Direct HTML scrape for Hacker News failed: {str(e)}{RESET}")
+                # Fall through to standard methods if scraping fails
+        
+        # Standard WebContentFetcher for all sites (or as fallback)
         try:
             from .web_fetcher import fetcher
-            url = arguments["url"]
             # Try to use our efficient fetcher
             result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
             if result:
