@@ -483,12 +483,12 @@ def try_browser_search(query: str, config, chat_models) -> str:
     if "hacker news" in search_query.lower() or "hackernews" in search_query.lower() or "hn" in search_query.lower():
         url = "https://news.ycombinator.com/"
     elif "reddit" in search_query.lower():
-        url = f"https://www.reddit.com/search/?q={search_query.replace('reddit', '')}"
+        url = f"https://www.reddit.com/search/?q={search_query.replace('reddit', '').replace(' ', '+')}"
     elif "github" in search_query.lower():
-        url = f"https://github.com/search?q={search_query.replace('github', '')}"
+        url = f"https://github.com/search?q={search_query.replace('github', '').replace(' ', '+')}"
     else:
         # Default to Google search
-        url = f"https://www.google.com/search?q={search_query}"
+        url = f"https://www.google.com/search?q={search_query.replace(' ', '+')}"
     
     print(f"{config.CYAN}Trying browser search for: {search_query}{config.RESET}")
     print(f"{config.CYAN}Using URL: {url}{config.RESET}")
