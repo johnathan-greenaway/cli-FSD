@@ -165,6 +165,86 @@ def print_message(sender, message):
     print(f"{prefix}{message}")
 
 
+def direct_scrape_hacker_news(url):
+    """Direct HTML scraping specifically for Hacker News with simple text output."""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        
+        print(f"{CYAN}Using direct HTML scrape for Hacker News...{RESET}")
+        
+        # Fetch the page
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        page = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(page.content, 'html.parser')
+        
+        # Extract stories
+        stories = []
+        story_elements = soup.select('tr.athing')
+        
+        for i, story in enumerate(story_elements[:15]):  # Get top 15 stories
+            if i >= 15:  # Safety limit
+                break
+                
+            # Get the title and link
+            title_element = story.select_one('td.title > span.titleline > a')
+            if not title_element:
+                continue
+                
+            title = title_element.text.strip()
+            link = title_element.get('href', '')
+            
+            # Skip empty titles
+            if not title:
+                continue
+            
+            # Make link absolute if it's relative
+            if link and not link.startswith(('http://', 'https://')):
+                if link.startswith('/'):
+                    link = f"https://news.ycombinator.com{link}"
+                else:
+                    link = f"https://news.ycombinator.com/{link}"
+                
+            # Get the source/domain (if available)
+            source = ''
+            source_element = story.select_one('span.sitestr')
+            if source_element:
+                source = source_element.text.strip()
+                
+            # Find the next sibling row with score and comment info
+            score = "Unknown score"
+            comments = "0 comments"
+            
+            score_row = story.find_next_sibling('tr')
+            if score_row:
+                score_element = score_row.select_one('span.score')
+                if score_element:
+                    score = score_element.text.strip()
+                    
+                comments_element = score_row.select('a')
+                for a in comments_element:
+                    if 'comment' in a.text:
+                        comments = a.text.strip()
+                        break
+            
+            # Format as plain text
+            story_text = f"{i+1}. {title}"
+            if source:
+                story_text += f" ({source})"
+            stories.append(story_text)
+        
+        # Build a simple text response
+        response = "# Top Stories from Hacker News\n\n"
+        response += "\n".join(stories)
+        response += "\n\nSource: https://news.ycombinator.com/"
+        
+        return response
+    except Exception as e:
+        print(f"{YELLOW}Direct HTML scrape for Hacker News failed: {str(e)}{RESET}")
+        return None
+
 def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     """Use an MCP tool with the specified parameters.
     

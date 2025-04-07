@@ -669,32 +669,163 @@ def process_input_based_on_mode(query, config, chat_models):
     
     # Direct command to browse a site (special handler for local models)
     elif query.lower().startswith(('browse ', '@browse ', '@ browse ')):
-        # Extract the site name
-        site_query = query.lower().replace('browse', '').replace('@', '').strip()
+        # Extract the site name - handle "using the browse tool" and similar phrases 
+        site_query = query.lower()
+        for phrase in ['browse', '@', 'using the', 'with the', 'tool', 'browse tool']:
+            site_query = site_query.replace(phrase, '').strip()
+        
         print(f"{config.CYAN}Direct browse command detected for: {site_query}{config.RESET}")
         
         # Check for specific sites
         if "hacker news" in site_query or "hackernews" in site_query or "hn" in site_query:
             url = "https://news.ycombinator.com/"
+            clean_query = "hacker news"
         elif "reddit" in site_query:
             search_terms = site_query.replace('reddit', '').strip()
             url = f"https://www.reddit.com/search/?q={search_terms}" if search_terms else "https://www.reddit.com/"
+            clean_query = f"reddit {search_terms}" if search_terms else "reddit"
         elif "github" in site_query:
             search_terms = site_query.replace('github', '').strip()
             url = f"https://github.com/search?q={search_terms}" if search_terms else "https://github.com/"
+            clean_query = f"github {search_terms}" if search_terms else "github"
         else:
             # For any other site, treat as a search
             url = f"https://www.google.com/search?q={site_query}"
+            clean_query = site_query
             
         # Directly use the browser search function
         print(f"{config.CYAN}Direct browsing: {url}{config.RESET}")
-        browser_response = try_browser_search(site_query, config, chat_models)
         
-        if browser_response:
-            # Process the browser response directly
-            return format_browser_response(site_query, browser_response, config, chat_models)
-        else:
-            return f"Failed to browse {site_query}. Please try a different search term."
+        try:
+            # Special direct HTML scrape for Hacker News to ensure reliability
+            if "news.ycombinator.com" in url:
+                from .utils import direct_scrape_hacker_news
+                
+                print(f"{config.CYAN}Using direct Hacker News scraper...{config.RESET}")
+                
+                try:
+                    # Import required libraries
+                    import requests
+                    from bs4 import BeautifulSoup
+                    import json
+                    
+                    # Fetch the page directly
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    }
+                    page = requests.get(url, headers=headers, timeout=10)
+                    soup = BeautifulSoup(page.content, 'html.parser')
+                    
+                    # Extract stories
+                    stories = []
+                    story_elements = soup.select('tr.athing')
+                    
+                    for i, story in enumerate(story_elements[:15]):  # Get top 15 stories
+                        if i >= 15:  # Safety limit
+                            break
+                            
+                        title_element = story.select_one('td.title > span.titleline > a')
+                        if not title_element:
+                            continue
+                            
+                        title = title_element.text.strip()
+                        link = title_element.get('href', '')
+                        
+                        # Skip empty stories
+                        if not title:
+                            continue
+                        
+                        # Format each story
+                        stories.append(f"• {title}")
+                    
+                    # Build a simple, direct response
+                    response = "# Top Stories from Hacker News\n\n"
+                    response += "\n".join(stories)
+                    response += "\n\nSource: https://news.ycombinator.com/"
+                    
+                    print(f"{config.GREEN}Successfully scraped Hacker News directly.{config.RESET}")
+                    return response
+                    
+                except Exception as e:
+                    print(f"{config.YELLOW}Direct HN scraper failed: {str(e)}. Trying standard methods...{config.RESET}")
+            
+            # For other sites or if HN scraper failed
+            browser_response = try_browser_search(clean_query, config, chat_models)
+            
+            if browser_response:
+                # Process the browser response
+                if isinstance(browser_response, str) and len(browser_response) > 100000:
+                    # Truncate extremely long responses to avoid timeouts
+                    print(f"{config.YELLOW}Response too large ({len(browser_response)} chars), truncating...{config.RESET}")
+                    browser_response = browser_response[:100000] + "... [content truncated]"
+                
+                try:
+                    # Check if it's JSON and simplify if needed
+                    import json
+                    if browser_response.strip().startswith('{') and browser_response.strip().endswith('}'):
+                        data = json.loads(browser_response)
+                        
+                        # For Ollama and other local models, create a simpler response
+                        if config.session_model == 'ollama':
+                            # Create a simplified text response
+                            simple_response = f"# Content from {url}\n\n"
+                            
+                            # Add title if available
+                            if "title" in data:
+                                simple_response += f"## {data['title']}\n\n"
+                            
+                            # Add main content
+                            if "content" in data and isinstance(data["content"], list):
+                                for section in data["content"][:5]:  # Limit sections
+                                    if isinstance(section, dict):
+                                        if "title" in section:
+                                            simple_response += f"### {section['title']}\n\n"
+                                        if "blocks" in section and isinstance(section["blocks"], list):
+                                            for block in section["blocks"]:
+                                                if isinstance(block, dict) and "text" in block:
+                                                    simple_response += f"{block['text'][:500]}...\n\n"
+                            elif "text_content" in data and data["text_content"]:
+                                # Truncate and add the text content
+                                content = data["text_content"]
+                                simple_response += content[:1000] + "...\n\n" if len(content) > 1000 else content
+                            
+                            return simple_response
+                except Exception as e:
+                    print(f"{config.YELLOW}Error simplifying response: {str(e)}{config.RESET}")
+                
+                # Try formatting (with timeout protection)
+                import threading
+                import time
+                
+                format_result = [None]
+                format_error = [None]
+                
+                def format_with_timeout():
+                    try:
+                        format_result[0] = format_browser_response(clean_query, browser_response, config, chat_models)
+                    except Exception as e:
+                        format_error[0] = str(e)
+                
+                format_thread = threading.Thread(target=format_with_timeout)
+                format_thread.daemon = True
+                format_thread.start()
+                
+                # Wait for formatting with timeout
+                format_thread.join(10)  # 10 second timeout
+                
+                if format_result[0]:
+                    return format_result[0]
+                elif format_error[0]:
+                    print(f"{config.RED}Error formatting response: {format_error[0]}{config.RESET}")
+                    return f"Error formatting the browser response. Raw data first 1000 chars:\n\n{browser_response[:1000]}..."
+                else:
+                    print(f"{config.RED}Formatting timed out.{config.RESET}")
+                    return f"Timeout while formatting the browser response. Raw data first 1000 chars:\n\n{browser_response[:1000]}..."
+            else:
+                return f"Failed to browse {clean_query}. Please try a different search term."
+        except Exception as e:
+            print(f"{config.RED}Error in direct browse handler: {str(e)}{config.RESET}")
+            return f"Error browsing {site_query}: {str(e)}"
     
     # Check for tolerance level commands
     elif query.lower().startswith("set tolerance "):
