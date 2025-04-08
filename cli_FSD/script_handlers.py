@@ -3,7 +3,174 @@ import os
 import subprocess
 import tempfile
 import json
+import traceback # For detailed error logging
+import regex  # For more advanced regex support
 from datetime import datetime, date
+
+def attempt_json_repair(json_str):
+    """
+    Attempt to repair malformed JSON strings with common errors.
+    
+    Args:
+        json_str: The potentially malformed JSON string
+        
+    Returns:
+        tuple: (fixed_json_str, was_repaired)
+    """
+    original = json_str
+    was_repaired = False
+    
+    try:
+        # First test if it's already valid
+        json.loads(json_str)
+        return json_str, False
+    except json.JSONDecodeError as e:
+        # Get the error position
+        error_msg = str(e)
+        was_repaired = True
+        
+        # Extract error details
+        err_line = None
+        err_col = None
+        err_char = None
+        
+        # Parse error location from message
+        if "line" in error_msg and "column" in error_msg:
+            line_match = regex.search(r"line (\d+)", error_msg)
+            col_match = regex.search(r"column (\d+)", error_msg)
+            char_match = regex.search(r"char (\d+)", error_msg)
+            
+            if line_match:
+                err_line = int(line_match.group(1))
+            if col_match:
+                err_col = int(col_match.group(1))
+            if char_match:
+                err_char = int(char_match.group(1))
+        
+        # Common JSON syntax errors and fixes
+        
+        # 1. Missing comma between elements
+        if "Expecting ',' delimiter" in error_msg and err_char:
+            # Split the string at the error position
+            before = json_str[:err_char]
+            after = json_str[err_char:]
+            
+            # Insert a comma
+            fixed = before + "," + after
+            try:
+                json.loads(fixed)
+                return fixed, True
+            except json.JSONDecodeError:
+                pass  # Try next fix
+
+        # 2. Missing quotes around keys
+        if "Expecting property name enclosed in double quotes" in error_msg and err_char:
+            # Try to identify the unquoted key
+            text_after_error = json_str[err_char:err_char+30]
+            key_match = regex.search(r'^(\w+)\s*:', text_after_error)
+            
+            if key_match:
+                unquoted_key = key_match.group(1)
+                quoted_key = f'"{unquoted_key}"'
+                # Replace the unquoted key with a quoted key
+                fixed = json_str[:err_char] + quoted_key + text_after_error[len(unquoted_key):]
+                try:
+                    json.loads(fixed)
+                    return fixed, True
+                except json.JSONDecodeError:
+                    pass  # Try next fix
+        
+        # 3. Trailing comma in objects or arrays
+        if "Expecting '\"', '}', ']'" in error_msg and err_char:
+            # Check for trailing comma before closing bracket
+            nearby = json_str[max(0, err_char-5):min(len(json_str), err_char+5)]
+            if ",}" in nearby or ",]" in nearby:
+                fixed = json_str[:err_char-1] + json_str[err_char:]
+                try:
+                    json.loads(fixed)
+                    return fixed, True
+                except json.JSONDecodeError:
+                    pass  # Try next fix
+        
+        # 4. Missing closing bracket or brace
+        if "Expecting" in error_msg and any(x in error_msg for x in ["'}'", "']'"]):
+            # Check for unclosed objects
+            if json_str.count('{') > json_str.count('}'):
+                fixed = json_str + "}"
+                try:
+                    json.loads(fixed)
+                    return fixed, True
+                except json.JSONDecodeError:
+                    pass  # Try next fix
+                    
+            # Check for unclosed arrays
+            if json_str.count('[') > json_str.count(']'):
+                fixed = json_str + "]"
+                try:
+                    json.loads(fixed)
+                    return fixed, True
+                except json.JSONDecodeError:
+                    pass  # Try next fix
+        
+        # 5. Try to fix single quotes - this is a common issue with LLM-generated JSON
+        if "'" in json_str:
+            # Convert single quotes to double quotes, but only when they're likely to be for keys or string values
+            # This regex handles cases where single quotes are used for keys or string values
+            fixed = regex.sub(r'(?<=[{,:\s])\s*\'([^\']+)\'\s*(?=[},:\s])', r'"\1"', json_str)
+            try:
+                json.loads(fixed)
+                return fixed, True
+            except json.JSONDecodeError:
+                pass  # Try next fix
+        
+        # 6. Try to fix unescaped quotes in strings
+        if '"' in json_str and err_char:
+            # Find string context around error
+            context_start = max(0, err_char - 50)
+            context_end = min(len(json_str), err_char + 50)
+            context = json_str[context_start:context_end]
+            
+            # Look for unescaped quotes in strings
+            quote_indices = [m.start() for m in regex.finditer(r'(?<!\\)"', context)]
+            if len(quote_indices) >= 2:
+                for i in range(len(quote_indices) - 1):
+                    # Extract content between quotes
+                    string_content = context[quote_indices[i]+1:quote_indices[i+1]]
+                    # If content has unescaped quotes, escape them
+                    if '"' in string_content and not '\\"' in string_content:
+                        escaped_content = string_content.replace('"', '\\"')
+                        # Replace in original
+                        fixed = json_str.replace(string_content, escaped_content)
+                        try:
+                            json.loads(fixed)
+                            return fixed, True
+                        except json.JSONDecodeError:
+                            pass  # Try next fix
+        
+        # If all specific fixes failed, try a more aggressive approach
+        # For LLM-generated content, sometimes the structure is correct but details are wrong
+        
+        # 7. Strip out all control characters and non-JSON whitespace
+        fixed = regex.sub(r'[\x00-\x1F\x7F-\x9F]', '', json_str)
+        try:
+            json.loads(fixed)
+            return fixed, True
+        except json.JSONDecodeError:
+            pass  # Try next fix
+        
+        # 8. Last resort: try to extract valid JSON objects/arrays using regex pattern matching
+        json_pattern = regex.compile(r'({[^{}]*(?:{[^{}]*}[^{}]*)*}|\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\])')
+        matches = json_pattern.findall(json_str)
+        if matches:
+            for match in matches:
+                try:
+                    json.loads(match)
+                    return match, True
+                except json.JSONDecodeError:
+                    continue
+            
+    # If we got here, all repair attempts failed        
+    return original, False
 from .utils import print_streamed_message, get_system_info, animated_loading, save_script, use_mcp_tool
 from .chat_models import chat_with_model
 from .resources.assembler import AssemblyAssist
@@ -648,6 +815,7 @@ def _validate_query(query: str) -> bool:
 
 def process_input_based_on_mode(query, config, chat_models):
     """Process user input based on the current mode and query type."""
+    import json # Ensure json is explicitly available in this function's scope
     # Access global variables, but don't declare them global since we're not reassigning them
     # Using them as read-only doesn't require global declaration
     
@@ -707,8 +875,8 @@ def process_input_based_on_mode(query, config, chat_models):
                     # Import required libraries
                     import requests
                     from bs4 import BeautifulSoup
-                    import json
-                    
+                    # json is imported at function scope
+
                     # Fetch the page directly
                     headers = {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -769,7 +937,7 @@ def process_input_based_on_mode(query, config, chat_models):
                 
                 try:
                     # Check if it's JSON and simplify if needed
-                    import json
+                    # Rely on top-level import json
                     if browser_response.strip().startswith('{') and browser_response.strip().endswith('}'):
                         data = json.loads(browser_response)
                         
@@ -800,35 +968,16 @@ def process_input_based_on_mode(query, config, chat_models):
                             return simple_response
                 except Exception as e:
                     print(f"{config.YELLOW}Error simplifying response: {str(e)}{config.RESET}")
-                
-                # Try formatting (with timeout protection)
-                import threading
-                import time
-                
-                format_result = [None]
-                format_error = [None]
-                
-                def format_with_timeout():
-                    try:
-                        format_result[0] = format_browser_response(clean_query, browser_response, config, chat_models)
-                    except Exception as e:
-                        format_error[0] = str(e)
-                
-                format_thread = threading.Thread(target=format_with_timeout)
-                format_thread.daemon = True
-                format_thread.start()
-                
-                # Wait for formatting with timeout
-                format_thread.join(10)  # 10 second timeout
-                
-                if format_result[0]:
-                    return format_result[0]
-                elif format_error[0]:
-                    print(f"{config.RED}Error formatting response: {format_error[0]}{config.RESET}")
-                    return f"Error formatting the browser response. Raw data first 1000 chars:\n\n{browser_response[:1000]}..."
-                else:
-                    print(f"{config.RED}Formatting timed out.{config.RESET}")
-                    return f"Timeout while formatting the browser response. Raw data first 1000 chars:\n\n{browser_response[:1000]}..."
+
+                # Try formatting directly without timeout
+                try:
+                    formatted_response = format_browser_response(clean_query, browser_response, config, chat_models)
+                    return formatted_response
+                except Exception as e:
+                    print(f"{config.RED}Error formatting response: {str(e)}{config.RESET}")
+                    # Fallback if formatting fails
+                    safe_response = browser_response if isinstance(browser_response, str) else str(browser_response)
+                    return f"Error formatting the browser response. Raw data first 1000 chars:\n\n{safe_response[:1000]}..."
             else:
                 return f"Failed to browse {clean_query}. Please try a different search term."
         except Exception as e:
@@ -1016,7 +1165,28 @@ def process_input_based_on_mode(query, config, chat_models):
             json_end = llm_analysis.rfind('}') + 1
             if json_start >= 0 and json_end > json_start:
                 json_str = llm_analysis[json_start:json_end]
-                tool_selection = json.loads(json_str)
+                # Try to parse JSON, attempt repair if it fails
+                try:
+                    tool_selection = json.loads(json_str)
+                except json.JSONDecodeError as e:
+                    # Log the error
+                    print(f"{config.YELLOW}JSON decode error: {str(e)}{config.RESET}")
+                    print(f"{config.CYAN}Attempting to repair malformed JSON...{config.RESET}")
+                    
+                    # Try to repair the JSON
+                    repaired_json, was_repaired = attempt_json_repair(json_str)
+                    
+                    if was_repaired:
+                        try:
+                            tool_selection = json.loads(repaired_json)
+                            print(f"{config.GREEN}Successfully repaired JSON!{config.RESET}")
+                        except json.JSONDecodeError:
+                            # If repair also failed, log and continue to fallback
+                            print(f"{config.RED}Repair attempt failed, falling back to standard processing.{config.RESET}")
+                            raise  # Re-raise to be caught by the outer except
+                    else:
+                        # If no repair was needed but parsing still failed
+                        raise  # Re-raise to be caught by the outer except
                 
                 # Get response using selected tool
                 response_type = tool_selection.get("response_type", "tool_based").lower()
@@ -1217,6 +1387,10 @@ def process_input_based_on_mode(query, config, chat_models):
             return final_response
     except Exception as e:
         print(f"{config.YELLOW}Using standard processing due to error: {str(e)}{config.RESET}")
+        # Print the full traceback for detailed debugging
+        print(f"{config.RED}Full traceback:{config.RESET}")
+        traceback.print_exc()
+        # Fallback logic remains the same
         llm_response = chat_with_model(query, config, chat_models)
         final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
         print_streamed_message(final_response, config.CYAN)
