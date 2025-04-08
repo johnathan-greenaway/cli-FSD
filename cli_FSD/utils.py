@@ -167,6 +167,9 @@ def print_message(sender, message):
 
 def direct_scrape_hacker_news(url):
     """Direct HTML scraping specifically for Hacker News with simple text output."""
+    # Import json at the function level to ensure it's always available
+    import json
+    
     try:
         import requests
         from bs4 import BeautifulSoup
@@ -258,6 +261,9 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     """
     # Ensure json module is available via top-level import
 
+    # Import json at the very beginning of the function to ensure it's available everywhere
+    import json
+    
     # For browse_web operation, use different fetching strategies
     if tool_name == "browse_web" and "url" in arguments:
         url = arguments["url"]
@@ -439,8 +445,18 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
         from pathlib import Path
         import os
         
+        # Import json explicitly at this level
+        import json
+        
         # Try direct HTML scrape first for any site - as a general fallback
         try:
+            # Check if url is defined - it won't be if we're not in browse_web operation
+            if 'url' not in locals() and tool_name == "browse_web" and "url" in arguments:
+                url = arguments["url"]
+            elif 'url' not in locals():
+                # Skip scraping if we don't have a URL
+                raise ValueError("No URL available for scraping")
+                
             import requests
             from bs4 import BeautifulSoup
             

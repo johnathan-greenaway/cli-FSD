@@ -646,8 +646,16 @@ def try_browser_search(query: str, config, chat_models) -> str:
     for term in ['search', 'find', 'lookup', 'what is', 'how to', 'browse']:
         search_query = search_query.replace(term, '').strip()
     
-    # Check for direct site visits
-    if "hacker news" in search_query.lower() or "hackernews" in search_query.lower() or "hn" in search_query.lower():
+    # Check for concert/artist-related queries
+    concert_keywords = ["concert", "tour", "show", "ticket", "live", "performance", "upcoming", "dates"]
+    has_concert_terms = any(keyword in search_query.lower() for keyword in concert_keywords)
+    
+    # Check for direct site visits - but prioritize concert searches
+    if has_concert_terms:
+        # For concert/artist queries, always use Google search for best results
+        url = f"https://www.google.com/search?q={search_query.replace(' ', '+')}+upcoming+concerts"
+        print(f"{config.GREEN}Detected concert/artist search query. Using Google search.{config.RESET}")
+    elif "hacker news" in search_query.lower() or "hackernews" in search_query.lower() or "hn" in search_query.lower():
         url = "https://news.ycombinator.com/"
     elif "reddit" in search_query.lower():
         url = f"https://www.reddit.com/search/?q={search_query.replace('reddit', '').replace(' ', '+')}"
@@ -1381,6 +1389,30 @@ def process_input_based_on_mode(query, config, chat_models):
                 return final_response
         except (json.JSONDecodeError, KeyError, AttributeError) as e:
             print(f"{config.YELLOW}Failed to process tool selection: {str(e)}{config.RESET}")
+            
+            # Check if this appears to be a web browsing or search request
+            is_likely_browse_request = any(term in query.lower() for term in 
+                ['browse', 'search', 'find', 'look up', 'lookup', 'concert', 'dates', 'news', 
+                 'website', 'page', 'web', 'info about', 'information on', 'latest'])
+            
+            if is_likely_browse_request:
+                print(f"{config.GREEN}Detected web search request. Bypassing JSON parsing and using browser directly.{config.RESET}")
+                
+                # Extract the search query - remove command words
+                search_query = query
+                for term in ['browse', 'search', 'find', 'lookup', 'look up', 'using the browse tool', 'with the browse tool']:
+                    search_query = search_query.replace(term, '').strip()
+                
+                # Make sure we're actually searching for real content, not routing to default sites
+                print(f"{config.CYAN}Performing search for: '{search_query}'{config.RESET}")
+                browser_response = try_browser_search(search_query, config, chat_models)
+                
+                if browser_response:
+                    formatted_response = format_browser_response(search_query, browser_response, config, chat_models)
+                    print_streamed_message(formatted_response, config.CYAN, config)
+                    return formatted_response
+            
+            # Default fallback if not a browse request or if browser search fails
             llm_response = chat_with_model(query, config, chat_models)
             final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
             print_streamed_message(final_response, config.CYAN)
