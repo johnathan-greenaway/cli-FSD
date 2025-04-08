@@ -47,9 +47,13 @@ def main():
             process_input_based_on_mode(query, config, chat_models)
             logging.info(f"Processed query: {query}")
         except Exception as e:
+            import traceback
             error_message = f"Error processing query '{query}': {e}"
             print(f"{config.RED}An error occurred while processing your query: {e}{config.RESET}")
+            print(f"{config.RED}Full traceback:{config.RESET}")
+            traceback.print_exc()
             logging.error(error_message)
+            logging.error(traceback.format_exc())
         sys.exit(0)
 
     # If no query is provided, start the interactive loop
