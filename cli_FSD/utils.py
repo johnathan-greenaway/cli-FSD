@@ -256,7 +256,7 @@ def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:
     Returns:
         Tool execution result as a string
     """
-    import json  # Import json at the top level to ensure it's available
+    # Ensure json module is available via top-level import
 
     # For browse_web operation, use different fetching strategies
     if tool_name == "browse_web" and "url" in arguments:
