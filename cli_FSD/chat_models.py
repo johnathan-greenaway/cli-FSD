@@ -9,14 +9,14 @@ def initialize_chat_models(config):
     chat_models = {}
     # Initialize based on session model preference
     if config.session_model == 'ollama':
-        chat_models['model'] = initialize_ollama_client()
+        chat_models['model'] = initialize_ollama_client(config)
     elif config.session_model == 'groq':
         chat_models['model'] = initialize_groq_client()
     # Claude doesn't need initialization, handled in chat_with_claude
     
     return chat_models
 
-def initialize_ollama_client():
+def initialize_ollama_client(config):
     host = 'http://localhost:11434'
     try:
         client = OllamaClient(host=host)
@@ -29,11 +29,17 @@ def initialize_ollama_client():
                 print(f"Connected to Ollama at {host}. Using running model: {running_model}")
                 # Store the running model on the client object
                 client.running_model = running_model
+                # Update last used model in config
+                config.last_ollama_model = running_model
+                config.save_preferences()
                 return client
             else:
-                print(f"Connected to Ollama at {host}, but no running models found.")
+                print(f"Connected to Ollama at {host}, but no running models found. Will use last model: {config.last_ollama_model}")
+                # No running model, use the last known model from preferences
+                client.running_model = config.last_ollama_model
         else:
-            print(f"Connected to Ollama at {host}, but couldn't get running models.")
+            print(f"Connected to Ollama at {host}, but couldn't get running models. Will use last model: {config.last_ollama_model}")
+            client.running_model = config.last_ollama_model
         return client
     except Exception as e:
         print(f"Failed to connect to Ollama at {host}: {str(e)}")
@@ -77,7 +83,7 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
     if config.session_model:
         try:
             if config.session_model == 'ollama' and 'model' in chat_models:
-                return chat_with_ollama(message, chat_models['model'], system_prompt)
+                return chat_with_ollama(message, chat_models['model'], system_prompt, config)
             elif config.session_model == 'groq' and 'model' in chat_models:
                 return chat_with_groq(message, chat_models['model'], system_prompt)
             elif config.session_model == 'claude':
@@ -88,7 +94,7 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
     # Fallback to default model handlers if no session preference
     model_handlers = [
         ('ollama', lambda: config.use_ollama and 'model' in chat_models,
-         lambda: chat_with_ollama(message, chat_models['model'], system_prompt)),
+         lambda: chat_with_ollama(message, chat_models['model'], system_prompt, config)),
         ('groq', lambda: config.use_groq and 'model' in chat_models,
          lambda: chat_with_groq(message, chat_models['model'], system_prompt)),
         ('claude', lambda: config.use_claude,
@@ -106,10 +112,10 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
     # Final fallback to OpenAI
     return chat_with_openai(message, config, system_prompt)
 
-def chat_with_ollama(message, ollama_client, system_prompt):
+def chat_with_ollama(message, ollama_client, system_prompt, config):
     try:
-        # Use the running model if available, otherwise fallback to a default
-        model = getattr(ollama_client, 'running_model', 'llama3.1:8b')
+        # Use the running model if available, otherwise fallback to the last used model
+        model = getattr(ollama_client, 'running_model', config.last_ollama_model)
         
         # Check if the message contains JSON data from web browsing
         is_json_data = False

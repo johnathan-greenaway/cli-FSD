@@ -70,6 +70,7 @@ class Config:
                     self.use_ollama = prefs.get('use_ollama', False)
                     self.use_groq = prefs.get('use_groq', False)
                     self.scriptreviewer_on = prefs.get('scriptreviewer_on', False)
+                    self.last_ollama_model = prefs.get('last_ollama_model', 'llama3.1:8b')
             else:
                 self.session_model = None
                 self.safe_mode = False
@@ -78,6 +79,7 @@ class Config:
                 self.use_ollama = False
                 self.use_groq = False
                 self.scriptreviewer_on = False
+                self.last_ollama_model = 'llama3.1:8b'  # Default Ollama model
         except Exception as e:
             print(f"Error loading preferences: {e}")
             # Use defaults if loading fails
@@ -103,7 +105,8 @@ class Config:
                 'use_claude': self.use_claude,
                 'use_ollama': self.use_ollama,
                 'use_groq': self.use_groq,
-                'scriptreviewer_on': self.scriptreviewer_on
+                'scriptreviewer_on': self.scriptreviewer_on,
+                'last_ollama_model': self.last_ollama_model
             }
             with open(self.preferences_file, 'w') as f:
                 json.dump(prefs, f)
