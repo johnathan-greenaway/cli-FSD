@@ -52,7 +52,7 @@ blocks:
             # Handle feature branches (.dev0+feature.name suffix)
             - |
               if [[ "${SEMAPHORE_GIT_BRANCH}" =~ ^feature/ ]]; then
-                FEATURE_NAME=$(echo ${SEMAPHORE_GIT_BRANCH} | sed "s/feature\///" | sed "s/[-\/]/./"g)
+                FEATURE_NAME=$(echo ${SEMAPHORE_GIT_BRANCH} | sed "s/feature\///" | sed "s/[-\/]/./g")
                 DEV_VERSION="${BASE_VERSION}.dev0+feature.${FEATURE_NAME}"
                 echo "On feature branch - using version $DEV_VERSION"
                 # Update version in setup.py
