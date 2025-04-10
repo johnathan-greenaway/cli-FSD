@@ -28,7 +28,7 @@ blocks:
             
             # Handle different branches with appropriate version suffixes
             - |
-              if [[ "${SEMAPHORE_GIT_BRANCH}" == "release-branch" ]]; then
+              if [[ "${SEMAPHORE_GIT_BRANCH}" == "main" ]]; then
                 # Release branch - use clean version
                 FINAL_VERSION="$BASE_VERSION"
                 echo "On release branch - using version $FINAL_VERSION"
