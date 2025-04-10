@@ -56,4 +56,5 @@ blocks:
               python -m build
               
               # Always use --skip-existing flag to prevent errors on uploads
+
               TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose --skip-existing dist/*
