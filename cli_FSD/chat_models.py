@@ -67,6 +67,9 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
         chat_models: Dictionary of initialized model clients
         system_prompt: Optional system prompt to override default
     """
+    import threading
+    from .utils import animated_loading
+    
     # Use provided system prompt or default
     if system_prompt is None:
         system_prompt = (
@@ -79,38 +82,78 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
             f"System info: {get_system_info()}"
         )
     
-    # Use model based on session preference
-    if config.session_model:
-        try:
-            if config.session_model == 'ollama' and 'model' in chat_models:
-                return chat_with_ollama(message, chat_models['model'], system_prompt, config)
-            elif config.session_model == 'groq' and 'model' in chat_models:
-                return chat_with_groq(message, chat_models['model'], system_prompt)
-            elif config.session_model == 'claude':
-                return chat_with_claude(message, config, system_prompt)
-        except Exception as e:
-            print(f"Error using {config.session_model}: {e}")
+    # Set up loading animation
+    stop_event = threading.Event()
     
-    # Fallback to default model handlers if no session preference
-    model_handlers = [
-        ('ollama', lambda: config.use_ollama and 'model' in chat_models,
-         lambda: chat_with_ollama(message, chat_models['model'], system_prompt, config)),
-        ('groq', lambda: config.use_groq and 'model' in chat_models,
-         lambda: chat_with_groq(message, chat_models['model'], system_prompt)),
-        ('claude', lambda: config.use_claude,
-         lambda: chat_with_claude(message, config, system_prompt))
-    ]
+    # Choose different loading animations based on context
+    if "browse_web" in message or "search" in message.lower():
+        loading_message = "Browsing web"
+        animation_frames = ["🌐 ", "🔍 ", "📡 ", "📊 ", "📰 "]
+    elif "code" in message.lower() or "program" in message.lower():
+        loading_message = "Generating code"
+        animation_frames = ["⌨️ ", "💻 ", "🖥️ ", "📝 ", "🔧 "]
+    elif "command" in message.lower() or "bash" in message.lower():
+        loading_message = "Creating command"
+        animation_frames = ["$ ", "# ", "> ", "│ ", "└─ "]
+    else:
+        loading_message = "Thinking"
+        animation_frames = ["✨ ", "🧠 ", "💭 ", "🔮 ", "💫 "]
     
-    for model_name, check_enabled, handler in model_handlers:
-        if check_enabled():
+    # Start loading animation in a separate thread if not testing
+    if not hasattr(config, 'testing') or not config.testing:
+        loading_thread = threading.Thread(
+            target=animated_loading,
+            args=(stop_event, True, loading_message, 0.1),
+            kwargs={"frames": animation_frames}
+        )
+        loading_thread.daemon = True
+        loading_thread.start()
+    
+    result = None
+    try:
+        # Use model based on session preference
+        if config.session_model:
             try:
-                return handler()
+                if config.session_model == 'ollama' and 'model' in chat_models:
+                    result = chat_with_ollama(message, chat_models['model'], system_prompt, config)
+                elif config.session_model == 'groq' and 'model' in chat_models:
+                    result = chat_with_groq(message, chat_models['model'], system_prompt)
+                elif config.session_model == 'claude':
+                    result = chat_with_claude(message, config, system_prompt)
             except Exception as e:
-                print(f"Error using {model_name}: {e}")
-                continue
-    
-    # Final fallback to OpenAI
-    return chat_with_openai(message, config, system_prompt)
+                print(f"Error using {config.session_model}: {e}")
+        
+        # Fallback to default model handlers if no session preference or if session preference failed
+        if result is None:
+            model_handlers = [
+                ('ollama', lambda: config.use_ollama and 'model' in chat_models,
+                 lambda: chat_with_ollama(message, chat_models['model'], system_prompt, config)),
+                ('groq', lambda: config.use_groq and 'model' in chat_models,
+                 lambda: chat_with_groq(message, chat_models['model'], system_prompt)),
+                ('claude', lambda: config.use_claude,
+                 lambda: chat_with_claude(message, config, system_prompt))
+            ]
+            
+            for model_name, check_enabled, handler in model_handlers:
+                if check_enabled():
+                    try:
+                        result = handler()
+                        break
+                    except Exception as e:
+                        print(f"Error using {model_name}: {e}")
+                        continue
+            
+            # Final fallback to OpenAI if all else failed
+            if result is None:
+                result = chat_with_openai(message, config, system_prompt)
+        
+        return result
+    finally:
+        # Stop the loading animation
+        stop_event.set()
+        if not hasattr(config, 'testing') or not config.testing:
+            if loading_thread.is_alive():
+                loading_thread.join(timeout=0.5)
 
 def chat_with_ollama(message, ollama_client, system_prompt, config):
     try:
