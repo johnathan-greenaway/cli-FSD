@@ -26,38 +26,34 @@ blocks:
             - export BASE_VERSION=$(python -c "import version; print(version.__version__)")
             - echo "Base version is $BASE_VERSION"
             
-            # Handle release branch (standard version)
+            # Handle different branches with appropriate version suffixes
             - |
-              if [[ "${SEMAPHORE_GIT_BRANCH}" == "main" ]]; then
-                echo "On release branch - using version $BASE_VERSION"
-                # Update version in setup.py
-                sed -i "s/version=[\"'][^\"']*[\"']/version=\"$BASE_VERSION\"/" setup.py
-                pip install twine build
-                python -m build
-                TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose dist/*
-              fi
-            
-            # Handle development branch (.dev1 suffix)
-            - |
-              if [[ "${SEMAPHORE_GIT_BRANCH}" == "development" ]]; then
-                DEV_VERSION="${BASE_VERSION}.dev1"
-                echo "On development branch - using version $DEV_VERSION"
-                # Update version in setup.py
-                sed -i "s/version=[\"'][^\"']*[\"']/version=\"$DEV_VERSION\"/" setup.py
-                pip install twine build
-                python -m build
-                TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose --skip-existing dist/*
-              fi
-            
-            # Handle feature branches (.dev0+feature.name suffix)
-            - |
-              if [[ "${SEMAPHORE_GIT_BRANCH}" =~ ^feature/ ]]; then
+              if [[ "${SEMAPHORE_GIT_BRANCH}" == "release-branch" ]]; then
+                # Release branch - use clean version
+                FINAL_VERSION="$BASE_VERSION"
+                echo "On release branch - using version $FINAL_VERSION"
+              elif [[ "${SEMAPHORE_GIT_BRANCH}" == "development" ]]; then
+                # Development branch - add .dev1 suffix
+                FINAL_VERSION="${BASE_VERSION}.dev1"
+                echo "On development branch - using version $FINAL_VERSION"
+              elif [[ "${SEMAPHORE_GIT_BRANCH}" =~ ^feature/ ]]; then
+                # Feature branch - add .dev0+feature.name suffix
                 FEATURE_NAME=$(echo ${SEMAPHORE_GIT_BRANCH} | sed "s/feature\///" | sed "s/[-\/]/./g")
-                DEV_VERSION="${BASE_VERSION}.dev0+feature.${FEATURE_NAME}"
-                echo "On feature branch - using version $DEV_VERSION"
-                # Update version in setup.py
-                sed -i "s/version=[\"'][^\"']*[\"']/version=\"$DEV_VERSION\"/" setup.py
-                pip install twine build
-                python -m build
-                TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose --skip-existing dist/*
+                FINAL_VERSION="${BASE_VERSION}.dev0+feature.${FEATURE_NAME}"
+                echo "On feature branch - using version $FINAL_VERSION"
+              else
+                # Any other branch - add .dev2+branch.name suffix to avoid conflicts
+                BRANCH_NAME=$(echo ${SEMAPHORE_GIT_BRANCH} | sed "s/[-\/]/./g")
+                FINAL_VERSION="${BASE_VERSION}.dev2+branch.${BRANCH_NAME}"
+                echo "On branch ${SEMAPHORE_GIT_BRANCH} - using version $FINAL_VERSION"
               fi
+              
+              # Update version in setup.py
+              sed -i "s/version=[\"'][^\"']*[\"']/version=\"$FINAL_VERSION\"/" setup.py
+              
+              # Build and upload
+              pip install twine build
+              python -m build
+              
+              # Always use --skip-existing flag to prevent errors on uploads
+              TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose --skip-existing dist/*
