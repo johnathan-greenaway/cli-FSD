@@ -17,8 +17,25 @@ RED = "\033[31m"
 GREEN = "\033[32m"
 
 
-def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2):
-    frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "] if use_emojis else ["- ", "\\ ", "| ", "/ "]
+def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2, frames=None):
+    """
+    Display an animated loading indicator while waiting for a process to complete.
+    
+    Args:
+        stop_event: A threading.Event that signals when to stop the animation
+        use_emojis: Whether to use emoji frames (True) or text frames (False)
+        message: The message to display before the animation
+        interval: Time between frame updates in seconds
+        frames: Optional custom animation frames to use instead of defaults
+    """
+    # Default frames based on use_emojis setting, or use custom frames if provided
+    if frames is None:
+        if use_emojis:
+            frames = ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "]
+        else:
+            frames = ["- ", "\\ ", "| ", "/ "]
+    
+    # Begin animation loop
     while not stop_event.is_set():
         for frame in frames:
             if stop_event.is_set():
@@ -26,7 +43,10 @@ def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.
             sys.stdout.write(f"\r{message} {frame}")
             sys.stdout.flush()
             time.sleep(interval)
+    
+    # Clear the line when animation stops
     sys.stdout.write("\r" + " " * (len(message) + 4) + "\r")  # Clear the line
+    sys.stdout.flush()
 
 
 def get_system_info():
