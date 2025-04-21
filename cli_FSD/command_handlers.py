@@ -1,5 +1,7 @@
+import os
 from .utils import print_streamed_message
 from .script_handlers import extract_script_from_response, assemble_final_script, auto_handle_script_execution
+from .chat_models import initialize_chat_models # Import necessary function
 
 
 
@@ -25,7 +27,8 @@ def process_command(command, config, chat_models):
     elif command == 'script':
         handle_script_command(config)
     elif command == 'model':
-        change_model(config)
+        # Pass chat_models so it can be updated
+        change_model(config, chat_models) 
     elif command == 'list_models':
         list_available_models(config)
     elif command == 'config':
@@ -90,13 +93,57 @@ def handle_script_command(config):
     else:
         print("No last response to process.")
 
-def change_model(config):
-    new_model = input("Enter the model to switch to: ")
-    if new_model in config.models:
-        config.current_model = new_model
-        print(f"Model switched to {config.current_model}")
+def change_model(config, chat_models):
+    """Change the active model and update related settings."""
+    list_available_models(config) # Show options first
+    new_model_key = input("Enter the key of the model to switch to (e.g., 'gpt-4o', 'claude-3.5-sonnet'): ").strip()
+    
+    if new_model_key in config.models:
+        config.current_model = new_model_key # Update the specific model key
+        
+        # Determine provider and update session_model and use_ flags
+        if new_model_key.startswith("claude-"):
+            config.session_model = "claude"
+            config.use_claude = True
+            config.use_ollama = config.use_groq = False
+        elif new_model_key == "ollama": # Assuming 'ollama' is a key in config.models for the generic provider
+            config.session_model = "ollama"
+            config.use_ollama = True
+            config.use_claude = config.use_groq = False
+            # Optionally, prompt for a specific ollama model or use last_ollama_model
+            config.current_model = config.last_ollama_model # Use last known Ollama model
+        elif new_model_key == "groq": # Assuming 'groq' is a key for the provider
+            config.session_model = "groq"
+            config.use_groq = True
+            config.use_claude = config.use_ollama = False
+            config.current_model = "mixtral-8x7b-32768" # Set Groq default model
+        else: # Default to OpenAI compatible
+            config.session_model = None # Use default provider (OpenAI)
+            config.use_claude = config.use_ollama = config.use_groq = False
+            # config.current_model is already set to new_model_key
+
+        print(f"{config.GREEN}Model set to: {config.current_model}{config.RESET}")
+        if config.session_model:
+            print(f"{config.GREEN}Provider set to: {config.session_model}{config.RESET}")
+        else:
+             print(f"{config.GREEN}Provider set to: Default (OpenAI){config.RESET}")
+
+        # Save preferences
+        config.save_preferences()
+        print(f"{config.CYAN}Preferences saved.{config.RESET}")
+
+        # Re-initialize chat models
+        try:
+            new_chat_models = initialize_chat_models(config)
+            # Update the original chat_models dictionary passed from main
+            chat_models.clear()
+            chat_models.update(new_chat_models)
+            print(f"{config.CYAN}Chat models re-initialized.{config.RESET}")
+        except Exception as e:
+             print(f"{config.RED}Error re-initializing chat models: {e}{config.RESET}")
+
     else:
-        print("Invalid model")
+        print(f"{config.YELLOW}Invalid model key. Use 'list_models' to see options.{config.RESET}")
 
 def list_available_models(config):
     print("Available models:")

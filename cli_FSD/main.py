@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+import os
 import logging
 from datetime import datetime
 from . import configuration
@@ -129,16 +130,20 @@ def main():
                         flag = parts[i]
                         if flag == "-o":
                             config.session_model = "ollama"
+                            config.session_model = "ollama"
+                            config.current_model = config.last_ollama_model # Update current model
                             config.use_ollama = True
                             config.use_claude = config.use_groq = False
                             flags_changed = True
                         elif flag == "-c":
                             config.session_model = "claude"
+                            config.current_model = "claude-3.5-sonnet" # Update current model (use a default Claude)
                             config.use_claude = True
                             config.use_ollama = config.use_groq = False
                             flags_changed = True
                         elif flag == "-g":
                             config.session_model = "groq"
+                            config.current_model = "mixtral-8x7b-32768" # Update current model (Groq default)
                             config.use_groq = True
                             config.use_claude = config.use_ollama = False
                             flags_changed = True
@@ -151,6 +156,7 @@ def main():
                         elif flag == "-d":
                             # Reset all settings to default
                             config.session_model = None
+                            config.current_model = os.getenv("DEFAULT_MODEL", "gpt-4o") # Reset current model
                             config.use_ollama = config.use_claude = config.use_groq = False
                             config.autopilot_mode = config.scriptreviewer_on = False
                             flags_changed = True
