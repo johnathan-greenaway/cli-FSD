@@ -39,12 +39,17 @@ class Config:
         self.models = {
             # GPT-4o Models
             "gpt-4o": "gpt-4o",
-            "gpt-4o-mini": "gpt-4o-mini",
-            
-            # o1 Models
+            "gpt-4o-mini": "gpt-4o-mini",,
+            "gpt-4.1": "gpt-4.1",
+            "gpt-4.1-mini": "gpt-4.1-mini",
+            "gpt-4.1-nano": "gpt-4.1-nano",
+
+            # Reasoning Models
             "o1": "o1",
             "o1-mini": "o1-mini",
             "o1-preview": "o1-preview",
+            "o3": "o3",
+            "o4-mini": "o4-mini",
             
             # Legacy GPT-4 Models
             "gpt-4-turbo": "gpt-4-turbo",
@@ -54,9 +59,11 @@ class Config:
             # Claude Models
             "claude-3-opus": "claude-3-opus-20240229",
             "claude-3-sonnet": "claude-3-sonnet-20240229",
-            "claude-3-haiku": "claude-3-haiku-20240307"
-        }
-
+            "claude-3-haiku": "claude-3-haiku-20240307",
+            "claude-3.5-sonnet": "claude-3-5-sonnet-latest",
+            "claude-3-7-sonnet": "claude-3-7-sonnet-latest"
+                  }
+        
     def load_preferences(self):
         """Load preferences from file or set defaults"""
         try:
