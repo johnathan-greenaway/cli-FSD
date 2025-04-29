@@ -14,7 +14,7 @@ from cli_FSD.utils import (
     cleanup_previous_assembled_scripts
 )
 from cli_FSD.chat_models import initialize_chat_models
-from cli_FSD.command_handlers import handle_command_mode
+from cli_FSD.command_handlers import handle_command_mode, handle_browse_command
 from cli_FSD.script_handlers import process_input_based_on_mode
 
 def main():
@@ -34,6 +34,7 @@ def main():
         logging.info("Initialized WebContentFetcher")
     except Exception as e:
         logging.error(f"Failed to initialize WebContentFetcher: {e}")
+        print(f"Warning: WebContentFetcher initialization failed: {e}")
 
     args = parse_arguments()
     config = initialize_config(args)
@@ -205,6 +206,8 @@ def main():
                 config.save_preferences()
                 print("Switched to normal mode.")
                 logging.info("Switched to normal mode.")
+            elif user_input.lower().startswith('browse'):
+                handle_browse_command(config)
             else:
                 try:
                     # Process the input and get the response

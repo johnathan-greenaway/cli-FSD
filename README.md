@@ -83,6 +83,7 @@ A lightweight and portable autopilot utility for CLI tasks that takes natural la
     ```
 
 - For additional options, you can enter `CMD` mode by typing `CMD` at any prompt.
+- To browse directories and view file contents, type `browse` at the prompt and follow on-screen instructions.
 
 ### Low-stakes Demos
 Letting an LLM execute code on your computer is objectively dangerous. I've used cli-FSD on every computer I own but think it's important for users to understand the risk associated with this concept. 

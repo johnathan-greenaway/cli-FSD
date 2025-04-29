@@ -45,6 +45,8 @@ def process_command(command, config, chat_models):
         show_session_status(config)
     elif command == 'clear history':
         clear_history(config)
+    elif command.startswith('file'):
+        handle_file_command(config)
     else:
         print(f"{config.YELLOW}Unknown command. Type 'exit' to return to normal mode.{config.RESET}")
 
@@ -177,10 +179,89 @@ def show_session_status(config):
     from .script_handlers import display_session_status
     display_session_status(config)
 
-def clear_history(config):
-    """Clear the session history."""
-    if hasattr(config, 'session_history'):
-        config.session_history = []
-        print(f"{config.GREEN}Session history has been cleared.{config.RESET}")
+def handle_browse_command(config):
+    """Handle the browse command to view web content."""
+    print(f"{config.CYAN}Browse mode activated.{config.RESET}")
+    
+    # Check if we have cached content
+    from .script_handlers import _content_cache
+    if _content_cache['raw_content']:
+        print(f"{config.GREEN}Web content is already loaded.{config.RESET}")
+        
+        # Show available headlines if any
+        if _content_cache['headlines']:
+            print(f"{config.CYAN}Available headlines:{config.RESET}")
+            for i, headline in enumerate(_content_cache['headlines']):
+                print(f"{i+1}: {headline}")
+        else:
+            print(f"{config.YELLOW}No headlines found in the cached content.{config.RESET}")
+        
+        # Ask if user wants to view the content
+        view_option = input("View content? (y/n): ").strip().lower()
+        if view_option == 'y':
+            print(f"{config.CYAN}Cached web content:{config.RESET}")
+            print(_content_cache['formatted_content'] or _content_cache['raw_content'])
     else:
-        print(f"{config.YELLOW}No session history to clear.{config.RESET}")
+        url = input("Enter URL to browse: ").strip()
+        if url:
+            try:
+                from .web_fetcher import fetcher
+                content = fetcher.fetch_url(url)
+                if content:
+                    _content_cache['raw_content'] = content
+                    _content_cache['formatted_content'] = content  # Simple version, could be enhanced
+                    print(f"{config.GREEN}Content fetched successfully.{config.RESET}")
+                    print(f"{config.CYAN}Content preview:{config.RESET}")
+                    print(content[:500] + "..." if len(content) > 500 else content)
+                else:
+                    print(f"{config.RED}Failed to fetch content from {url}{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error fetching URL: {e}{config.RESET}")
+        else:
+            print(f"{config.YELLOW}No URL provided.{config.RESET}")
+    
+    print(f"{config.CYAN}Exiting browse mode.{config.RESET}")
+
+def handle_file_command(config):
+    """Allow browsing and interacting with files and directories."""
+    import os
+
+    path = input("Enter directory path to browse (default '.'): ").strip() or '.'
+    try:
+        entries = os.listdir(path)
+    except Exception as e:
+        print(f"{config.RED}Error listing directory '{path}': {e}{config.RESET}")
+        return
+
+    print(f"{config.CYAN}Contents of {path}:{config.RESET}")
+    for idx, entry in enumerate(entries):
+        full = os.path.join(path, entry)
+        tag = '<DIR>' if os.path.isdir(full) else '<FILE>'
+        print(f"{idx}: {entry} {tag}")
+
+    selection = input("Enter index of item to open or 'exit' to cancel: ").strip().lower()
+    if selection in ('exit', ''):
+        return
+
+    try:
+        idx = int(selection)
+        if idx < 0 or idx >= len(entries):
+            raise IndexError()
+        chosen = entries[idx]
+        full_path = os.path.join(path, chosen)
+        if os.path.isdir(full_path):
+            print(f"{config.CYAN}Contents of directory: {full_path}{config.RESET}")
+            sub_entries = os.listdir(full_path)
+            for sub in sub_entries:
+                sub_full = os.path.join(full_path, sub)
+                sub_tag = '<DIR>' if os.path.isdir(sub_full) else '<FILE>'
+                print(f"  {sub}: {sub_tag}")
+        else:
+            print(f"{config.CYAN}Displaying contents of file: {full_path}{config.RESET}")
+            try:
+                with open(full_path, 'r') as f:
+                    print(f.read())
+            except Exception as e:
+                print(f"{config.RED}Error reading file '{full_path}': {e}{config.RESET}")
+    except (ValueError, IndexError):
+        print(f"{config.YELLOW}Invalid selection.{config.RESET}")
