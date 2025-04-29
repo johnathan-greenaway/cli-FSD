@@ -9,6 +9,11 @@
       "command": "python3",
       "args": ["cli_FSD/file_browser/server.py"],
       "env": {}
+    },
+    "file-interaction": {
+      "command": "python3",
+      "args": ["cli_FSD/file_interaction/server.py"],
+      "env": {}
     }
   }
 }
