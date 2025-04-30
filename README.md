@@ -95,7 +95,9 @@ If you don't want to run it locally:
 [![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@wazacraft/cli-FSD)
 
 ## Project Progress
-v0.94
+v2.0.9
+- [x] - Added file interaction tool that allows the agent to modify files in the active directory and all subdirectories with user permission
+- [x] - Added `fileint` command in CMD mode for interactive file operations (list, read, write, modify, delete, search, create directories)
 - [x] - Added support for [Ollama]([url](https://github.com/ollama/ollama)) (use -o to run cli-FSD using any supported local LLM model)
 - [x] - support for script custom gpt-4-turbo assistant OpenAI's Assistants API to revie
 v0.87

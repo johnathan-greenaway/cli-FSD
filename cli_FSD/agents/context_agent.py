@@ -52,6 +52,91 @@ class ContextAgent:
                 }),
                 "requires_llm_processing": False  # Skip further LLM processing
             }
+        
+        # Check for file interaction requests
+        file_interaction_patterns = [
+            "list files", "list directory", "list folder", "show files", "show directory", "show folder",
+            "read file", "read the file", "read the contents", "show file contents", "display file", "cat file",
+            "write file", "write to file", "create file", "make file", "save file", "save to file",
+            "modify file", "edit file", "change file", "update file", "replace in file", "replace text in file",
+            "delete file", "remove file", "erase file",
+            "search file", "search in file", "search files", "search in files", "find in files", "grep",
+            "create directory", "create folder", "make directory", "make folder", "mkdir",
+            "use file tool", "use the file tool", "with file tool", "with the file tool", 
+            "using file tool", "using the file tool", "file interaction tool"
+        ]
+        
+        if any(pattern in request.lower() for pattern in file_interaction_patterns):
+            # Determine the specific file operation
+            operation = None
+            path = None
+            
+            # Extract potential file path from the request
+            # This is a simple extraction and might need refinement
+            words = request.split()
+            for i, word in enumerate(words):
+                if word.endswith(('.txt', '.py', '.js', '.html', '.css', '.md', '.json', '.xml', '.csv')):
+                    path = word
+                    break
+                elif i < len(words) - 1 and words[i] in ["file", "directory", "folder"] and i > 0:
+                    path = words[i-1]
+                    break
+            
+            # Determine operation type
+            if any(pattern in request.lower() for pattern in ["list files", "list directory", "list folder", "show files", "show directory", "show folder"]) or (
+                any(pattern in request.lower() for pattern in ["use file tool", "use the file tool", "with file tool", "with the file tool", "using file tool", "using the file tool", "file interaction tool"]) and 
+                any(pattern in request.lower() for pattern in ["list", "show", "display"])
+            ):
+                operation = "list_files"
+                # If no path was specified, default to current directory
+                if not path:
+                    path = "."
+            elif any(pattern in request.lower() for pattern in ["read file", "read the file", "read the contents", "show file contents", "display file", "cat file"]) or (
+                any(pattern in request.lower() for pattern in ["use file tool", "use the file tool", "with file tool", "with the file tool", "using file tool", "using the file tool", "file interaction tool"]) and 
+                any(pattern in request.lower() for pattern in ["read", "cat", "view", "display contents"])
+            ):
+                operation = "read_file"
+            elif any(pattern in request.lower() for pattern in ["write file", "write to file", "create file", "make file", "save file", "save to file"]) or (
+                any(pattern in request.lower() for pattern in ["use file tool", "use the file tool", "with file tool", "with the file tool", "using file tool", "using the file tool", "file interaction tool"]) and 
+                any(pattern in request.lower() for pattern in ["write", "create", "make", "save"])
+            ):
+                operation = "write_file"
+            elif any(pattern in request.lower() for pattern in ["modify file", "edit file", "change file", "update file", "replace in file", "replace text in file"]) or (
+                any(pattern in request.lower() for pattern in ["use file tool", "use the file tool", "with file tool", "with the file tool", "using file tool", "using the file tool", "file interaction tool"]) and 
+                any(pattern in request.lower() for pattern in ["modify", "edit", "change", "update", "replace"])
+            ):
+                operation = "modify_file"
+            elif any(pattern in request.lower() for pattern in ["delete file", "remove file", "erase file"]) or (
+                any(pattern in request.lower() for pattern in ["use file tool", "use the file tool", "with file tool", "with the file tool", "using file tool", "using the file tool", "file interaction tool"]) and 
+                any(pattern in request.lower() for pattern in ["delete", "remove", "erase"])
+            ):
+                operation = "delete_file"
+            elif any(pattern in request.lower() for pattern in ["search file", "search in file", "search files", "search in files", "find in files", "grep"]) or (
+                any(pattern in request.lower() for pattern in ["use file tool", "use the file tool", "with file tool", "with the file tool", "using file tool", "using the file tool", "file interaction tool"]) and 
+                any(pattern in request.lower() for pattern in ["search", "find", "grep"])
+            ):
+                operation = "search_files"
+            elif any(pattern in request.lower() for pattern in ["create directory", "create folder", "make directory", "make folder", "mkdir"]) or (
+                any(pattern in request.lower() for pattern in ["use file tool", "use the file tool", "with file tool", "with the file tool", "using file tool", "using the file tool", "file interaction tool"]) and 
+                any(pattern in request.lower() for pattern in ["create directory", "create folder", "make directory", "make folder", "mkdir"])
+            ):
+                operation = "create_directory"
+            
+            if operation:
+                return {
+                    "prompt": json.dumps({
+                        "response_type": "tool_based",
+                        "confidence": 0.9,
+                        "selected_tool": "file_interaction",
+                        "reasoning": f"User is requesting a file operation: {operation}",
+                        "parameters": {
+                            "operation": operation,
+                            "path": path,
+                            "content": request
+                        }
+                    }),
+                    "requires_llm_processing": False  # Skip further LLM processing
+                }
         return {
             "prompt": f"""Analyze this request: "{request}"
 
@@ -87,7 +172,15 @@ Available tools and operations:
    - create_context: For managing conversation context
 2. fetch: For data retrieval
 3. sequential_thinking: For complex reasoning
-4. default: For simple commands. USE THIS FOR WEATHER REQUESTS.
+4. file_interaction: For file operations
+   - list_files: List files in a directory
+   - read_file: Read the contents of a file
+   - write_file: Write content to a file
+   - modify_file: Modify specific parts of a file
+   - delete_file: Delete a file
+   - search_files: Search for text in files
+   - create_directory: Create a directory
+5. default: For simple commands. USE THIS FOR WEATHER REQUESTS.
 
 Guidelines:
 1. STRONG PREFERENCE FOR BUILT-IN KNOWLEDGE:
@@ -112,7 +205,8 @@ Guidelines:
 4. IMPORTANT: For specific commands:
    - Queries that mention weather: Use 'curl wttr.in/[location]' command instead of web browsing
    - Time queries: Use appropriate system commands
-   - File operations: Use standard Unix commands
+   - Simple file operations: Use standard Unix commands
+   - Complex file operations: Use the file_interaction tool for operations like listing, reading, writing, modifying, deleting files, searching in files, and creating directories
 
 5. For hybrid responses:
    - Provide a confidence score between 0.5-0.8 (indicating partial confidence)
@@ -162,6 +256,8 @@ Guidelines:
                     return self._handle_fetch(parameters)
                 elif selected_tool == "sequential_thinking":
                     return self._handle_sequential_thinking(parameters)
+                elif selected_tool == "file_interaction":
+                    return self._handle_file_interaction(parameters)
                 else:
                     return self._handle_default_tools(parameters)
         except Exception as e:
@@ -199,6 +295,8 @@ Guidelines:
             tool_response = self._handle_fetch(parameters)
         elif selected_tool == "sequential_thinking":
             tool_response = self._handle_sequential_thinking(parameters)
+        elif selected_tool == "file_interaction":
+            tool_response = self._handle_file_interaction(parameters)
         else:
             tool_response = self._handle_default_tools(parameters)
         
@@ -301,4 +399,73 @@ Guidelines:
         return {
             "tool": parameters.get("tool", "execute_command"),
             "arguments": parameters
+        }
+    
+    def _handle_file_interaction(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle file interaction tool execution.
+        
+        Args:
+            parameters: Parameters for the file interaction tool
+            
+        Returns:
+            Dict containing the tool execution configuration
+        """
+        operation = parameters.get("operation")
+        path = parameters.get("path")
+        content = parameters.get("content")
+        
+        # Default arguments for each operation type
+        arguments = {"path": path} if path else {}
+        
+        # Add operation-specific arguments
+        if operation == "list_files":
+            # Extract additional parameters from the content if needed
+            recursive = "recursive" in content.lower()
+            arguments.update({
+                "recursive": recursive,
+                "pattern": "*"  # Default pattern
+            })
+        elif operation == "read_file":
+            # No additional arguments needed for read_file
+            pass
+        elif operation == "write_file":
+            # For write operations, we need content
+            # This is a simplified approach - in a real implementation,
+            # we would need to extract the content to write from the user's request
+            arguments.update({
+                "content": "Content to be determined by LLM",
+                "requires_approval": True
+            })
+        elif operation == "modify_file":
+            # For modify operations, we need operations list
+            # This is a simplified approach - in a real implementation,
+            # we would need to extract the operations from the user's request
+            arguments.update({
+                "operations": [],  # To be filled by LLM
+                "requires_approval": True
+            })
+        elif operation == "delete_file":
+            arguments.update({
+                "requires_approval": True
+            })
+        elif operation == "search_files":
+            # Extract search pattern from content
+            pattern = "pattern to be determined by LLM"
+            arguments.update({
+                "pattern": pattern,
+                "recursive": True,
+                "file_pattern": "*",
+                "context_lines": 2
+            })
+        elif operation == "create_directory":
+            arguments.update({
+                "parents": True,
+                "requires_approval": False
+            })
+        
+        return {
+            "tool": "use_mcp_tool",
+            "server": "file-interaction",
+            "operation": operation,
+            "arguments": arguments
         }

@@ -497,7 +497,10 @@ def format_browser_response(query: str, response: str, config, chat_models) -> s
                     chat_models=chat_models,
                     system_prompt=(
                         "You are an expert at formatting raw web data into helpful responses. "
-                        "Focus on extracting the most relevant information and presenting it clearly."
+                        "Focus on extracting the most relevant information and presenting it clearly. "
+                        "Prioritize key facts, figures, and actionable insights. "
+                        "Use bullet points, lists, and concise paragraphs to structure the information. "
+                        "Omit any irrelevant details or promotional content."
                     )
                 )
                 
