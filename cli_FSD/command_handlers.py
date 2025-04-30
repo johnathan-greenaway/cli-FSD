@@ -44,7 +44,8 @@ def process_command(command, config, chat_models):
     elif command == 'session':
         show_session_status(config)
     elif command == 'clear history':
-        clear_history(config)
+        reset_conversation(config)
+        print(f"{config.CYAN}History cleared.{config.RESET}")
     elif command.startswith('file'):
         handle_file_command(config)
     elif command.startswith('fileint'):
