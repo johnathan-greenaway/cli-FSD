@@ -44,9 +44,12 @@ def process_command(command, config, chat_models):
     elif command == 'session':
         show_session_status(config)
     elif command == 'clear history':
-        clear_history(config)
+        reset_conversation(config)
+        print(f"{config.CYAN}History cleared.{config.RESET}")
     elif command.startswith('file'):
         handle_file_command(config)
+    elif command.startswith('fileint'):
+        handle_file_interaction_command(config)
     else:
         print(f"{config.YELLOW}Unknown command. Type 'exit' to return to normal mode.{config.RESET}")
 
@@ -265,3 +268,514 @@ def handle_file_command(config):
                 print(f"{config.RED}Error reading file '{full_path}': {e}{config.RESET}")
     except (ValueError, IndexError):
         print(f"{config.YELLOW}Invalid selection.{config.RESET}")
+
+def handle_file_interaction_command(config):
+    """Advanced file interaction using the file-interaction MCP server."""
+    import json
+    from .utils import use_mcp_tool
+    
+    print(f"{config.CYAN}File Interaction Mode{config.RESET}")
+    print(f"{config.YELLOW}Available commands:{config.RESET}")
+    print("1. list - List files in a directory")
+    print("2. read - Read a file")
+    print("3. write - Write to a file")
+    print("4. modify - Modify parts of a file")
+    print("5. delete - Delete a file")
+    print("6. search - Search for text in files")
+    print("7. mkdir - Create a directory")
+    print("8. exit - Exit file interaction mode")
+    
+    while True:
+        cmd = input(f"{config.GREEN}FILEINT>{config.RESET} ").strip().lower()
+        
+        if cmd == 'exit' or cmd == 'quit':
+            print(f"{config.CYAN}Exiting file interaction mode.{config.RESET}")
+            break
+            
+        elif cmd == 'list':
+            path = input("Enter directory path (default '.'): ").strip() or '.'
+            recursive = input("List recursively? (y/n, default: n): ").strip().lower() == 'y'
+            pattern = input("File pattern (default '*'): ").strip() or '*'
+            
+            try:
+                result = use_mcp_tool(
+                    server_name="file-interaction",
+                    tool_name="list_files",
+                    arguments={
+                        "path": path,
+                        "recursive": recursive,
+                        "pattern": pattern
+                    }
+                )
+                
+                # Parse the result
+                try:
+                    data = json.loads(result)
+                    if "error" in data:
+                        print(f"{config.RED}Error: {data['error']}{config.RESET}")
+                    else:
+                        files = data.get("files", [])
+                        print(f"{config.CYAN}Found {len(files)} items in {path}:{config.RESET}")
+                        for item in files:
+                            item_type = item.get("type", "unknown")
+                            item_path = item.get("path", "")
+                            if item_type == "file":
+                                size = item.get("size", 0)
+                                size_str = f"{size} bytes"
+                                if size > 1024:
+                                    size_str = f"{size/1024:.1f} KB"
+                                if size > 1024*1024:
+                                    size_str = f"{size/(1024*1024):.1f} MB"
+                                print(f"{config.YELLOW}[FILE]{config.RESET} {item_path} ({size_str})")
+                            else:
+                                print(f"{config.GREEN}[DIR]{config.RESET} {item_path}")
+                except json.JSONDecodeError:
+                    print(f"{config.RED}Error parsing response: {result}{config.RESET}")
+                except Exception as e:
+                    print(f"{config.RED}Error processing response: {str(e)}{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error listing files: {str(e)}{config.RESET}")
+                
+        elif cmd == 'read':
+            path = input("Enter file path to read: ").strip()
+            if not path:
+                print(f"{config.YELLOW}No file path provided.{config.RESET}")
+                continue
+                
+            try:
+                result = use_mcp_tool(
+                    server_name="file-interaction",
+                    tool_name="read_file",
+                    arguments={
+                        "path": path
+                    }
+                )
+                
+                # Parse the result
+                try:
+                    data = json.loads(result)
+                    if "error" in data:
+                        print(f"{config.RED}Error: {data['error']}{config.RESET}")
+                    else:
+                        content = data.get("content", "")
+                        size = data.get("size", 0)
+                        is_binary = data.get("is_binary", False)
+                        
+                        if is_binary:
+                            print(f"{config.YELLOW}Binary file detected. Size: {size} bytes{config.RESET}")
+                            print(content)  # This will be a message about binary content
+                        else:
+                            print(f"{config.CYAN}File: {path} ({size} bytes){config.RESET}")
+                            print(f"{config.GREEN}Content:{config.RESET}")
+                            print(content)
+                except json.JSONDecodeError:
+                    print(f"{config.RED}Error parsing response: {result}{config.RESET}")
+                except Exception as e:
+                    print(f"{config.RED}Error processing response: {str(e)}{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error reading file: {str(e)}{config.RESET}")
+                
+        elif cmd == 'write':
+            path = input("Enter file path to write: ").strip()
+            if not path:
+                print(f"{config.YELLOW}No file path provided.{config.RESET}")
+                continue
+                
+            print(f"{config.CYAN}Enter content (type 'EOF' on a new line to finish):{config.RESET}")
+            content_lines = []
+            while True:
+                line = input()
+                if line == 'EOF':
+                    break
+                content_lines.append(line)
+            
+            content = '\n'.join(content_lines)
+            requires_approval = input("Require approval before writing? (y/n, default: y): ").strip().lower() != 'n'
+            
+            try:
+                result = use_mcp_tool(
+                    server_name="file-interaction",
+                    tool_name="write_file",
+                    arguments={
+                        "path": path,
+                        "content": content,
+                        "requires_approval": requires_approval
+                    }
+                )
+                
+                # Parse the result
+                try:
+                    data = json.loads(result)
+                    if "error" in data:
+                        print(f"{config.RED}Error: {data['error']}{config.RESET}")
+                    else:
+                        message = data.get("message", "")
+                        
+                        if data.get("requires_approval", False):
+                            temp_path = data.get("temp_path", "")
+                            print(f"{config.YELLOW}{message}{config.RESET}")
+                            print(f"Temporary file created at: {temp_path}")
+                            
+                            approve = input("Approve this write operation? (y/n): ").strip().lower() == 'y'
+                            if approve:
+                                # Move the temporary file to the target path
+                                import os
+                                import shutil
+                                try:
+                                    full_temp_path = os.path.join(os.getcwd(), temp_path)
+                                    full_target_path = os.path.join(os.getcwd(), path)
+                                    shutil.move(full_temp_path, full_target_path)
+                                    print(f"{config.GREEN}File written to {path}{config.RESET}")
+                                except Exception as e:
+                                    print(f"{config.RED}Error moving temporary file: {str(e)}{config.RESET}")
+                            else:
+                                # Delete the temporary file
+                                import os
+                                try:
+                                    full_temp_path = os.path.join(os.getcwd(), temp_path)
+                                    os.remove(full_temp_path)
+                                    print(f"{config.YELLOW}Write operation cancelled. Temporary file deleted.{config.RESET}")
+                                except Exception as e:
+                                    print(f"{config.RED}Error deleting temporary file: {str(e)}{config.RESET}")
+                        else:
+                            print(f"{config.GREEN}{message}{config.RESET}")
+                except json.JSONDecodeError:
+                    print(f"{config.RED}Error parsing response: {result}{config.RESET}")
+                except Exception as e:
+                    print(f"{config.RED}Error processing response: {str(e)}{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error writing file: {str(e)}{config.RESET}")
+                
+        elif cmd == 'modify':
+            path = input("Enter file path to modify: ").strip()
+            if not path:
+                print(f"{config.YELLOW}No file path provided.{config.RESET}")
+                continue
+                
+            print(f"{config.CYAN}Modification types:{config.RESET}")
+            print("1. replace - Replace text")
+            print("2. insert - Insert text at start/end/line")
+            print("3. delete - Delete text")
+            
+            operations = []
+            while True:
+                op_type = input("Enter operation type (or 'done' to finish): ").strip().lower()
+                if op_type == 'done':
+                    break
+                    
+                if op_type == 'replace':
+                    search = input("Text to search for: ").strip()
+                    replace = input("Text to replace with: ").strip()
+                    operations.append({
+                        "type": "replace",
+                        "search": search,
+                        "replace": replace
+                    })
+                elif op_type == 'insert':
+                    position = input("Position (start/end/line): ").strip().lower()
+                    if position not in ['start', 'end', 'line']:
+                        print(f"{config.YELLOW}Invalid position. Using 'end'.{config.RESET}")
+                        position = 'end'
+                        
+                    if position == 'line':
+                        try:
+                            line_number = int(input("Line number: ").strip())
+                        except ValueError:
+                            print(f"{config.YELLOW}Invalid line number. Using 0.{config.RESET}")
+                            line_number = 0
+                    else:
+                        line_number = None
+                        
+                    print(f"{config.CYAN}Enter content (type 'EOF' on a new line to finish):{config.RESET}")
+                    content_lines = []
+                    while True:
+                        line = input()
+                        if line == 'EOF':
+                            break
+                        content_lines.append(line)
+                    
+                    content = '\n'.join(content_lines)
+                    
+                    op = {
+                        "type": "insert",
+                        "position": position,
+                        "content": content
+                    }
+                    
+                    if line_number is not None:
+                        op["line_number"] = line_number
+                        
+                    operations.append(op)
+                elif op_type == 'delete':
+                    search = input("Text to delete: ").strip()
+                    operations.append({
+                        "type": "delete",
+                        "search": search
+                    })
+                else:
+                    print(f"{config.YELLOW}Unknown operation type: {op_type}{config.RESET}")
+            
+            if not operations:
+                print(f"{config.YELLOW}No operations specified.{config.RESET}")
+                continue
+                
+            requires_approval = input("Require approval before modifying? (y/n, default: y): ").strip().lower() != 'n'
+            
+            try:
+                result = use_mcp_tool(
+                    server_name="file-interaction",
+                    tool_name="modify_file",
+                    arguments={
+                        "path": path,
+                        "operations": operations,
+                        "requires_approval": requires_approval
+                    }
+                )
+                
+                # Parse the result
+                try:
+                    data = json.loads(result)
+                    if "error" in data:
+                        print(f"{config.RED}Error: {data['error']}{config.RESET}")
+                    else:
+                        message = data.get("message", "")
+                        
+                        if data.get("requires_approval", False):
+                            temp_path = data.get("temp_path", "")
+                            print(f"{config.YELLOW}{message}{config.RESET}")
+                            print(f"Temporary file created at: {temp_path}")
+                            
+                            # Show operation results
+                            op_results = data.get("operations", [])
+                            for i, op in enumerate(op_results):
+                                success = op.get("success", False)
+                                op_type = op.get("type", "unknown")
+                                if success:
+                                    print(f"{config.GREEN}Operation {i+1} ({op_type}): Success{config.RESET}")
+                                else:
+                                    error = op.get("error", "Unknown error")
+                                    print(f"{config.RED}Operation {i+1} ({op_type}): Failed - {error}{config.RESET}")
+                            
+                            approve = input("Approve these modifications? (y/n): ").strip().lower() == 'y'
+                            if approve:
+                                # Move the temporary file to the target path
+                                import os
+                                import shutil
+                                try:
+                                    full_temp_path = os.path.join(os.getcwd(), temp_path)
+                                    full_target_path = os.path.join(os.getcwd(), path)
+                                    shutil.move(full_temp_path, full_target_path)
+                                    print(f"{config.GREEN}File modified: {path}{config.RESET}")
+                                except Exception as e:
+                                    print(f"{config.RED}Error moving temporary file: {str(e)}{config.RESET}")
+                            else:
+                                # Delete the temporary file
+                                import os
+                                try:
+                                    full_temp_path = os.path.join(os.getcwd(), temp_path)
+                                    os.remove(full_temp_path)
+                                    print(f"{config.YELLOW}Modification cancelled. Temporary file deleted.{config.RESET}")
+                                except Exception as e:
+                                    print(f"{config.RED}Error deleting temporary file: {str(e)}{config.RESET}")
+                        else:
+                            print(f"{config.GREEN}{message}{config.RESET}")
+                            
+                            # Show operation results
+                            op_results = data.get("operations", [])
+                            for i, op in enumerate(op_results):
+                                success = op.get("success", False)
+                                op_type = op.get("type", "unknown")
+                                if success:
+                                    print(f"{config.GREEN}Operation {i+1} ({op_type}): Success{config.RESET}")
+                                else:
+                                    error = op.get("error", "Unknown error")
+                                    print(f"{config.RED}Operation {i+1} ({op_type}): Failed - {error}{config.RESET}")
+                except json.JSONDecodeError:
+                    print(f"{config.RED}Error parsing response: {result}{config.RESET}")
+                except Exception as e:
+                    print(f"{config.RED}Error processing response: {str(e)}{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error modifying file: {str(e)}{config.RESET}")
+                
+        elif cmd == 'delete':
+            path = input("Enter file/directory path to delete: ").strip()
+            if not path:
+                print(f"{config.YELLOW}No path provided.{config.RESET}")
+                continue
+                
+            requires_approval = input("Require approval before deleting? (y/n, default: y): ").strip().lower() != 'n'
+            
+            try:
+                result = use_mcp_tool(
+                    server_name="file-interaction",
+                    tool_name="delete_file",
+                    arguments={
+                        "path": path,
+                        "requires_approval": requires_approval
+                    }
+                )
+                
+                # Parse the result
+                try:
+                    data = json.loads(result)
+                    if "error" in data:
+                        print(f"{config.RED}Error: {data['error']}{config.RESET}")
+                    else:
+                        message = data.get("message", "")
+                        
+                        if data.get("requires_approval", False):
+                            print(f"{config.YELLOW}{message}{config.RESET}")
+                            item_type = data.get("type", "file")
+                            size = data.get("size")
+                            size_str = f" ({size} bytes)" if size is not None else ""
+                            
+                            approve = input(f"Approve deleting this {item_type}{size_str}? (y/n): ").strip().lower() == 'y'
+                            if approve:
+                                # Delete the file/directory
+                                import os
+                                import shutil
+                                try:
+                                    full_path = os.path.join(os.getcwd(), path)
+                                    if os.path.isdir(full_path):
+                                        shutil.rmtree(full_path)
+                                    else:
+                                        os.remove(full_path)
+                                    print(f"{config.GREEN}{item_type.capitalize()} deleted: {path}{config.RESET}")
+                                except Exception as e:
+                                    print(f"{config.RED}Error deleting {item_type}: {str(e)}{config.RESET}")
+                            else:
+                                print(f"{config.YELLOW}Delete operation cancelled.{config.RESET}")
+                        else:
+                            print(f"{config.GREEN}{message}{config.RESET}")
+                except json.JSONDecodeError:
+                    print(f"{config.RED}Error parsing response: {result}{config.RESET}")
+                except Exception as e:
+                    print(f"{config.RED}Error processing response: {str(e)}{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error deleting file: {str(e)}{config.RESET}")
+                
+        elif cmd == 'search':
+            path = input("Enter directory path to search (default '.'): ").strip() or '.'
+            pattern = input("Enter regex pattern to search for: ").strip()
+            if not pattern:
+                print(f"{config.YELLOW}No search pattern provided.{config.RESET}")
+                continue
+                
+            file_pattern = input("File pattern (default '*'): ").strip() or '*'
+            recursive = input("Search recursively? (y/n, default: y): ").strip().lower() != 'n'
+            context_lines = input("Number of context lines (default: 2): ").strip()
+            try:
+                context_lines = int(context_lines) if context_lines else 2
+            except ValueError:
+                print(f"{config.YELLOW}Invalid number. Using default: 2{config.RESET}")
+                context_lines = 2
+                
+            try:
+                result = use_mcp_tool(
+                    server_name="file-interaction",
+                    tool_name="search_files",
+                    arguments={
+                        "path": path,
+                        "pattern": pattern,
+                        "file_pattern": file_pattern,
+                        "recursive": recursive,
+                        "context_lines": context_lines
+                    }
+                )
+                
+                # Parse the result
+                try:
+                    data = json.loads(result)
+                    if "error" in data:
+                        print(f"{config.RED}Error: {data['error']}{config.RESET}")
+                    else:
+                        matches = data.get("matches", [])
+                        print(f"{config.CYAN}Found matches in {len(matches)} files:{config.RESET}")
+                        
+                        for file_match in matches:
+                            file_path = file_match.get("path", "")
+                            file_matches = file_match.get("matches", [])
+                            
+                            print(f"\n{config.GREEN}File: {file_path} ({len(file_matches)} matches){config.RESET}")
+                            
+                            for i, match in enumerate(file_matches):
+                                line_number = match.get("line_number", 0)
+                                match_text = match.get("match", "")
+                                context = match.get("context", [])
+                                
+                                print(f"\n{config.YELLOW}Match {i+1}: Line {line_number} - '{match_text}'{config.RESET}")
+                                
+                                for ctx in context:
+                                    ctx_line = ctx.get("line_number", 0)
+                                    ctx_content = ctx.get("content", "")
+                                    is_match = ctx.get("is_match", False)
+                                    
+                                    if is_match:
+                                        print(f"{config.RED}{ctx_line:4d}| {ctx_content}{config.RESET}")
+                                    else:
+                                        print(f"{ctx_line:4d}| {ctx_content}")
+                except json.JSONDecodeError:
+                    print(f"{config.RED}Error parsing response: {result}{config.RESET}")
+                except Exception as e:
+                    print(f"{config.RED}Error processing response: {str(e)}{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error searching files: {str(e)}{config.RESET}")
+                
+        elif cmd == 'mkdir':
+            path = input("Enter directory path to create: ").strip()
+            if not path:
+                print(f"{config.YELLOW}No path provided.{config.RESET}")
+                continue
+                
+            parents = input("Create parent directories if needed? (y/n, default: y): ").strip().lower() != 'n'
+            requires_approval = input("Require approval before creating? (y/n, default: n): ").strip().lower() == 'y'
+            
+            try:
+                result = use_mcp_tool(
+                    server_name="file-interaction",
+                    tool_name="create_directory",
+                    arguments={
+                        "path": path,
+                        "parents": parents,
+                        "requires_approval": requires_approval
+                    }
+                )
+                
+                # Parse the result
+                try:
+                    data = json.loads(result)
+                    if "error" in data:
+                        print(f"{config.RED}Error: {data['error']}{config.RESET}")
+                    else:
+                        message = data.get("message", "")
+                        
+                        if data.get("requires_approval", False):
+                            print(f"{config.YELLOW}{message}{config.RESET}")
+                            
+                            approve = input("Approve creating this directory? (y/n): ").strip().lower() == 'y'
+                            if approve:
+                                # Create the directory
+                                import os
+                                try:
+                                    full_path = os.path.join(os.getcwd(), path)
+                                    if parents:
+                                        os.makedirs(full_path, exist_ok=True)
+                                    else:
+                                        os.mkdir(full_path)
+                                    print(f"{config.GREEN}Directory created: {path}{config.RESET}")
+                                except Exception as e:
+                                    print(f"{config.RED}Error creating directory: {str(e)}{config.RESET}")
+                            else:
+                                print(f"{config.YELLOW}Directory creation cancelled.{config.RESET}")
+                        else:
+                            print(f"{config.GREEN}{message}{config.RESET}")
+                except json.JSONDecodeError:
+                    print(f"{config.RED}Error parsing response: {result}{config.RESET}")
+                except Exception as e:
+                    print(f"{config.RED}Error processing response: {str(e)}{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error creating directory: {str(e)}{config.RESET}")
+                
+        else:
+            print(f"{config.YELLOW}Unknown command: {cmd}{config.RESET}")
+            print("Type 'exit' to return to command mode.")

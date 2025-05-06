@@ -1,22 +1,20 @@
 """Small Context Protocol MCP Server Implementation."""
 
-import json
-import sys
-import asyncio
 import aiohttp
+import asyncio
+import json
 import os
-import time
 import socket
 import subprocess
+import sys
 from bs4 import BeautifulSoup, NavigableString
-from urllib.parse import urlparse, urljoin
-from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
-import os
-import sys
+from typing import Any, Dict, List, Tuple, Optional
+from urllib.parse import urljoin, urlparse
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from small_context.cache import ContentCache, CachedContent
+from small_context.cache import CachedContent, ContentCache
 
 @dataclass
 class Message:
@@ -218,7 +216,7 @@ class SmallContextServer:
             return {
                 "error": {
                     "code": "method_not_found",
-                    "message": f"Unknown tool: {tool_name}"
+                    "message": f"Unknown method: {tool_name}"
                 }
             }
         
@@ -250,36 +248,78 @@ class SmallContextServer:
             if not parsed.scheme or not parsed.netloc:
                 raise ValueError("Invalid URL format")
             
-            async with aiohttp.ClientSession(headers=self.default_headers) as session:
-                async with session.get(url, timeout=30, ssl=False, allow_redirects=True, max_redirects=5) as response:
-                    response.raise_for_status()
-                    html = await response.text()
-                    
-                    await asyncio.sleep(2)
-                    
-                    try:
-                        async with session.get(str(response.url), timeout=30, ssl=False) as updated_response:
-                            updated_html = await updated_response.text()
-                            if len(updated_html) > len(html):
-                                html = updated_html
-                    except Exception:
-                        pass
+            try:
+                async with aiohttp.ClientSession(headers=self.default_headers) as session:
+                    async with session.get(url, timeout=30, ssl=False, allow_redirects=True, max_redirects=5) as response:
+                        response.raise_for_status()
+                        html = await response.text()
+                        
+                        await asyncio.sleep(2)
+                        
+                        try:
+                            async with session.get(str(response.url), timeout=30, ssl=False) as updated_response:
+                                updated_html = await updated_response.text()
+                                if len(updated_html) > len(html):
+                                    html = updated_html
+                        except Exception:
+                            pass
+            except aiohttp.ClientError as e:
+                error_msg = str(e)
+                if "SSL" in error_msg:
+                    error_msg = "SSL certificate verification failed. Please check the URL or try a different site."
+                elif "DNS" in error_msg:
+                    error_msg = "Could not resolve domain name. Please check the URL."
+                elif "timeout" in str(e).lower():
+                    error_msg = "Request timed out. The server may be busy or unavailable."
+                elif "too many redirects" in str(e).lower():
+                    error_msg = "Too many redirects. The URL may be redirecting in a loop."
+                else:
+                    error_msg = f"Network error: {error_msg}"
+                return {
+                    "type": "error",
+                    "url": url,
+                    "timestamp": time.time(),
+                    "error": error_msg
+                }
+            except Exception as e:
+                return {
+                    "type": "error",
+                    "url": url,
+                    "timestamp": time.time(),
+                    "error": f"Error during aiohttp session: {str(e)}"
+                }
             
-            soup = BeautifulSoup(html, 'html.parser')
-            
-            # Remove unwanted elements
-            for selector in [
-                '#cookie-consent', '.cookie-banner', '.cookie-notice',
-                '.consent-overlay', '.modal', '.popup', '.overlay',
-                '#gdpr', '.gdpr', '.subscription-overlay', '.paywall',
-                '.ad-overlay', 'script', 'style', 'meta', 'link',
-                'iframe', 'noscript', 'svg', 'footer', 'nav',
-                '[role="complementary"]', '[role="navigation"]',
-                '.sidebar', '.comments', '.related-articles',
-                '.advertisement', '.social-share', '.newsletter'
-            ]:
-                for element in soup.select(selector):
-                    element.decompose()
+            try:
+                soup = BeautifulSoup(html, 'html.parser')
+            except Exception as e:
+                return {
+                    "type": "error",
+                    "url": url,
+                    "timestamp": time.time(),
+                    "error": f"Error parsing HTML with BeautifulSoup: {str(e)}"
+                }
+
+            try:
+                # Remove unwanted elements
+                for selector in [
+                    '#cookie-consent', '.cookie-banner', '.cookie-notice',
+                    '.consent-overlay', '.modal', '.popup', '.overlay',
+                    '#gdpr', '.gdpr', '.subscription-overlay', '.paywall',
+                    '.ad-overlay', 'script', 'style', 'meta', 'link',
+                    'iframe', 'noscript', 'svg', 'footer', 'nav',
+                    '[role="complementary"]', '[role="navigation"]',
+                    '.sidebar', '.comments', '.related-articles',
+                    '.advertisement', '.social-share', '.newsletter'
+                ]:
+                    for element in soup.select(selector):
+                        element.decompose()
+            except Exception as e:
+                return {
+                    "type": "error",
+                    "url": url,
+                    "timestamp": time.time(),
+                    "error": f"Error removing unwanted elements: {str(e)}"
+                }
             
             # Extract title
             title = soup.title.string.strip() if soup.title else ''
@@ -405,28 +445,13 @@ class SmallContextServer:
             self.cache.cache_content(cached_content)
             
             return content
-            
+        
         except Exception as e:
-            error_msg = str(e)
-            if isinstance(e, aiohttp.ClientError):
-                if "SSL" in error_msg:
-                    error_msg = "SSL certificate verification failed"
-                elif "DNS" in error_msg:
-                    error_msg = "Could not resolve domain name"
-                elif "timeout" in error_msg.lower():
-                    error_msg = "Request timed out"
-                elif "too many redirects" in error_msg.lower():
-                    error_msg = "Too many redirects"
-                else:
-                    error_msg = f"Network error: {error_msg}"
-            elif isinstance(e, ValueError):
-                error_msg = f"Invalid URL format: {error_msg}"
-            
             return {
                 "type": "error",
                 "url": url,
                 "timestamp": time.time(),
-                "error": error_msg
+                "error": f"Error extracting content: {str(e)}"
             }
     
     def _handle_select_content(self, args: Dict[str, Any]) -> Dict[str, Any]:
