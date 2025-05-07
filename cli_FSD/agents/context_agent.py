@@ -86,13 +86,19 @@ class ContextAgent:
         # Check for follow-up queries
         is_follow_up = self._is_follow_up_query(query)
         
+        # For file operations like creating directories, return a direct response
+        if "make a folder" in query.lower() or "create a directory" in query.lower():
+            folder_name = query.lower().replace("make a folder", "").replace("create a directory", "").replace("called", "").strip()
+            return {
+                "tool": "command",
+                "operation": "shell",
+                "command": f"mkdir {folder_name}",
+                "requires_llm_processing": False,
+                "description": f"Create a directory named '{folder_name}'"
+            }
+        
         # Create a prompt that helps the LLM understand the context and available tools
-        prompt = {
-            "system_info": self.system_info,
-            "available_tools": self.tools,
-            "query": query,
-            "context": self.context if is_follow_up else None,
-            "prompt": f"""Analyze the following request and determine which tool to use.
+        prompt = f"""Analyze the following request and determine which tool to use.
 System Information:
 {json.dumps(self.system_info, indent=2)}
 
@@ -134,9 +140,11 @@ Example responses:
 
 IMPORTANT: For command operations, ensure the command is compatible with the current system ({self.system_info['os']}).
 Only output valid shell commands that can be executed on this system."""
+
+        return {
+            "prompt": prompt,
+            "requires_llm_processing": True
         }
-        
-        return prompt
     
     def _is_follow_up_query(self, query: str) -> bool:
         """Check if the query is a follow-up to a previous operation.

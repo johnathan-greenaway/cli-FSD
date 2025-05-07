@@ -13,9 +13,32 @@ from cli_FSD.utils import (
     display_greeting,
     cleanup_previous_assembled_scripts
 )
-from cli_FSD.chat_models import initialize_chat_models
-from cli_FSD.command_handlers import handle_command_mode, handle_browse_command
-from cli_FSD.script_handlers import process_input_based_on_mode
+from cli_FSD.chat_models import initialize_chat_models, chat_with_model
+from cli_FSD.command_handlers import (
+    handle_command_mode, 
+    handle_browse_command,
+    execute_shell_command,
+    get_user_confirmation
+)
+from cli_FSD.script_handlers import (
+    process_input_based_on_mode,
+    process_response,
+    print_streamed_message,
+    display_session_history,
+    recall_history_item,
+    display_session_status
+)
+
+# Initialize response context
+_response_context = {
+    'browser_attempts': 0,
+    'last_response': None,
+    'last_operation': None,
+    'last_url': None,
+    'previous_responses': [],  # List of previous responses
+    'collected_info': {},      # Information collected from various tools
+    'tolerance_level': 'medium'  # Default tolerance level: 'strict', 'medium', 'lenient'
+}
 
 def main():
     # Configure logging
@@ -311,6 +334,35 @@ def process_input_based_on_mode(query, config, chat_models):
     # Use ContextAgent to analyze the request and determine which tool to use
     try:
         analysis = context_agent.analyze_request(query)
+        
+        # If the analysis is a direct response (no LLM processing needed)
+        if not analysis.get("requires_llm_processing", True):
+            if analysis.get("tool") == "command":
+                command = analysis.get("command")
+                description = analysis.get("description", "Execute command")
+                if command:
+                    # Show the command to the user
+                    print(f"\n{description}:")
+                    print(f"```bash\n{command}\n```")
+                    
+                    if config.autopilot_mode:
+                        print(f"{config.CYAN}Executing command in autopilot mode...{config.RESET}")
+                        result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=False)
+                        if result.startswith("Error"):
+                            print(f"{config.RED}{result}{config.RESET}")
+                        else:
+                            print(f"{config.GREEN}{result}{config.RESET}")
+                        return result
+                    else:
+                        if get_user_confirmation(command, config):
+                            result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=True)
+                            if result.startswith("Error"):
+                                print(f"{config.RED}{result}{config.RESET}")
+                            else:
+                                print(f"{config.GREEN}{result}{config.RESET}")
+                            return result
+                        return "Command execution cancelled by user."
+            return "Error: Invalid direct response format."
         
         # Validate analysis object
         if not analysis or not isinstance(analysis, dict) or "prompt" not in analysis:

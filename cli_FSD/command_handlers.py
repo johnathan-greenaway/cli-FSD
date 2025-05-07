@@ -1,9 +1,81 @@
 import os
+import subprocess
 from .utils import print_streamed_message
 from .script_handlers import extract_script_from_response, assemble_final_script, auto_handle_script_execution
 from .chat_models import initialize_chat_models # Import necessary function
 
+def get_user_confirmation(command: str, config=None) -> bool:
+    """Get user confirmation before executing a command.
+    
+    Args:
+        command: The command to confirm
+        config: Optional configuration object
+        
+    Returns:
+        bool: True if user confirms, False otherwise
+    """
+    if config and config.autopilot_mode:
+        return True
+    print(f"\nAbout to execute command:\n{command}")
+    response = input("Do you want to proceed? (yes/no): ").strip().lower()
+    return response in ['yes', 'y']
 
+def execute_shell_command(command: str, api_key: str = None, stream_output: bool = True, safe_mode: bool = True) -> str:
+    """Execute a shell command with proper error handling.
+    
+    Args:
+        command: The shell command to execute
+        api_key: Optional API key for authentication
+        stream_output: Whether to stream command output
+        safe_mode: Whether to run in safe mode
+        
+    Returns:
+        str: Command output or error message
+    """
+    try:
+        # Create a process with appropriate settings
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        output_lines = []
+        error_lines = []
+        
+        # Stream output if requested
+        if stream_output:
+            while True:
+                output = process.stdout.readline()
+                if output == '' and process.poll() is not None:
+                    break
+                if output:
+                    output_lines.append(output.strip())
+                    print(output.strip())
+            
+            # Check for errors
+            stderr = process.stderr.read()
+            if stderr:
+                error_lines.append(stderr.strip())
+                print(f"Error: {stderr}")
+        
+        # Wait for process to complete
+        return_code = process.wait()
+        
+        if return_code != 0:
+            error_msg = f"Command failed with return code {return_code}"
+            if error_lines:
+                error_msg += f"\nErrors:\n" + "\n".join(error_lines)
+            return error_msg
+            
+        return "\n".join(output_lines) if output_lines else "Command executed successfully."
+        
+    except Exception as e:
+        return f"Error executing command: {str(e)}"
 
 def handle_command_mode(config, chat_models):
     while True:
