@@ -281,3 +281,145 @@ def parse_arguments():
     parser.add_argument("-d", "--default", action="store_true", help="Reset to default model settings")
     parser.add_argument("query", nargs=argparse.REMAINDER, help="User query to process directly")
     return parser.parse_args()
+
+def process_input_based_on_mode(query, config, chat_models):
+    """Process user input based on the current mode and query type."""
+    import json
+    from .agents.web_content_agent import WebContentAgent
+    from .agents.context_agent import ContextAgent
+    
+    # Initialize agents
+    web_agent = WebContentAgent()
+    context_agent = ContextAgent()
+    
+    # Reset browser attempts counter for new queries
+    _response_context['browser_attempts'] = 0
+    
+    # Check for session management commands
+    if query.lower() == 'history':
+        return display_session_history(config)
+    elif query.lower().startswith('recall '):
+        try:
+            index = int(query.lower().replace('recall ', '').strip())
+            return recall_history_item(config, index)
+        except ValueError:
+            print(f"{config.YELLOW}Please provide a valid index number.{config.RESET}")
+            return "Invalid recall index. Use 'history' to see available items."
+    elif query.lower() == 'session status':
+        return display_session_status(config)
+    
+    # Use ContextAgent to analyze the request and determine which tool to use
+    try:
+        analysis = context_agent.analyze_request(query)
+        
+        # Validate analysis object
+        if not analysis or not isinstance(analysis, dict) or "prompt" not in analysis:
+            # Fall back to direct LLM processing if analysis fails
+            print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
+            llm_response = chat_with_model(query, config, chat_models)
+            final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+            print_streamed_message(final_response, config.CYAN)
+            return final_response
+        
+        # Get LLM's tool selection decision with the analysis prompt
+        llm_analysis = chat_with_model(analysis["prompt"], config, chat_models)
+        
+        try:
+            result = json.loads(llm_analysis)
+        except json.JSONDecodeError:
+            print(f"{config.YELLOW}Failed to parse LLM analysis response.{config.RESET}")
+            return "Error: Could not parse tool selection response."
+        
+        # Handle different tool types
+        if result.get("tool") == "web_content":
+            # Use web content agent
+            if result.get("operation") in ["fetch", "browse", "search"]:
+                response = web_agent.execute_command(f"{result['operation']} {result['url_or_query']} {result.get('mode', 'basic')}")
+                if response.get("error"):
+                    print(f"{config.RED}Error: {response['error']}{config.RESET}")
+                    return f"Error: {response['error']}"
+                
+                # Update context with the response
+                context_agent.update_context(result['operation'], response)
+                return response
+                
+        elif result.get("tool") == "file_operation":
+            # Use file operations
+            response = web_agent.execute_command(f"{result['operation']} {result['filepath']} {result.get('content', '')}")
+            if response.get("error"):
+                print(f"{config.RED}Error: {response['error']}{config.RESET}")
+                return f"Error: {response['error']}"
+            
+            # Update context with the response
+            context_agent.update_context(result['operation'], response)
+            return response
+            
+        elif result.get("tool") == "command":
+            # Handle shell commands
+            if config.autopilot_mode:
+                # In autopilot mode, execute commands directly
+                command = result.get("command")
+                if command:
+                    print(f"{config.CYAN}Executing command in autopilot mode: {command}{config.RESET}")
+                    execute_shell_command(command, config.api_key, stream_output=True, safe_mode=False)
+                    return f"Executed command: {command}"
+            else:
+                # In normal mode, ask for confirmation
+                command = result.get("command")
+                if command:
+                    if get_user_confirmation(command, config):
+                        execute_shell_command(command, config.api_key, stream_output=True, safe_mode=config.safe_mode)
+                        return f"Executed command: {command}"
+                    else:
+                        return "Command execution aborted by user."
+        
+        # If no specific tool was selected or tool execution failed, fall back to direct LLM processing
+        llm_response = chat_with_model(query, config, chat_models)
+        final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+        print_streamed_message(final_response, config.CYAN)
+        return final_response
+        
+    except Exception as e:
+        print(f"{config.RED}Error in process_input_based_on_mode: {str(e)}{config.RESET}")
+        # Fall back to direct LLM processing
+        llm_response = chat_with_model(query, config, chat_models)
+        final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
+        print_streamed_message(final_response, config.CYAN)
+        return final_response
+
+def process_input_in_autopilot_mode(query, config, chat_models):
+    """Process input in autopilot mode with automatic execution."""
+    # Set autopilot mode in config
+    config.autopilot_mode = True
+    
+    # Process the input
+    response = process_input_based_on_mode(query, config, chat_models)
+    
+    # If response contains a command, execute it
+    if isinstance(response, dict) and response.get("command"):
+        command = response["command"]
+        print(f"{config.CYAN}Executing command in autopilot mode: {command}{config.RESET}")
+        execute_shell_command(command, config.api_key, stream_output=True, safe_mode=False)
+        return f"Executed command: {command}"
+    
+    return response
+
+def process_input_in_safe_mode(query, config, chat_models):
+    """Process input in safe mode with additional checks and confirmations."""
+    # Set safe mode in config
+    config.safe_mode = True
+    config.autopilot_mode = False
+    
+    # Process the input
+    response = process_input_based_on_mode(query, config, chat_models)
+    
+    # If response contains a command, ask for confirmation
+    if isinstance(response, dict) and response.get("command"):
+        command = response["command"]
+        if get_user_confirmation(command, config):
+            execute_shell_command(command, config.api_key, stream_output=True, safe_mode=True)
+            return f"Executed command: {command}"
+        else:
+            return "Command execution aborted by user."
+    
+    return response
