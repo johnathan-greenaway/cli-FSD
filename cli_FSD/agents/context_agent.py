@@ -97,7 +97,66 @@ class ContextAgent:
                 "description": f"Create a directory named '{folder_name}'"
             }
         
-        # Create a prompt that helps the LLM understand the context and available tools
+        # For complex file operations, use LLM processing
+        if any(word in query.lower() for word in ['create', 'make', 'write', 'using', 'in', 'with']):
+            # Create a prompt that helps the LLM understand the context and available tools
+            prompt = f"""Analyze the following request and determine which tool to use.
+System Information:
+{json.dumps(self.system_info, indent=2)}
+
+Available Tools:
+{json.dumps(self.tools, indent=2)}
+
+{self._get_context_prompt() if is_follow_up else ''}
+
+User Request: {query}
+
+Please respond with a JSON object containing:
+1. "tool": The type of tool to use (web_content, file_operation, or command)
+2. "operation": The specific operation to perform
+3. Additional fields based on the tool type:
+   - For web_content: "url_or_query" and optional "mode"
+   - For file_operation: "filepath" and optional "content"
+   - For command: "command" (the shell command to execute)
+4. "description": A human-readable description of what the command will do
+5. "requires_confirmation": Whether the command requires user confirmation (true/false)
+
+Example responses:
+{{
+    "tool": "web_content",
+    "operation": "fetch",
+    "url_or_query": "https://example.com",
+    "mode": "basic",
+    "description": "Fetch content from example.com",
+    "requires_confirmation": true
+}}
+
+{{
+    "tool": "file_operation",
+    "operation": "write",
+    "filepath": "output.txt",
+    "content": "Hello, World!",
+    "description": "Create a new file with the specified content",
+    "requires_confirmation": true
+}}
+
+{{
+    "tool": "command",
+    "operation": "shell",
+    "command": "ls -la",
+    "description": "List all files in the current directory",
+    "requires_confirmation": false
+}}
+
+IMPORTANT: For command operations, ensure the command is compatible with the current system ({self.system_info['os']}).
+Only output valid shell commands that can be executed on this system."""
+
+            return {
+                "prompt": prompt,
+                "requires_llm_processing": True
+            }
+        
+        # For other requests, use the default prompt
         prompt = f"""Analyze the following request and determine which tool to use.
 System Information:
 {json.dumps(self.system_info, indent=2)}
@@ -173,13 +232,15 @@ Only output valid shell commands that can be executed on this system."""
         """
         context_parts = []
         
-        if self.context['last_web_content']:
+        if self.context.get('last_web_content'):
             context_parts.append(f"Last web content: {self.context['last_web_content'].get('title', 'Unknown')}")
-            if self.context['last_url']:
+            if self.context.get('last_url'):
                 context_parts.append(f"Last URL: {self.context['last_url']}")
         
-        if self.context['last_file_operation']:
-            context_parts.append(f"Last file operation: {self.context['last_operation']} on {self.context.get('last_filepath', 'Unknown')}")
+        if self.context.get('last_operation'):
+            context_parts.append(f"Last operation: {self.context['last_operation']}")
+            if self.context.get('last_filepath'):
+                context_parts.append(f"Last filepath: {self.context['last_filepath']}")
         
         if context_parts:
             return "Current Context:\n" + "\n".join(context_parts) + "\n"

@@ -408,22 +408,32 @@ def process_input_based_on_mode(query, config, chat_models):
             
         elif result.get("tool") == "command":
             # Handle shell commands
-            if config.autopilot_mode:
-                # In autopilot mode, execute commands directly
-                command = result.get("command")
-                if command:
-                    print(f"{config.CYAN}Executing command in autopilot mode: {command}{config.RESET}")
-                    execute_shell_command(command, config.api_key, stream_output=True, safe_mode=False)
-                    return f"Executed command: {command}"
-            else:
-                # In normal mode, ask for confirmation
-                command = result.get("command")
-                if command:
-                    if get_user_confirmation(command, config):
-                        execute_shell_command(command, config.api_key, stream_output=True, safe_mode=config.safe_mode)
-                        return f"Executed command: {command}"
+            command = result.get("command")
+            description = result.get("description", "Execute command")
+            requires_confirmation = result.get("requires_confirmation", True)
+            
+            if command:
+                # Show the command to the user
+                print(f"\n{description}:")
+                print(f"```bash\n{command}\n```")
+                
+                if config.autopilot_mode or not requires_confirmation:
+                    print(f"{config.CYAN}Executing command...{config.RESET}")
+                    result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=not config.autopilot_mode)
+                    if result.startswith("Error"):
+                        print(f"{config.RED}{result}{config.RESET}")
                     else:
-                        return "Command execution aborted by user."
+                        print(f"{config.GREEN}{result}{config.RESET}")
+                    return result
+                else:
+                    if get_user_confirmation(command, config):
+                        result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=True)
+                        if result.startswith("Error"):
+                            print(f"{config.RED}{result}{config.RESET}")
+                        else:
+                            print(f"{config.GREEN}{result}{config.RESET}")
+                        return result
+                    return "Command execution cancelled by user."
         
         # If no specific tool was selected or tool execution failed, fall back to direct LLM processing
         llm_response = chat_with_model(query, config, chat_models)
