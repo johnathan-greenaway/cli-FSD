@@ -1,9 +1,13 @@
 import os
 import subprocess
+import readline
+import sys
 from .utils import print_streamed_message
 from .script_handlers import extract_script_from_response, assemble_final_script, auto_handle_script_execution
 from .chat_models import initialize_chat_models # Import necessary function
 from .agents.sequential_thinking_agent import SequentialThinkingAgent
+from .command_history import CommandHistory
+from difflib import get_close_matches
 
 def get_user_confirmation(command: str, config=None) -> bool:
     """Get user confirmation before executing a command.
@@ -82,12 +86,78 @@ def handle_command_mode(config, chat_models):
     """Handle command mode interactions."""
     print(f"{config.CYAN}Entering command mode. Type 'exit' to return to normal mode.{config.RESET}")
     
-    # Initialize sequential thinking agent
+    # Initialize sequential thinking agent and command history
     thinking_agent = SequentialThinkingAgent()
+    command_history = CommandHistory()
+    
+    # Define available commands for fuzzy search
+    available_commands = [
+        'help', 'exit', 'safe', 'autopilot', 'normal',
+        'sequential thinking on', 'sequential thinking off',
+        'sequential thinking llm choice on', 'sequential thinking llm choice off',
+        'sequential thinking history', 'sequential thinking clear',
+        'session', 'session status', 'history', 'recall',
+        'model', 'list_models', 'config', 'clear history',
+        'file', 'fileint'
+    ]
+    
+    # Set up readline for command history
+    readline.set_history_length(1000)
+    
+    def completer(text, state):
+        """Command completer for fuzzy search."""
+        if not text:
+            return None
+        
+        # Get fuzzy matches from both command history and available commands
+        history_matches = command_history.fuzzy_search(text)
+        command_matches = get_close_matches(text, available_commands, n=5, cutoff=0.6)
+        
+        # Combine matches, prioritizing available commands
+        all_matches = list(dict.fromkeys(command_matches + history_matches))
+        
+        if state < len(all_matches):
+            return all_matches[state]
+        return None
+    
+    # Set up readline completer and tab completion
+    readline.set_completer(completer)
+    readline.parse_and_bind('tab: complete')
+    readline.parse_and_bind('set show-all-if-ambiguous on')
+    readline.parse_and_bind('set completion-ignore-case on')
+    
+    # Print available commands for reference
+    print("\nAvailable commands:")
+    print("  help                    - Show this help message")
+    print("  exit                    - Exit command mode")
+    print("  safe                    - Switch to safe mode")
+    print("  autopilot              - Switch to autopilot mode")
+    print("  normal                 - Switch to normal mode")
+    print("  sequential thinking on  - Enable sequential thinking")
+    print("  sequential thinking off - Disable sequential thinking")
+    print("  sequential thinking llm choice on  - Enable LLM choice for sequential thinking")
+    print("  sequential thinking llm choice off - Disable LLM choice for sequential thinking")
+    print("  sequential thinking history - Show thought history")
+    print("  sequential thinking clear - Clear thought history")
+    print("  session                - Show session status")
+    print("  session status         - Show session status")
+    print("  history                - Show conversation history")
+    print("  recall <index>         - Recall specific history item")
+    print("  model                  - Change model")
+    print("  list_models            - List available models")
+    print("  config                 - Show current configuration")
+    print("  clear history          - Clear conversation history")
+    print("  file                   - Browse and view files")
+    print("  fileint                - Advanced file operations")
+    print("\nType part of a command and press TAB to cycle through matching commands.")
     
     while True:
         try:
+            # Get command with history navigation
             command = input(f"{config.YELLOW}CMD>{config.RESET} ").strip()
+            
+            # Add command to history
+            command_history.add_command(command)
             
             # Handle internal commands first
             if command.lower() == 'exit':
