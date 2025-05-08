@@ -2050,3 +2050,52 @@ def display_session_status(config):
     result.append(f"Autopilot mode: {'Enabled' if config.autopilot_mode else 'Disabled'}")
     
     return "\n".join(result)
+
+def show_session_status(config):
+    """Display current session status and available commands."""
+    print(f"\n{config.CYAN}=== Session Status ==={config.RESET}")
+    print(f"Model: {config.current_model}")
+    print(f"Mode: {'Autopilot' if config.autopilot_mode else 'Safe' if config.safe_mode else 'Normal'}")
+    print(f"Script Reviewer: {'Enabled' if config.scriptreviewer_on else 'Disabled'}")
+    print(f"Sequential Thinking: {'Enabled' if config.sequential_thinking_enabled else 'Disabled'}")
+    if config.sequential_thinking_enabled:
+        print(f"LLM Choice: {'Enabled' if config.sequential_thinking_llm_choice else 'Disabled'}")
+    
+    print(f"\n{config.CYAN}=== Available Commands ==={config.RESET}")
+    print(f"{config.YELLOW}Session Management:{config.RESET}")
+    print("  history          - Show conversation history")
+    print("  recall <index>   - Recall specific history item")
+    print("  clear history    - Clear conversation history")
+    print("  save            - Save last response to file")
+    print("  reset           - Reset conversation")
+    
+    print(f"\n{config.YELLOW}Model & Mode Control:{config.RESET}")
+    print("  model           - Change model")
+    print("  list_models     - List available models")
+    print("  safe            - Switch to safe mode")
+    print("  autopilot       - Switch to autopilot mode")
+    print("  normal          - Switch to normal mode")
+    
+    print(f"\n{config.YELLOW}Sequential Thinking:{config.RESET}")
+    print("  sequential thinking on/off           - Enable/disable sequential thinking")
+    print("  sequential thinking llm choice on/off - Enable/disable LLM choice")
+    print("  sequential thinking history          - Show thought history")
+    print("  sequential thinking clear            - Clear thought history")
+    
+    print(f"\n{config.YELLOW}File Operations:{config.RESET}")
+    print("  file            - Browse and view files")
+    print("  fileint         - Advanced file operations")
+    
+    print(f"\n{config.YELLOW}Other Commands:{config.RESET}")
+    print("  script          - Handle script execution")
+    print("  config          - Show current configuration")
+    print("  session         - Show this help message")
+    print("  exit            - Exit command mode")
+    
+    print(f"\n{config.CYAN}=== Current Session ==={config.RESET}")
+    if hasattr(config, 'session_history') and config.session_history:
+        print(f"History items: {len(config.session_history)}")
+        for i, item in enumerate(config.session_history):
+            print(f"{i}: {item[:50]}..." if len(item) > 50 else f"{i}: {item}")
+    else:
+        print("No history items")

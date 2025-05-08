@@ -31,7 +31,11 @@ class Config:
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.server_port = int(os.getenv("SERVER_PORT", 5000))
         
-        # Load configurations
+        # Sequential Thinking settings
+        self.sequential_thinking_enabled = False
+        self.sequential_thinking_llm_choice = False
+        
+        # Load preferences
         self.load_preferences()
         self.load_mcp_settings()
 
@@ -78,6 +82,10 @@ class Config:
                     self.use_groq = prefs.get('use_groq', False)
                     self.scriptreviewer_on = prefs.get('scriptreviewer_on', False)
                     self.last_ollama_model = prefs.get('last_ollama_model', 'llama3.1:8b')
+                    
+                    # Load sequential thinking preferences
+                    self.sequential_thinking_enabled = prefs.get('sequential_thinking_enabled', False)
+                    self.sequential_thinking_llm_choice = prefs.get('sequential_thinking_llm_choice', False)
             else:
                 self.session_model = None
                 self.safe_mode = False
@@ -113,10 +121,12 @@ class Config:
                 'use_ollama': self.use_ollama,
                 'use_groq': self.use_groq,
                 'scriptreviewer_on': self.scriptreviewer_on,
-                'last_ollama_model': self.last_ollama_model
+                'last_ollama_model': self.last_ollama_model,
+                'sequential_thinking_enabled': self.sequential_thinking_enabled,
+                'sequential_thinking_llm_choice': self.sequential_thinking_llm_choice
             }
             with open(self.preferences_file, 'w') as f:
-                json.dump(prefs, f)
+                json.dump(prefs, f, indent=2)
         except Exception as e:
             print(f"Error saving preferences: {e}")
 
