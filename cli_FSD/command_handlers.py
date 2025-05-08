@@ -1,22 +1,277 @@
 import os
+import subprocess
+import readline
+import sys
 from .utils import print_streamed_message
 from .script_handlers import extract_script_from_response, assemble_final_script, auto_handle_script_execution
 from .chat_models import initialize_chat_models # Import necessary function
+from .agents.sequential_thinking_agent import SequentialThinkingAgent
+from .command_history import CommandHistory
+from difflib import get_close_matches
 
+def get_user_confirmation(command: str, config=None) -> bool:
+    """Get user confirmation before executing a command.
+    
+    Args:
+        command: The command to confirm
+        config: Optional configuration object
+        
+    Returns:
+        bool: True if user confirms, False otherwise
+    """
+    if config and config.autopilot_mode:
+        return True
+    print(f"\nAbout to execute command:\n{command}")
+    response = input("Do you want to proceed? (yes/no): ").strip().lower()
+    return response in ['yes', 'y']
 
+def execute_shell_command(command: str, api_key: str = None, stream_output: bool = True, safe_mode: bool = True) -> str:
+    """Execute a shell command with proper error handling.
+    
+    Args:
+        command: The shell command to execute
+        api_key: Optional API key for authentication
+        stream_output: Whether to stream command output
+        safe_mode: Whether to run in safe mode
+        
+    Returns:
+        str: Command output or error message
+    """
+    try:
+        # Create a process with appropriate settings
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        output_lines = []
+        error_lines = []
+        
+        # Stream output if requested
+        if stream_output:
+            while True:
+                output = process.stdout.readline()
+                if output == '' and process.poll() is not None:
+                    break
+                if output:
+                    output_lines.append(output.strip())
+                    print(output.strip())
+            
+            # Check for errors
+            stderr = process.stderr.read()
+            if stderr:
+                error_lines.append(stderr.strip())
+                print(f"Error: {stderr}")
+        
+        # Wait for process to complete
+        return_code = process.wait()
+        
+        if return_code != 0:
+            error_msg = f"Command failed with return code {return_code}"
+            if error_lines:
+                error_msg += f"\nErrors:\n" + "\n".join(error_lines)
+            return error_msg
+            
+        return "\n".join(output_lines) if output_lines else "Command executed successfully."
+        
+    except Exception as e:
+        return f"Error executing command: {str(e)}"
 
 def handle_command_mode(config, chat_models):
+    """Handle command mode interactions."""
+    print(f"{config.CYAN}Entering command mode. Type 'exit' to return to normal mode.{config.RESET}")
+    
+    # Initialize sequential thinking agent and command history
+    thinking_agent = SequentialThinkingAgent()
+    command_history = CommandHistory()
+    
+    # Define available commands for fuzzy search
+    available_commands = [
+        'help', 'exit', 'safe', 'autopilot', 'normal',
+        'sequential thinking on', 'sequential thinking off',
+        'sequential thinking llm choice on', 'sequential thinking llm choice off',
+        'sequential thinking history', 'sequential thinking clear',
+        'session', 'session status', 'history', 'recall',
+        'model', 'list_models', 'config', 'clear history',
+        'file', 'fileint'
+    ]
+    
+    # Set up readline for command history
+    readline.set_history_length(1000)
+    
+    def completer(text, state):
+        """Command completer for fuzzy search."""
+        if not text:
+            return None
+        
+        # Get fuzzy matches from both command history and available commands
+        history_matches = command_history.fuzzy_search(text)
+        command_matches = get_close_matches(text, available_commands, n=5, cutoff=0.6)
+        
+        # Combine matches, prioritizing available commands
+        all_matches = list(dict.fromkeys(command_matches + history_matches))
+        
+        if state < len(all_matches):
+            return all_matches[state]
+        return None
+    
+    # Set up readline completer and tab completion
+    readline.set_completer(completer)
+    readline.parse_and_bind('tab: complete')
+    readline.parse_and_bind('set show-all-if-ambiguous on')
+    readline.parse_and_bind('set completion-ignore-case on')
+    
+    # Print available commands for reference
+    print("\nAvailable commands:")
+    print("  help                    - Show this help message")
+    print("  exit                    - Exit command mode")
+    print("  safe                    - Switch to safe mode")
+    print("  autopilot              - Switch to autopilot mode")
+    print("  normal                 - Switch to normal mode")
+    print("  sequential thinking on  - Enable sequential thinking")
+    print("  sequential thinking off - Disable sequential thinking")
+    print("  sequential thinking llm choice on  - Enable LLM choice for sequential thinking")
+    print("  sequential thinking llm choice off - Disable LLM choice for sequential thinking")
+    print("  sequential thinking history - Show thought history")
+    print("  sequential thinking clear - Clear thought history")
+    print("  session                - Show session status")
+    print("  session status         - Show session status")
+    print("  history                - Show conversation history")
+    print("  recall <index>         - Recall specific history item")
+    print("  model                  - Change model")
+    print("  list_models            - List available models")
+    print("  config                 - Show current configuration")
+    print("  clear history          - Clear conversation history")
+    print("  file                   - Browse and view files")
+    print("  fileint                - Advanced file operations")
+    print("\nType part of a command and press TAB to cycle through matching commands.")
+    
     while True:
-        command = input(f"{config.GREEN}CMD>{config.RESET} ").strip().lower()
-        if command == 'quit':
+        try:
+            # Get command with history navigation
+            command = input(f"{config.YELLOW}CMD>{config.RESET} ").strip()
+            
+            # Add command to history
+            command_history.add_command(command)
+            
+            # Handle internal commands first
+            if command.lower() == 'exit':
+                break
+            elif command.lower() == 'help':
+                print_help()
+            elif command.lower() == 'safe':
+                config.safe_mode = True
+                config.autopilot_mode = False
+                config.save_preferences()
+                print("Switched to safe mode.")
+            elif command.lower() == 'autopilot':
+                config.safe_mode = False
+                config.autopilot_mode = True
+                config.save_preferences()
+                print("Switched to autopilot mode.")
+            elif command.lower() == 'normal':
+                config.safe_mode = False
+                config.autopilot_mode = False
+                config.save_preferences()
+                print("Switched to normal mode.")
+            elif command.lower() == 'sequential thinking on':
+                config.sequential_thinking_enabled = True
+                config.sequential_thinking_llm_choice = False
+                config.save_preferences()
+                thinking_agent.enable(False)
+                print("Sequential thinking enabled.")
+            elif command.lower() == 'sequential thinking off':
+                config.sequential_thinking_enabled = False
+                config.sequential_thinking_llm_choice = False
+                config.save_preferences()
+                thinking_agent.disable()
+                print("Sequential thinking disabled.")
+            elif command.lower() == 'sequential thinking llm choice on':
+                config.sequential_thinking_enabled = True
+                config.sequential_thinking_llm_choice = True
+                config.save_preferences()
+                thinking_agent.enable(True)
+                print("Sequential thinking enabled with LLM choice.")
+            elif command.lower() == 'sequential thinking llm choice off':
+                config.sequential_thinking_enabled = True
+                config.sequential_thinking_llm_choice = False
+                config.save_preferences()
+                thinking_agent.enable(False)
+                print("Sequential thinking enabled without LLM choice.")
+            elif command.lower() == 'sequential thinking history':
+                if thinking_agent.thought_history:
+                    print("\nThought History:")
+                    for thought in thinking_agent.get_thought_history():
+                        print(thinking_agent._format_thought(thought))
+                else:
+                    print("No thought history available.")
+            elif command.lower() == 'sequential thinking clear':
+                thinking_agent.clear_history()
+                print("Thought history cleared.")
+            elif command.lower() == 'session':
+                show_session_status(config)
+            elif command.lower() == 'session status':
+                show_session_status(config)
+            elif command.lower() == 'history':
+                show_history(config)
+            elif command.lower().startswith('recall '):
+                try:
+                    index = int(command.replace('recall ', '').strip())
+                    recall_item(config, index)
+                except ValueError:
+                    print(f"{config.YELLOW}Please provide a valid index number.{config.RESET}")
+            elif command.lower() == 'model':
+                change_model(config, chat_models)
+            elif command.lower() == 'list_models':
+                list_available_models(config)
+            elif command.lower() == 'config':
+                show_current_config(config)
+            elif command.lower() == 'clear history':
+                reset_conversation(config)
+                print(f"{config.CYAN}History cleared.{config.RESET}")
+            elif command.lower().startswith('file'):
+                handle_file_command(config)
+            elif command.lower().startswith('fileint'):
+                handle_file_interaction_command(config)
+            else:
+                # Execute the command as a shell command only if it's not an internal command
+                result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=config.safe_mode)
+                if result.startswith("Error"):
+                    print(f"{config.RED}{result}{config.RESET}")
+                else:
+                    print(f"{config.GREEN}{result}{config.RESET}")
+                    
+        except KeyboardInterrupt:
+            print("\nExiting command mode...")
             break
-        elif command == 'exit':
-            print(f"{config.CYAN}Exited command mode.{config.RESET}")
-            break
-        else:
-            process_command(command, config, chat_models)
+        except Exception as e:
+            print(f"{config.RED}Error: {str(e)}{config.RESET}")
+
+def print_help():
+    """Print help information for command mode."""
+    print("""
+Available commands:
+  help                    - Show this help message
+  exit                    - Exit command mode
+  safe                    - Switch to safe mode
+  autopilot              - Switch to autopilot mode
+  normal                 - Switch to normal mode
+  sequential thinking on  - Enable sequential thinking
+  sequential thinking off - Disable sequential thinking
+  sequential thinking llm choice on  - Enable LLM choice for sequential thinking
+  sequential thinking llm choice off - Disable LLM choice for sequential thinking
+  sequential thinking history - Show thought history
+  sequential thinking clear - Clear thought history
+  <any other command>    - Execute as shell command
+""")
 
 def process_command(command, config, chat_models):
+    """Process commands in normal mode."""
     if command == 'reset':
         reset_conversation(config)
         print(f"{config.CYAN}The conversation has been reset.{config.RESET}")
@@ -50,8 +305,43 @@ def process_command(command, config, chat_models):
         handle_file_command(config)
     elif command.startswith('fileint'):
         handle_file_interaction_command(config)
+    # Add sequential thinking commands
+    elif command == 'sequential thinking on':
+        config.sequential_thinking_enabled = True
+        config.sequential_thinking_llm_choice = False
+        config.save_preferences()
+        print("Sequential thinking enabled.")
+    elif command == 'sequential thinking off':
+        config.sequential_thinking_enabled = False
+        config.sequential_thinking_llm_choice = False
+        config.save_preferences()
+        print("Sequential thinking disabled.")
+    elif command == 'sequential thinking llm choice on':
+        config.sequential_thinking_enabled = True
+        config.sequential_thinking_llm_choice = True
+        config.save_preferences()
+        print("Sequential thinking enabled with LLM choice.")
+    elif command == 'sequential thinking llm choice off':
+        config.sequential_thinking_enabled = True
+        config.sequential_thinking_llm_choice = False
+        config.save_preferences()
+        print("Sequential thinking enabled without LLM choice.")
+    elif command == 'sequential thinking history':
+        # Initialize thinking agent to show history
+        thinking_agent = SequentialThinkingAgent()
+        if thinking_agent.thought_history:
+            print("\nThought History:")
+            for thought in thinking_agent.get_thought_history():
+                print(thinking_agent._format_thought(thought))
+        else:
+            print("No thought history available.")
+    elif command == 'sequential thinking clear':
+        # Initialize thinking agent to clear history
+        thinking_agent = SequentialThinkingAgent()
+        thinking_agent.clear_history()
+        print("Thought history cleared.")
     else:
-        print(f"{config.YELLOW}Unknown command. Type 'exit' to return to normal mode.{config.RESET}")
+        print(f"{config.YELLOW}Unknown command. Type 'session' to see available commands.{config.RESET}")
 
 def reset_conversation(config):
     """Reset the conversation history."""

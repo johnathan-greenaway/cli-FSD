@@ -7,8 +7,10 @@ and integrate the results with the small context agent.
 import requests
 import json
 import logging
-from typing import Dict, Any, Optional, List
+import os
+from typing import Dict, Any, Optional, List, Union
 from urllib.parse import urlparse
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -27,6 +29,285 @@ class WebContentAgent:
         self.api_base_url = api_base_url
         self.endpoint = f"{api_base_url}/fetch_web_content"
         self.session = requests.Session()
+        self.file_operations = {
+            'read': self._read_file,
+            'write': self._write_file,
+            'append': self._append_file,
+            'delete': self._delete_file
+        }
+        self.content_cache = {}
+        self.last_operation = None
+        self.last_url = None
+    
+    def _extract_story_number(self, query: str) -> Optional[int]:
+        """Extract a story number from a query.
+        
+        Args:
+            query: The query to extract from
+            
+        Returns:
+            Story number if found, None otherwise
+        """
+        # Look for patterns like "story 5", "story #5", "story5", etc.
+        patterns = [
+            r'story\s*#?\s*(\d+)',
+            r'#?\s*(\d+)\s*on',
+            r'number\s*#?\s*(\d+)',
+            r'item\s*#?\s*(\d+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, query.lower())
+            if match:
+                try:
+                    return int(match.group(1))
+                except ValueError:
+                    continue
+        
+        return None
+    
+    def _get_story_url(self, story_number: int, base_url: str) -> str:
+        """Get the URL for a specific story number.
+        
+        Args:
+            story_number: The story number to get
+            base_url: The base URL of the site
+            
+        Returns:
+            URL for the specific story
+        """
+        if 'news.ycombinator.com' in base_url:
+            return f"https://news.ycombinator.com/item?id={story_number}"
+        elif 'reddit.com' in base_url:
+            return f"https://reddit.com/comments/{story_number}"
+        return base_url
+    
+    def _read_file(self, filepath: str) -> Dict[str, Any]:
+        """Read a file's contents.
+        
+        Args:
+            filepath: Path to the file to read
+            
+        Returns:
+            Dictionary containing file contents and metadata
+        """
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return {
+                'success': True,
+                'content': content,
+                'filepath': filepath,
+                'operation': 'read'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'filepath': filepath,
+                'operation': 'read'
+            }
+    
+    def _write_file(self, filepath: str, content: str) -> Dict[str, Any]:
+        """Write content to a file.
+        
+        Args:
+            filepath: Path to write to
+            content: Content to write
+            
+        Returns:
+            Dictionary containing operation result
+        """
+        try:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return {
+                'success': True,
+                'filepath': filepath,
+                'operation': 'write'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'filepath': filepath,
+                'operation': 'write'
+            }
+    
+    def _append_file(self, filepath: str, content: str) -> Dict[str, Any]:
+        """Append content to a file.
+        
+        Args:
+            filepath: Path to append to
+            content: Content to append
+            
+        Returns:
+            Dictionary containing operation result
+        """
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write(content)
+            return {
+                'success': True,
+                'filepath': filepath,
+                'operation': 'append'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'filepath': filepath,
+                'operation': 'append'
+            }
+    
+    def _delete_file(self, filepath: str) -> Dict[str, Any]:
+        """Delete a file.
+        
+        Args:
+            filepath: Path to delete
+            
+        Returns:
+            Dictionary containing operation result
+        """
+        try:
+            os.remove(filepath)
+            return {
+                'success': True,
+                'filepath': filepath,
+                'operation': 'delete'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'filepath': filepath,
+                'operation': 'delete'
+            }
+    
+    def handle_file_operation(self, operation: str, filepath: str, content: Optional[str] = None) -> Dict[str, Any]:
+        """Handle file operations.
+        
+        Args:
+            operation: Operation to perform ('read', 'write', 'append', 'delete')
+            filepath: Path to operate on
+            content: Content for write/append operations
+            
+        Returns:
+            Dictionary containing operation result
+        """
+        if operation not in self.file_operations:
+            return {
+                'success': False,
+                'error': f'Invalid operation: {operation}',
+                'filepath': filepath,
+                'operation': operation
+            }
+        
+        if operation in ['write', 'append'] and content is None:
+            return {
+                'success': False,
+                'error': f'Content required for {operation} operation',
+                'filepath': filepath,
+                'operation': operation
+            }
+        
+        return self.file_operations[operation](filepath, content) if content else self.file_operations[operation](filepath)
+    
+    def parse_command(self, command: str) -> Dict[str, Any]:
+        """Parse a command string into an operation.
+        
+        Args:
+            command: Command string to parse
+            
+        Returns:
+            Dictionary containing parsed command details
+        """
+        # Basic command parsing
+        parts = command.strip().split()
+        if not parts:
+            return {'error': 'Empty command'}
+        
+        operation = parts[0].lower()
+        
+        # Handle file operations
+        if operation in self.file_operations:
+            if len(parts) < 2:
+                return {'error': f'Missing filepath for {operation} operation'}
+            
+            filepath = parts[1]
+            content = ' '.join(parts[2:]) if len(parts) > 2 else None
+            
+            return {
+                'type': 'file_operation',
+                'operation': operation,
+                'filepath': filepath,
+                'content': content
+            }
+        
+        # Handle web content operations
+        if operation in ['fetch', 'browse', 'search']:
+            if len(parts) < 2:
+                return {'error': f'Missing URL/query for {operation} operation'}
+            
+            url_or_query = parts[1]
+            mode = parts[2] if len(parts) > 2 else 'basic'
+            
+            return {
+                'type': 'web_operation',
+                'operation': operation,
+                'url_or_query': url_or_query,
+                'mode': mode
+            }
+        
+        return {'error': f'Unknown operation: {operation}'}
+    
+    def execute_command(self, command: str) -> Dict[str, Any]:
+        """Execute a parsed command.
+        
+        Args:
+            command: Command string to execute
+            
+        Returns:
+            Dictionary containing execution result
+        """
+        parsed = self.parse_command(command)
+        if 'error' in parsed:
+            return parsed
+        
+        # Check for story number in the command
+        story_number = self._extract_story_number(command)
+        if story_number and parsed['type'] == 'web_operation':
+            # If we have a story number and the last URL, use it to construct the story URL
+            if self.last_url:
+                parsed['url_or_query'] = self._get_story_url(story_number, self.last_url)
+        
+        if parsed['type'] == 'file_operation':
+            return self.handle_file_operation(
+                parsed['operation'],
+                parsed['filepath'],
+                parsed.get('content')
+            )
+        
+        if parsed['type'] == 'web_operation':
+            # Store the operation and URL for context
+            self.last_operation = parsed['operation']
+            self.last_url = parsed['url_or_query']
+            
+            if parsed['operation'] == 'fetch':
+                response = self.fetch_content(parsed['url_or_query'], parsed['mode'])
+            elif parsed['operation'] == 'browse':
+                response = self.browse(parsed['url_or_query'], parsed['mode'])
+            elif parsed['operation'] == 'search':
+                response = self.search_for_information([parsed['url_or_query']], parsed['mode'])
+            
+            # Cache the response
+            if response and not response.get('error'):
+                self.content_cache[parsed['url_or_query']] = response
+            
+            return response
+        
+        return {'error': 'Failed to execute command'}
     
     def fetch_content(self, url: str, mode: str = "basic", use_cache: bool = True) -> Dict[str, Any]:
         """Fetch and process web content.
