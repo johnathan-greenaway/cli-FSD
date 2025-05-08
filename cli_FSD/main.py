@@ -377,9 +377,13 @@ def process_input_based_on_mode(query, config, chat_models):
         llm_analysis = chat_with_model(analysis["prompt"], config, chat_models)
         
         try:
-            result = json.loads(llm_analysis)
+            # Clean up the response by removing markdown code block markers
+            cleaned_response = llm_analysis.replace("```json", "").replace("```", "").strip()
+            result = json.loads(cleaned_response)
         except json.JSONDecodeError:
             print(f"{config.YELLOW}Failed to parse LLM analysis response.{config.RESET}")
+            print(f"\n{config.CYAN}Raw LLM response for debugging:{config.RESET}")
+            print(f"```json\n{llm_analysis}\n```")
             return "Error: Could not parse tool selection response."
         
         # Handle different tool types
@@ -397,14 +401,37 @@ def process_input_based_on_mode(query, config, chat_models):
                 
         elif result.get("tool") == "file_operation":
             # Use file operations
-            response = web_agent.execute_command(f"{result['operation']} {result['filepath']} {result.get('content', '')}")
-            if response.get("error"):
-                print(f"{config.RED}Error: {response['error']}{config.RESET}")
-                return f"Error: {response['error']}"
+            operation = result.get("operation")
+            filepath = result.get("filepath")
+            content = result.get("content", "")
+            description = result.get("description", "Perform file operation")
             
-            # Update context with the response
-            context_agent.update_context(result['operation'], response)
-            return response
+            if not filepath:
+                print(f"{config.RED}Error: No filepath specified for file operation{config.RESET}")
+                return "Error: No filepath specified"
+            
+            # Show the operation to the user
+            print(f"\n{description}:")
+            print(f"File: {filepath}")
+            
+            if operation == "write":
+                # Create directory if it doesn't exist
+                os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                
+                # Write the content to the file
+                try:
+                    with open(filepath, 'w') as f:
+                        f.write(content)
+                    print(f"{config.GREEN}Successfully created file: {filepath}{config.RESET}")
+                    return f"Created file: {filepath}"
+                except Exception as e:
+                    error_msg = f"Error writing to file: {str(e)}"
+                    print(f"{config.RED}{error_msg}{config.RESET}")
+                    return error_msg
+            else:
+                error_msg = f"Unsupported file operation: {operation}"
+                print(f"{config.RED}{error_msg}{config.RESET}")
+                return error_msg
             
         elif result.get("tool") == "command":
             # Handle shell commands

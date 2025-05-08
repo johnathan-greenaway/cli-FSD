@@ -97,10 +97,9 @@ class ContextAgent:
                 "description": f"Create a directory named '{folder_name}'"
             }
         
-        # For complex file operations, use LLM processing
+        # For file creation requests, provide a more structured prompt
         if any(word in query.lower() for word in ['create', 'make', 'write', 'using', 'in', 'with']):
-            # Create a prompt that helps the LLM understand the context and available tools
-            prompt = f"""Analyze the following request and determine which tool to use.
+            prompt = f"""Analyze the following request and determine how to create the requested file.
 System Information:
 {json.dumps(self.system_info, indent=2)}
 
@@ -112,44 +111,26 @@ Available Tools:
 User Request: {query}
 
 Please respond with a JSON object containing:
-1. "tool": The type of tool to use (web_content, file_operation, or command)
-2. "operation": The specific operation to perform
-3. Additional fields based on the tool type:
-   - For web_content: "url_or_query" and optional "mode"
-   - For file_operation: "filepath" and optional "content"
-   - For command: "command" (the shell command to execute)
-4. "description": A human-readable description of what the command will do
-5. "requires_confirmation": Whether the command requires user confirmation (true/false)
+1. "tool": "file_operation"
+2. "operation": "write"
+3. "filepath": The full path where the file should be created
+4. "content": The complete content of the file to be created
+5. "description": A brief description of what the file will do
 
-Example responses:
-{{
-    "tool": "web_content",
-    "operation": "fetch",
-    "url_or_query": "https://example.com",
-    "mode": "basic",
-    "description": "Fetch content from example.com",
-    "requires_confirmation": true
-}}
-
+Example response for creating a Python script:
 {{
     "tool": "file_operation",
     "operation": "write",
-    "filepath": "output.txt",
-    "content": "Hello, World!",
-    "description": "Create a new file with the specified content",
-    "requires_confirmation": true
+    "filepath": "scripts/example.py",
+    "content": "def main():\\n    print('Hello, World!')\\n\\nif __name__ == '__main__':\\n    main()",
+    "description": "Create a Python script that prints 'Hello, World!'"
 }}
 
-{{
-    "tool": "command",
-    "operation": "shell",
-    "command": "ls -la",
-    "description": "List all files in the current directory",
-    "requires_confirmation": false
-}}
-
-IMPORTANT: For command operations, ensure the command is compatible with the current system ({self.system_info['os']}).
-Only output valid shell commands that can be executed on this system."""
+IMPORTANT: 
+- Ensure the filepath is valid for the current system ({self.system_info['os']})
+- Include all necessary imports and code structure
+- Make sure the content is properly escaped for JSON
+- The content should be a complete, working file"""
 
             return {
                 "prompt": prompt,
