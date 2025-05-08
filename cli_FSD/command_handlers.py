@@ -89,6 +89,7 @@ def handle_command_mode(config, chat_models):
         try:
             command = input(f"{config.YELLOW}CMD>{config.RESET} ").strip()
             
+            # Handle internal commands first
             if command.lower() == 'exit':
                 break
             elif command.lower() == 'help':
@@ -142,8 +143,33 @@ def handle_command_mode(config, chat_models):
             elif command.lower() == 'sequential thinking clear':
                 thinking_agent.clear_history()
                 print("Thought history cleared.")
+            elif command.lower() == 'session':
+                show_session_status(config)
+            elif command.lower() == 'session status':
+                show_session_status(config)
+            elif command.lower() == 'history':
+                show_history(config)
+            elif command.lower().startswith('recall '):
+                try:
+                    index = int(command.replace('recall ', '').strip())
+                    recall_item(config, index)
+                except ValueError:
+                    print(f"{config.YELLOW}Please provide a valid index number.{config.RESET}")
+            elif command.lower() == 'model':
+                change_model(config, chat_models)
+            elif command.lower() == 'list_models':
+                list_available_models(config)
+            elif command.lower() == 'config':
+                show_current_config(config)
+            elif command.lower() == 'clear history':
+                reset_conversation(config)
+                print(f"{config.CYAN}History cleared.{config.RESET}")
+            elif command.lower().startswith('file'):
+                handle_file_command(config)
+            elif command.lower().startswith('fileint'):
+                handle_file_interaction_command(config)
             else:
-                # Execute the command
+                # Execute the command as a shell command only if it's not an internal command
                 result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=config.safe_mode)
                 if result.startswith("Error"):
                     print(f"{config.RED}{result}{config.RESET}")
