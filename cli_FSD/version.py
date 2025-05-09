@@ -1,4 +1,4 @@
 # version.py
 # Single source of truth for version number
 
-__version__ = '2.0.98' 
+__version__ = '2.0.99' 

@@ -6,6 +6,7 @@ import json
 import traceback # For detailed error logging
 import regex  # For more advanced regex support
 from datetime import datetime, date
+from typing import Any
 
 def attempt_json_repair(json_str):
     """
@@ -187,6 +188,7 @@ else:
 from .configuration import Config
 from .linting.code_checker import CodeChecker
 from .agents.context_agent import ContextAgent
+from .agents.web_content_agent import WebContentAgent
 
 # Global response context cache to store information from previous responses
 _response_context = {
@@ -675,6 +677,7 @@ def try_browser_search(query: str, config, chat_models) -> str:
         # Use our efficient web fetcher first (more reliable than MCP)
         try:
             from .web_fetcher import fetcher
+            logging.info("Initialized WebContentFetcher")
             result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
             if result:
                 # Return standard JSON for all sites
@@ -824,14 +827,10 @@ def _validate_query(query: str) -> bool:
     """Validate that the query is not empty and contains actual content."""
     return bool(query and query.strip())
 
-def process_input_based_on_mode(query, config, chat_models):
-    """Process user input based on the current mode and query type."""
-    import json # Ensure json is explicitly available in this function's scope
-    # Access global variables, but don't declare them global since we're not reassigning them
-    # Using them as read-only doesn't require global declaration
-    
+def process_input_based_on_mode(user_input: str, config: Any) -> str:
+    """Process user input based on the current mode."""
     # Reset browser attempts counter for new queries
-    _response_context['browser_attempts'] = 0
+    browser_attempts = 0
     
     # Check for session management commands
     if query.lower() == 'history':

@@ -28,7 +28,8 @@ from cli_FSD.script_handlers import (
     print_streamed_message,
     display_session_history,
     recall_history_item,
-    display_session_status
+    display_session_status,
+    format_browser_response
 )
 
 # Initialize response context
@@ -92,7 +93,7 @@ def main():
     while True:
         try:
             # Get user input with history navigation
-            user_input = input(f"{config.GREEN}You:{config.RESET} ").strip()
+            user_input = input(f"{config.GREEN}You: {config.SMALL_FONT}v{config.VERSION} + @{config.RESET} ").strip()
             
             # Add query to history
             command_history.add_command(user_input)
@@ -120,8 +121,6 @@ def main():
                 config.save_preferences()
                 print("Switched to normal mode.")
                 logging.info("Switched to normal mode.")
-            elif user_input.lower().startswith('browse'):
-                handle_browse_command(config)
             else:
                 if config.autopilot_mode:
                     process_input_in_autopilot_mode(user_input, config, chat_models)
@@ -187,6 +186,57 @@ def process_input_based_on_mode(query, config, chat_models):
             return "Invalid recall index. Use 'history' to see available items."
     elif query.lower() == 'session status':
         return display_session_status(config)
+    
+    # Check for browse/visit commands
+    if query.lower().startswith(('browse ', 'visit ')):
+        # Extract the target from the command
+        target = query[7:].strip() if query.lower().startswith('browse ') else query[6:].strip()
+        
+        # Use ContextAgent to analyze and execute the browse request
+        try:
+            # Get the context agent's analysis
+            context_analysis = context_agent.analyze_request(target)
+            
+            if not context_analysis or not isinstance(context_analysis, dict):
+                print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
+                return "Failed to analyze browse request. Please try again."
+            
+            # Create a tool selection for browsing
+            tool_selection = {
+                "tool_selection": {
+                    "tool": "small_context",
+                    "operation": "browse_web",
+                    "parameters": {
+                        "url": f"https://news.ycombinator.com/" if "hacker news" in target.lower() or "hn" in target.lower() else target
+                    }
+                }
+            }
+            
+            # Execute the tool selection
+            result = context_agent.execute_tool_selection(tool_selection)
+            
+            if result and not result.get("error"):
+                # Format and return the result
+                formatted_response = format_browser_response(target, json.dumps(result), config, chat_models)
+                
+                # If the response is a string, print it directly
+                if isinstance(formatted_response, str):
+                    print_streamed_message(formatted_response, config.CYAN)
+                # If it's a dict, format it nicely
+                elif isinstance(formatted_response, dict):
+                    if "content" in formatted_response:
+                        print_streamed_message(formatted_response["content"], config.CYAN)
+                    else:
+                        print_streamed_message(json.dumps(formatted_response, indent=2), config.CYAN)
+                return formatted_response
+            else:
+                error_msg = result.get("error", "Unknown error occurred") if result else "No result returned"
+                print(f"{config.RED}Error executing browse: {error_msg}{config.RESET}")
+                return f"Failed to browse {target}. Error: {error_msg}"
+                
+        except Exception as e:
+            print(f"{config.RED}Error in browse command: {str(e)}{config.RESET}")
+            return f"Error processing browse command: {str(e)}"
     
     # Use ContextAgent to analyze the request and determine which tool to use
     try:
