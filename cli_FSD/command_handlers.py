@@ -2,6 +2,7 @@ import os
 import subprocess
 import readline
 import sys
+import asyncio
 from .utils import print_streamed_message
 from .script_handlers import extract_script_from_response, assemble_final_script, auto_handle_script_execution
 from .chat_models import initialize_chat_models # Import necessary function
@@ -98,7 +99,7 @@ def handle_command_mode(config, chat_models):
         'sequential thinking history', 'sequential thinking clear',
         'session', 'session status', 'history', 'recall',
         'model', 'list_models', 'config', 'clear history',
-        'file', 'fileint'
+        'file', 'fileint', 'ollama models'
     ]
     
     # Set up readline for command history
@@ -149,6 +150,7 @@ def handle_command_mode(config, chat_models):
     print("  clear history          - Clear conversation history")
     print("  file                   - Browse and view files")
     print("  fileint                - Advanced file operations")
+    print("  ollama models          - Browse and manage Ollama models")
     print("\nType part of a command and press TAB to cycle through matching commands.")
     
     while True:
@@ -238,6 +240,8 @@ def handle_command_mode(config, chat_models):
                 handle_file_command(config)
             elif command.lower().startswith('fileint'):
                 handle_file_interaction_command(config)
+            elif command.lower() == 'ollama models' or command.lower() == 'ollama':
+                handle_ollama_models_command(config)
             else:
                 # Execute the command as a shell command only if it's not an internal command
                 result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=config.safe_mode)
@@ -267,6 +271,7 @@ Available commands:
   sequential thinking llm choice off - Disable LLM choice for sequential thinking
   sequential thinking history - Show thought history
   sequential thinking clear - Clear thought history
+  ollama models          - Browse and manage Ollama models
   <any other command>    - Execute as shell command
 """)
 
@@ -305,6 +310,8 @@ def process_command(command, config, chat_models):
         handle_file_command(config)
     elif command.startswith('fileint'):
         handle_file_interaction_command(config)
+    elif command == 'ollama models' or command == 'ollama':
+        handle_ollama_models_command(config)
     # Add sequential thinking commands
     elif command == 'sequential thinking on':
         config.sequential_thinking_enabled = True
@@ -364,8 +371,8 @@ def reset_conversation(config):
 def save_last_response(config):
     file_path = input("Enter the file path to save the last response: ")
     try:
-        with open(file_path, "w") as file:
-            file.write(config.last_response)
+        with open(file_path, "w") as f:
+            f.write(config.last_response)
         print(f"Response saved to {file_path}")
     except Exception as e:
         print(f"Error saving response: {e}")
@@ -453,6 +460,8 @@ def show_current_config(config):
     print(f"Safe Mode: {'Enabled' if config.safe_mode else 'Disabled'}")
     print(f"Using Claude: {'Yes' if config.use_claude else 'No'}")
     print(f"Using Ollama: {'Yes' if config.use_ollama else 'No'}")
+    if config.use_ollama:
+        print(f"Current Ollama Model: {config.last_ollama_model}")
     print(f"Using Groq: {'Yes' if config.use_groq else 'No'}")
     print(f"Script Reviewer: {'Enabled' if config.scriptreviewer_on else 'Disabled'}")
 
@@ -558,6 +567,109 @@ def handle_file_command(config):
                 print(f"{config.RED}Error reading file '{full_path}': {e}{config.RESET}")
     except (ValueError, IndexError):
         print(f"{config.YELLOW}Invalid selection.{config.RESET}")
+
+def handle_ollama_models_command(config):
+    """Browse and manage Ollama models."""
+    from .ollama_models import (
+        OllamaModelManager, 
+        list_local_models_cli, 
+        search_models_cli, 
+        pull_model_cli, 
+        delete_model_cli,
+        show_model_details_cli
+    )
+    
+    print(f"{config.CYAN}Ollama Models Management{config.RESET}")
+    print(f"\n{config.YELLOW}Available commands:{config.RESET}")
+    print("1. list    - List local Ollama models")
+    print("2. search  - Search for available Ollama models")
+    print("3. pull    - Download an Ollama model")
+    print("4. delete  - Delete an Ollama model")
+    print("5. details - Show details of a specific model")
+    print("6. set     - Set the active Ollama model")
+    print("7. exit    - Exit Ollama models management")
+
+    while True:
+        cmd = input(f"\n{config.GREEN}OLLAMA>{config.RESET} ").strip().lower()
+        
+        if cmd in ('exit', 'quit', '7'):
+            print(f"{config.CYAN}Exiting Ollama models management.{config.RESET}")
+            break
+        
+        elif cmd in ('list', '1'):
+            try:
+                # Run the async function in a new event loop
+                asyncio.run(list_local_models_cli())
+            except Exception as e:
+                print(f"{config.RED}Error listing Ollama models: {str(e)}{config.RESET}")
+
+        elif cmd in ('search', '2'):
+            try:
+                query = input("Enter search term (or leave empty to list all): ").strip()
+                # Run the async function in a new event loop
+                asyncio.run(search_models_cli(query))
+            except Exception as e:
+                print(f"{config.RED}Error searching Ollama models: {str(e)}{config.RESET}")
+
+        elif cmd in ('pull', '3'):
+            try:
+                model_id = input("Enter model name to download (e.g., llama3, gemma:7b): ").strip()
+                if model_id:
+                    print(f"{config.CYAN}Downloading model {model_id}...{config.RESET}")
+                    # Run the async function in a new event loop
+                    asyncio.run(pull_model_cli(model_id))
+                else:
+                    print(f"{config.YELLOW}No model name provided.{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error downloading model: {str(e)}{config.RESET}")
+
+        elif cmd in ('delete', '4'):
+            try:
+                # First list available models
+                asyncio.run(list_local_models_cli())
+                model_id = input("Enter model name to delete: ").strip()
+                if model_id:
+                    # Run the async function in a new event loop
+                    asyncio.run(delete_model_cli(model_id))
+                else:
+                    print(f"{config.YELLOW}No model name provided.{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error deleting model: {str(e)}{config.RESET}")
+
+        elif cmd in ('details', '5'):
+            try:
+                # First list available models
+                asyncio.run(list_local_models_cli())
+                model_id = input("Enter model name for details: ").strip()
+                if model_id:
+                    # Run the async function in a new event loop
+                    asyncio.run(show_model_details_cli(model_id))
+                else:
+                    print(f"{config.YELLOW}No model name provided.{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error getting model details: {str(e)}{config.RESET}")
+
+        elif cmd in ('set', '6'):
+            try:
+                # First list available models
+                asyncio.run(list_local_models_cli())
+                model_id = input("Enter model name to set as active: ").strip()
+                if model_id:
+                    # Set as the current Ollama model
+                    config.last_ollama_model = model_id
+                    # If using Ollama, update current_model as well
+                    if config.use_ollama:
+                        config.current_model = model_id
+                    config.save_preferences()
+                    print(f"{config.GREEN}Set {model_id} as the active Ollama model.{config.RESET}")
+                else:
+                    print(f"{config.YELLOW}No model name provided.{config.RESET}")
+            except Exception as e:
+                print(f"{config.RED}Error setting active model: {str(e)}{config.RESET}")
+
+        else:
+            print(f"{config.YELLOW}Unknown command: {cmd}{config.RESET}")
+            print("Type a number (1-7) or command name.")
 
 def handle_file_interaction_command(config):
     """Advanced file interaction using the file-interaction MCP server."""
