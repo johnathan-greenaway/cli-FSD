@@ -13,7 +13,8 @@ from .command_history import CommandHistory
 from cli_FSD.utils import (
     print_instructions_once_per_day,
     display_greeting,
-    cleanup_previous_assembled_scripts
+    cleanup_previous_assembled_scripts,
+    direct_scrape_hacker_news
 )
 from cli_FSD.chat_models import initialize_chat_models, chat_with_model
 from cli_FSD.command_handlers import (
@@ -192,7 +193,24 @@ def process_input_based_on_mode(query, config, chat_models):
         # Extract the target from the command
         target = query[7:].strip() if query.lower().startswith('browse ') else query[6:].strip()
         
-        # Use ContextAgent to analyze and execute the browse request
+        # Special handling for Hacker News
+        if "hacker news" in target.lower() or "hn" in target.lower():
+            result = direct_scrape_hacker_news("https://news.ycombinator.com/")
+            if result:
+                try:
+                    # Parse the JSON response
+                    parsed_result = json.loads(result)
+                    # Format the response
+                    formatted_response = format_browser_response(target, result, config, chat_models)
+                    print_streamed_message(formatted_response, config.CYAN)
+                    return formatted_response
+                except Exception as e:
+                    print(f"{config.RED}Error formatting Hacker News response: {str(e)}{config.RESET}")
+                    return f"Error processing Hacker News content: {str(e)}"
+            else:
+                return "Failed to fetch Hacker News content. Please try again."
+        
+        # Use ContextAgent to analyze and execute other browse requests
         try:
             # Get the context agent's analysis
             context_analysis = context_agent.analyze_request(target)
@@ -207,7 +225,7 @@ def process_input_based_on_mode(query, config, chat_models):
                     "tool": "small_context",
                     "operation": "browse_web",
                     "parameters": {
-                        "url": f"https://news.ycombinator.com/" if "hacker news" in target.lower() or "hn" in target.lower() else target
+                        "url": target
                     }
                 }
             }
