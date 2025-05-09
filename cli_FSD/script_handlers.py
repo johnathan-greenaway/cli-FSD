@@ -439,92 +439,65 @@ def get_fallback_response(query: str, original_response: str, config, chat_model
     )
 
 def format_browser_response(query: str, response: str, config, chat_models) -> str:
-    """
-    Format a raw browser/MCP response into a more readable format.
+    """Format a raw browser/MCP response into a more readable format.
     
     Args:
         query: The original user query
         response: The raw browser/MCP response
         config: Configuration object
         chat_models: Chat models to use
-        
-    Returns:
-        str: Formatted response
     """
-    print(f"{config.CYAN}Formatting raw browser/MCP response...{config.RESET}")
-    
-    # Handle empty or None response
-    if not response:
-        return "No browser response received. Please try a different query."
-    
-    # Handle response based on type and size
     try:
-        # If response is already a string and seems reasonable in size, use it directly
-        if isinstance(response, str):
-            # For very long responses, truncate them first
-            if len(response) > 5000:
-                truncated_response = response[:5000] + "... [content truncated]"
-            else:
-                truncated_response = response
-            
-            # Check if it appears to be JSON
-            if response.strip().startswith('{') or response.strip().startswith('['):
-                try:
-                    # Try to parse as JSON to make it more readable
-                    parsed_json = json.loads(response)
-                    # Format JSON nicely with minimal indentation for token efficiency
-                    truncated_response = json.dumps(parsed_json, indent=1)[:5000]
-                except (json.JSONDecodeError, TypeError):
-                    # Not valid JSON or couldn't be parsed, use as is
-                    pass
-        else:
-            # For non-string responses, convert to string
-            try:
-                truncated_response = json.dumps(response, indent=1)[:5000]
-            except (TypeError, OverflowError):
-                truncated_response = str(response)[:5000]
+        result = json.loads(response)
         
-        # Only send to LLM for formatting if it seems to be a complex response
-        # that would benefit from structuring
-        if len(truncated_response) > 200:
-            try:
-                formatted_response = chat_with_model(
-                    message=(
-                        f"The following is a raw response from a browser/MCP tool for the query: '{query}'\n\n"
-                        f"{truncated_response}\n\n"
-                        "Please format this information into a clear, concise, and well-structured response that directly "
-                        "answers the user's query. Include all relevant information from the raw response."
-                    ),
-                    config=config,
-                    chat_models=chat_models,
-                    system_prompt=(
-                        "You are an expert at formatting raw web data into helpful responses. "
-                        "Focus on extracting the most relevant information and presenting it clearly. "
-                        "Prioritize key facts, figures, and actionable insights. "
-                        "Use bullet points, lists, and concise paragraphs to structure the information. "
-                        "Omit any irrelevant details or promotional content."
-                    )
-                )
-                
-                # Store the formatted response in context
-                _response_context['collected_info']['formatted_browser'] = formatted_response[:500]
-                
-                return formatted_response
-            except Exception as e:
-                print(f"{config.YELLOW}Error using LLM for formatting: {str(e)}. Using simplified response.{config.RESET}")
-                # If LLM formatting fails, return a simplified version
-                return f"Information from web search for '{query}':\n\n{truncated_response}"
-        else:
-            # For short responses, don't bother with LLM formatting
-            return f"Information from web search for '{query}':\n\n{truncated_response}"
-    
+        # Format the content
+        formatted = []
+        
+        # Add title
+        if title := result.get("title"):
+            formatted.append(f"{title}\n")
+        
+        # Add URL
+        if url := result.get("url"):
+            formatted.append(f"Source: {url}\n")
+        
+        # Add content sections
+        if content := result.get("content"):
+            for section in content:
+                if section.get("type") == "section":
+                    # Add section title
+                    if title := section.get("title"):
+                        formatted.append(f"\n{title}")
+                    
+                    # Add section blocks
+                    for block in section.get("blocks", []):
+                        if block.get("type") == "text":
+                            formatted.append(f"\n{block.get('text', '')}")
+                        elif block.get("type") == "link":
+                            formatted.append(f"\n{block.get('text', '')}: {block.get('url', '')}")
+                        elif block.get("type") == "story":
+                            # Special formatting for Hacker News stories
+                            formatted.append(f"\n{block.get('title', '')}")
+                            if metadata := block.get("metadata"):
+                                formatted.append(f"Source: {metadata.get('source', 'Unknown')}")
+                                formatted.append(f"Score: {metadata.get('score', 'Unknown')}")
+                                formatted.append(f"Comments: {metadata.get('comments', '0')}")
+                            if url := block.get("url"):
+                                formatted.append(f"URL: {url}")
+        
+        # If no structured content, try to use text_content
+        if not formatted and (text_content := result.get("text_content")):
+            formatted.append(f"\n{text_content}")
+        
+        # If still no content, return a helpful message
+        if not formatted:
+            return "No content found. The page might be empty or require authentication."
+        
+        return "\n".join(formatted)
+    except json.JSONDecodeError:
+        return "Error: Invalid response format"
     except Exception as e:
-        print(f"{config.RED}Error formatting browser response: {str(e)}{config.RESET}")
-        # Return a helpful error message with whatever we can salvage
-        if isinstance(response, str) and response:
-            return f"Error formatting browser response: {str(e)}. Raw data:\n\n{response[:1000]}..."
-        else:
-            return f"Error formatting browser response: {str(e)}. Unable to display raw data."
+        return f"Error formatting response: {str(e)}"
 
 def process_response(query: str, response: str, config, chat_models, allow_browser_fallback=True, response_type="general") -> str:
     """
@@ -636,7 +609,7 @@ def process_response(query: str, response: str, config, chat_models, allow_brows
 
 def try_browser_search(query: str, config, chat_models) -> str:
     """
-    Attempt to use browser search to find an answer.
+    Attempt to use browser search to find an answer or final answer.
     
     Args:
         query: The user query
@@ -651,17 +624,14 @@ def try_browser_search(query: str, config, chat_models) -> str:
     for term in ['search', 'find', 'lookup', 'what is', 'how to', 'browse']:
         search_query = search_query.replace(term, '').strip()
     
-    # Check for concert/artist-related queries
-    concert_keywords = ["concert", "tour", "show", "ticket", "live", "performance", "upcoming", "dates"]
-    has_concert_terms = any(keyword in search_query.lower() for keyword in concert_keywords)
-    
-    # Check for direct site visits - but prioritize concert searches
-    if has_concert_terms:
-        # For concert/artist queries, always use Google search for best results
-        url = f"https://www.google.com/search?q={search_query.replace(' ', '+')}+upcoming+concerts"
-        print(f"{config.GREEN}Detected concert/artist search query. Using Google search.{config.RESET}")
-    elif "hacker news" in search_query.lower() or "hackernews" in search_query.lower() or "hn" in search_query.lower():
+    # Check for direct site visits
+    if "hacker news" in search_query.lower() or "hackernews" in search_query.lower() or "hn" in search_query.lower():
         url = "https://news.ycombinator.com/"
+        print(f"{config.CYAN}Using direct Hacker News scraper...{config.RESET}")
+        from .utils import direct_scrape_hacker_news
+        result = direct_scrape_hacker_news(url)
+        if result:
+            return result
     elif "reddit" in search_query.lower():
         url = f"https://www.reddit.com/search/?q={search_query.replace('reddit', '').replace(' ', '+')}"
     elif "github" in search_query.lower():
@@ -674,119 +644,57 @@ def try_browser_search(query: str, config, chat_models) -> str:
     print(f"{config.CYAN}Using URL: {url}{config.RESET}")
     
     try:
-        # Use our efficient web fetcher first (more reliable than MCP)
-        try:
-            from .web_fetcher import fetcher
-            logging.info("Initialized WebContentFetcher")
-            result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
-            if result:
-                # Return standard JSON for all sites
+        # Use our efficient web fetcher first
+        from .web_fetcher import fetcher
+        result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
+        if result:
+            # Convert WebContent object to JSON
+            if hasattr(result, 'to_dict'):
+                return json.dumps(result.to_dict())
+            elif isinstance(result, dict):
                 return json.dumps(result)
-        except Exception as e:
-            print(f"{config.YELLOW}Efficient web fetcher failed: {str(e)}. Trying WebBrowser fallback...{config.RESET}")
-        
-        # Use WebBrowser class directly as second choice
-        try:
-            from .small_context.protocol import WebBrowser
-            browser = WebBrowser()
-            result = browser.browse(url)
-            
-            # Format browser result into a structured format
-            formatted_result = {
-                "type": "webpage",
-                "url": url,
-                "title": result.get("title", "Web Page"),
-                "content": [
-                    {
-                        "type": "section",
-                        "title": "Web Content",
-                        "blocks": [
-                            {
-                                "type": "text",
-                                "text": result.get("content", "No content found")
-                            }
-                        ]
-                    }
-                ]
-            }
-            
-            # Add entities if available
-            if entities := result.get("entities"):
-                formatted_result["content"].append({
-                    "type": "section",
-                    "title": "Key Topics",
-                    "blocks": [
-                        {
-                            "type": "text",
-                            "text": "\n".join(f"• {entity}" for entity in entities)
-                        }
-                    ]
-                })
-            
-            return json.dumps(formatted_result)
-        except Exception as e:
-            print(f"{config.YELLOW}WebBrowser failed: {str(e)}. Trying MCP browser...{config.RESET}")
-        
-        # Try MCP browser tool as last resort
-        try:
-            response = use_mcp_tool(
-                server_name="small-context",
-                tool_name="browse_web",
-                arguments={"url": url}
-            )
-            # Empty array/object check
-            if not response or response.strip() in ["[]", "{}", ""]:
-                # Generic fallback for empty responses
-                fallback_content = {
+            else:
+                return json.dumps({
                     "type": "webpage",
                     "url": url,
-                    "title": f"Content from {url}",
-                    "content": [
-                        {
-                            "type": "section",
-                            "title": "Information",
-                            "blocks": [
-                                {
-                                    "type": "text",
-                                    "text": f"Successfully connected to {url} but no content was returned. This might be due to site restrictions or content formatting."
-                                }
-                            ]
-                        }
-                    ]
-                }
-                return json.dumps(fallback_content)
-            
-            # If we have a valid response
-            return response
-        except Exception as e:
-            print(f"{config.YELLOW}MCP browser failed: {str(e)}.{config.RESET}")
-        
-        # If all methods failed, return a helpful message
-        return json.dumps({
-            "type": "error",
-            "url": url,
-            "title": "Browser Search Failed",
-            "content": [
-                {
-                    "type": "section",
-                    "title": "Error Information",
-                    "blocks": [
-                        {
+                    "title": str(result),
+                    "content": [{
+                        "type": "section",
+                        "title": "Content",
+                        "blocks": [{
                             "type": "text",
-                            "text": f"Failed to retrieve content from {url}. This could be due to network issues, site restrictions, or the site requiring authentication."
-                        }
-                    ]
-                }
-            ]
-        })
+                            "text": str(result)
+                        }]
+                    }]
+                })
     except Exception as e:
-        print(f"{config.YELLOW}All browser search methods failed: {str(e)}{config.RESET}")
-        return json.dumps({
-            "type": "error",
-            "url": url,
-            "title": "Browser Search Failed",
-            "message": f"Failed to retrieve content. Error: {str(e)}"
-        })
+        print(f"{config.YELLOW}Web fetcher failed: {str(e)}. Trying fallback methods...{config.RESET}")
+    
+    # If web fetcher fails, try MCP browser tool
+    try:
+        response = use_mcp_tool(
+            server_name="small-context",
+            tool_name="browse_web",
+            arguments={"url": url}
+        )
+        if response:
+            return response
+    except Exception as e:
+        print(f"{config.YELLOW}MCP browser failed: {str(e)}{config.RESET}")
+    
+    return json.dumps({
+        "type": "error",
+        "url": url,
+        "title": "Browser Search Failed",
+        "content": [{
+            "type": "section",
+            "title": "Error Information",
+            "blocks": [{
+                "type": "text",
+                "text": f"Failed to retrieve content from {url}. This could be due to network issues, site restrictions, or the site requiring authentication."
+            }]
+        }]
+    })
 
 def handle_cli_command(query: str, config, chat_models) -> str:
     """Handle CLI command generation and evaluation."""

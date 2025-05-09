@@ -187,27 +187,26 @@ def print_message(sender, message):
 
 def direct_scrape_hacker_news(url):
     """Direct HTML scraping specifically for Hacker News with simple text output."""
-    # Import json at the function level to ensure it's always available
-    import json
-    
     try:
         import requests
         from bs4 import BeautifulSoup
-        
-        print(f"{CYAN}Using direct HTML scrape for Hacker News...{RESET}")
+        import json
         
         # Fetch the page
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5'
         }
         page = requests.get(url, headers=headers, timeout=10)
+        page.raise_for_status()
         soup = BeautifulSoup(page.content, 'html.parser')
         
         # Extract stories
         stories = []
         story_elements = soup.select('tr.athing')
         
-        for i, story in enumerate(story_elements[:15]):  # Get top 15 stories
+        for i, story in enumerate(story_elements[:15]):
             if i >= 15:  # Safety limit
                 break
                 
@@ -252,20 +251,58 @@ def direct_scrape_hacker_news(url):
                         comments = a.text.strip()
                         break
             
-            # Format as plain text
-            story_text = f"{i+1}. {title}"
-            if source:
-                story_text += f" ({source})"
-            stories.append(story_text)
+            # Add to stories list
+            stories.append({
+                "type": "story",
+                "title": title,
+                "url": link,
+                "metadata": {
+                    "source": source,
+                    "score": score,
+                    "comments": comments
+                }
+            })
         
-        # Build a simple text response
-        response = "# Top Stories from Hacker News\n\n"
-        response += "\n".join(stories)
-        response += "\n\nSource: https://news.ycombinator.com/"
+        # Build a structured response
+        response = {
+            "type": "webpage",
+            "url": url,
+            "title": "Hacker News - Current Top Stories",
+            "content": [
+                {
+                    "type": "section",
+                    "title": "About Hacker News",
+                    "blocks": [
+                        {
+                            "type": "text",
+                            "text": "Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator. The site features discussions and links to stories about technology, startups, and programming."
+                        }
+                    ]
+                }
+            ]
+        }
         
-        return response
+        # Add stories as sections
+        for story in stories:
+            response["content"].append({
+                "type": "section",
+                "title": story["title"],
+                "blocks": [
+                    {
+                        "type": "text",
+                        "text": f"Source: {story['metadata']['source']}\nScore: {story['metadata']['score']}\nComments: {story['metadata']['comments']}"
+                    },
+                    {
+                        "type": "link",
+                        "text": "Read more",
+                        "url": story["url"]
+                    }
+                ]
+            })
+        
+        return json.dumps(response)
     except Exception as e:
-        print(f"{YELLOW}Direct HTML scrape for Hacker News failed: {str(e)}{RESET}")
+        print(f"Direct HTML scrape for Hacker News failed: {str(e)}")
         return None
 
 def use_mcp_tool(server_name: str, tool_name: str, arguments: dict) -> str:

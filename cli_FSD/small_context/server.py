@@ -248,46 +248,51 @@ class SmallContextServer:
             if not parsed.scheme or not parsed.netloc:
                 raise ValueError("Invalid URL format")
             
-            try:
-                async with aiohttp.ClientSession(headers=self.default_headers) as session:
-                    async with session.get(url, timeout=30, ssl=False, allow_redirects=True, max_redirects=5) as response:
-                        response.raise_for_status()
-                        html = await response.text()
-                        
-                        await asyncio.sleep(2)
-                        
-                        try:
-                            async with session.get(str(response.url), timeout=30, ssl=False) as updated_response:
-                                updated_html = await updated_response.text()
-                                if len(updated_html) > len(html):
-                                    html = updated_html
-                        except Exception:
-                            pass
-            except aiohttp.ClientError as e:
-                error_msg = str(e)
-                if "SSL" in error_msg:
-                    error_msg = "SSL certificate verification failed. Please check the URL or try a different site."
-                elif "DNS" in error_msg:
-                    error_msg = "Could not resolve domain name. Please check the URL."
-                elif "timeout" in str(e).lower():
-                    error_msg = "Request timed out. The server may be busy or unavailable."
-                elif "too many redirects" in str(e).lower():
-                    error_msg = "Too many redirects. The URL may be redirecting in a loop."
-                else:
-                    error_msg = f"Network error: {error_msg}"
-                return {
-                    "type": "error",
-                    "url": url,
-                    "timestamp": time.time(),
-                    "error": error_msg
-                }
-            except Exception as e:
-                return {
-                    "type": "error",
-                    "url": url,
-                    "timestamp": time.time(),
-                    "error": f"Error during aiohttp session: {str(e)}"
-                }
+            # Add retry logic for network issues
+            max_retries = 3
+            retry_delay = 2
+            
+            for attempt in range(max_retries):
+                try:
+                    async with aiohttp.ClientSession(headers=self.default_headers) as session:
+                        async with session.get(url, timeout=30, ssl=False, allow_redirects=True, max_redirects=5) as response:
+                            response.raise_for_status()
+                            html = await response.text()
+                            
+                            # Wait for dynamic content
+                            await asyncio.sleep(retry_delay)
+                            
+                            # Try to get updated content
+                            try:
+                                async with session.get(str(response.url), timeout=30, ssl=False) as updated_response:
+                                    updated_html = await updated_response.text()
+                                    if len(updated_html) > len(html):
+                                        html = updated_html
+                            except Exception:
+                                pass
+                            
+                            break  # Success, exit retry loop
+                except aiohttp.ClientError as e:
+                    if attempt == max_retries - 1:  # Last attempt
+                        error_msg = str(e)
+                        if "SSL" in error_msg:
+                            error_msg = "SSL certificate verification failed. Please check the URL or try a different site."
+                        elif "DNS" in error_msg:
+                            error_msg = "Could not resolve domain name. Please check the URL."
+                        elif "timeout" in str(e).lower():
+                            error_msg = "Request timed out. The server may be busy or unavailable."
+                        elif "too many redirects" in str(e).lower():
+                            error_msg = "Too many redirects. The URL may be redirecting in a loop."
+                        else:
+                            error_msg = f"Network error: {error_msg}"
+                        return {
+                            "type": "error",
+                            "url": url,
+                            "timestamp": time.time(),
+                            "error": error_msg
+                        }
+                    await asyncio.sleep(retry_delay)  # Wait before retry
+                    continue
             
             try:
                 soup = BeautifulSoup(html, 'html.parser')

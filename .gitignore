@@ -11,6 +11,7 @@ cli_FSD.egg-info
 *.assembled_
 # Distribution / packaging
 .Python
+.command_history.json
 build/
 develop-eggs/
 dist/
