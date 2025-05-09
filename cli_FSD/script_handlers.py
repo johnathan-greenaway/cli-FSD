@@ -608,17 +608,7 @@ def process_response(query: str, response: str, config, chat_models, allow_brows
         return f"Error processing response: {str(e)}. Original response: {response[:500]}..."
 
 def try_browser_search(query: str, config, chat_models) -> str:
-    """
-    Attempt to use browser search to find an answer or final answer.
-    
-    Args:
-        query: The user query
-        config: Configuration object
-        chat_models: Chat models to use
-        
-    Returns:
-        str: Browser search results or empty string if failed
-    """
+    """Attempt to use browser search to find an answer or final answer."""
     search_query = query
     # Clean up query for search
     for term in ['search', 'find', 'lookup', 'what is', 'how to', 'browse']:
@@ -648,25 +638,88 @@ def try_browser_search(query: str, config, chat_models) -> str:
         from .web_fetcher import fetcher
         result = fetcher.fetch_and_process(url, mode="detailed", use_cache=True)
         if result:
-            # Convert WebContent object to JSON
-            if hasattr(result, 'to_dict'):
-                return json.dumps(result.to_dict())
-            elif isinstance(result, dict):
-                return json.dumps(result)
-            else:
+            # Convert WebContent object to the expected format
+            formatted_result = {
+                "type": "webpage",
+                "url": url,
+                "title": result.get("title", "No title"),
+                "content": []
+            }
+            
+            # Add text content if available
+            if text_content := result.get("text_content"):
+                formatted_result["content"].append({
+                    "type": "section",
+                    "title": "Main Content",
+                    "blocks": [{
+                        "type": "text",
+                        "text": text_content
+                    }]
+                })
+            
+            # Add structured content if available
+            if structured_content := result.get("structured_content"):
+                current_section = None
+                for item in structured_content:
+                    if item.get("type") == "heading":
+                        if current_section:
+                            formatted_result["content"].append(current_section)
+                        current_section = {
+                            "type": "section",
+                            "title": item.get("text", ""),
+                            "blocks": []
+                        }
+                    elif item.get("type") == "paragraph" and current_section:
+                        current_section["blocks"].append({
+                            "type": "text",
+                            "text": item.get("text", "")
+                        })
+                if current_section:
+                    formatted_result["content"].append(current_section)
+            
+            # Add links if available
+            if links := result.get("links"):
+                formatted_result["content"].append({
+                    "type": "section",
+                    "title": "Related Links",
+                    "blocks": [
+                        {
+                            "type": "link",
+                            "text": link.get("text", "Link"),
+                            "url": link.get("url", "")
+                        }
+                        for link in links[:5]  # Limit to first 5 links
+                    ]
+                })
+            
+            # If we have no content sections but have text_content, create a basic section
+            if not formatted_result["content"] and text_content:
+                formatted_result["content"].append({
+                    "type": "section",
+                    "title": "Content",
+                    "blocks": [{
+                        "type": "text",
+                        "text": text_content
+                    }]
+                })
+            
+            # If we still have no content, return an error
+            if not formatted_result["content"]:
                 return json.dumps({
-                    "type": "webpage",
+                    "type": "error",
                     "url": url,
-                    "title": str(result),
+                    "title": "No Content Found",
                     "content": [{
                         "type": "section",
-                        "title": "Content",
+                        "title": "Error Information",
                         "blocks": [{
                             "type": "text",
-                            "text": str(result)
+                            "text": f"Failed to extract meaningful content from {url}. The page might be empty or require authentication."
                         }]
                     }]
                 })
+            
+            return json.dumps(formatted_result)
     except Exception as e:
         print(f"{config.YELLOW}Web fetcher failed: {str(e)}. Trying fallback methods...{config.RESET}")
     
