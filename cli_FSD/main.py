@@ -190,35 +190,137 @@ def process_input_based_on_mode(query, config, chat_models):
     
     # Check for browse/visit commands
     if query.lower().startswith(('browse ', 'visit ')):
+        # First make sure the format_browser_response function is available
+        from .script_handlers import format_browser_response, try_browser_search
+
         # Extract the target from the command
         target = query[7:].strip() if query.lower().startswith('browse ') else query[6:].strip()
-        
+
         # Special handling for Hacker News
         if "hacker news" in target.lower() or "hn" in target.lower():
-            result = direct_scrape_hacker_news("https://news.ycombinator.com/")
-            if result:
-                try:
-                    # Parse the JSON response
-                    parsed_result = json.loads(result)
-                    # Format the response
-                    formatted_response = format_browser_response(target, result, config, chat_models)
-                    print_streamed_message(formatted_response, config.CYAN)
-                    return formatted_response
-                except Exception as e:
-                    print(f"{config.RED}Error formatting Hacker News response: {str(e)}{config.RESET}")
-                    return f"Error processing Hacker News content: {str(e)}"
-            else:
-                return "Failed to fetch Hacker News content. Please try again."
+            print(f"{config.CYAN}Detected Hacker News request. Will prioritize accordingly.{config.RESET}")
+
+            # Add more detailed debugging
+            print(f"{config.GREEN}Using try_browser_search for Hacker News...{config.RESET}")
+
+            # Skip try_browser_search for Hacker News and go directly to our reliable scraper
+            # result = try_browser_search("hacker news", config, chat_models)
+
+            # Just set result to None so we use the fallback
+            result = None
+
+            # Debug the result (skip if result is None)
+            if result is not None:
+                print(f"{config.YELLOW}Result type: {type(result).__name__}{config.RESET}")
+                if isinstance(result, str):
+                    print(f"{config.YELLOW}Result length: {len(result)} chars{config.RESET}")
+                    print(f"{config.YELLOW}Result preview: {result[:100] if len(result) > 100 else result}{config.RESET}")
+
+            # Force a direct Hacker News scrape for reliability
+            print(f"{config.GREEN}Trying direct Hacker News scrape as a fallback...{config.RESET}")
+            try:
+                # Just output simple stories in markdown format for reliability
+                stories = []
+                stories.append("# Hacker News - Top Stories\n")
+                stories.append("Hacker News is a social news website focusing on computer science and entrepreneurship, run by Y Combinator.\n")
+
+                # Use beautiful soup for a very simple scrape
+                import requests
+                from bs4 import BeautifulSoup
+
+                hn_url = "https://news.ycombinator.com/"
+                headers = {'User-Agent': 'Mozilla/5.0'}
+
+                page = requests.get(hn_url, headers=headers, timeout=10)
+                soup = BeautifulSoup(page.content, 'html.parser')
+
+                # Extract stories
+                story_elements = soup.select('tr.athing')
+
+                for i, story in enumerate(story_elements[:10]):  # Top 10 stories
+                    title_element = story.select_one('td.title > span.titleline > a')
+                    if not title_element:
+                        continue
+
+                    title = title_element.text.strip()
+                    link = title_element.get('href', '')
+
+                    # Make link absolute if it's relative
+                    if link and not link.startswith(('http://', 'https://')):
+                        if link.startswith('/'):
+                            link = f"https://news.ycombinator.com{link}"
+                        else:
+                            link = f"https://news.ycombinator.com/{link}"
+
+                    # Get source domain if available
+                    source = ""
+                    source_element = story.select_one('span.sitestr')
+                    if source_element:
+                        source = f"Source: {source_element.text.strip()}\n"
+
+                    # Try to get score and comments
+                    score = "Unknown points"
+                    comments = "0 comments"
+
+                    score_row = story.find_next_sibling('tr')
+                    if score_row:
+                        score_element = score_row.select_one('span.score')
+                        if score_element:
+                            score = score_element.text.strip()
+
+                        comments_element = score_row.select('a')
+                        for a in comments_element:
+                            if 'comment' in a.text:
+                                comments = a.text.strip()
+                                break
+
+                    # Add story to list
+                    stories.append(f"## {title}\n")
+                    if source:
+                        stories.append(source)
+                    stories.append(f"**{score}** | **{comments}**\n")
+                    stories.append(f"[Read more]({link})\n")
+
+                simple_result = "\n".join(stories)
+                print_streamed_message(simple_result, config.CYAN, config)
+                return simple_result
+
+            except Exception as fallback_e:
+                print(f"{config.RED}Fallback direct scrape failed: {str(fallback_e)}{config.RESET}")
+
+                # If we have a result from try_browser_search, still try to use it
+                if result:
+                    try:
+                        # If the result is already a string and not JSON, return it directly
+                        if isinstance(result, str) and not (result.strip().startswith('{') and result.strip().endswith('}')):
+                            print_streamed_message(result, config.CYAN, config)
+                            return result
+
+                        # Otherwise format the response
+                        formatted_response = format_browser_response(target, result, config, chat_models)
+                        print_streamed_message(formatted_response, config.CYAN, config)
+                        return formatted_response
+                    except Exception as e:
+                        print(f"{config.RED}Error formatting Hacker News response: {str(e)}{config.RESET}")
+                        # Return the raw result if formatting fails
+                        if isinstance(result, str):
+                            print_streamed_message(result, config.CYAN, config)
+                            return result
+                        return f"Error processing Hacker News content: {str(e)}"
+                else:
+                    return "Failed to fetch Hacker News content after multiple attempts. Please try again."
         
         # Use ContextAgent to analyze and execute other browse requests
         try:
+            # Function already imported at the beginning of the function
+
             # Get the context agent's analysis
             context_analysis = context_agent.analyze_request(target)
-            
+
             if not context_analysis or not isinstance(context_analysis, dict):
                 print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
                 return "Failed to analyze browse request. Please try again."
-            
+
             # Create a tool selection for browsing
             tool_selection = {
                 "tool_selection": {
@@ -229,14 +331,68 @@ def process_input_based_on_mode(query, config, chat_models):
                     }
                 }
             }
-            
+
             # Execute the tool selection
             result = context_agent.execute_tool_selection(tool_selection)
             
+            # Special handling for Hacker News
+            if "news.ycombinator.com" in target:
+                result = direct_scrape_hacker_news(target)
+                if result:
+                    try:
+                        # Parse the JSON response
+                        parsed_result = json.loads(result)
+                        # Format the response
+                        formatted_response = format_browser_response(target, result, config, chat_models)
+                        print_streamed_message(formatted_response, config.CYAN)
+                        return formatted_response
+                    except Exception as e:
+                        print(f"{config.RED}Error formatting Hacker News response: {str(e)}{config.RESET}")
+                        return f"Error processing Hacker News content: {str(e)}"
+                else:
+                    # Fallback to standard processing if HN scraper fails
+                    pass
+
+            # Use MCP tool directly for browsing - prioritizing the small-context server
+            try:
+                from .utils import use_mcp_tool
+
+                # Directly call the MCP browse_web tool
+                print(f"{config.CYAN}Using MCP browse_web tool for {target}...{config.RESET}")
+                mcp_result = use_mcp_tool(
+                    server_name="small-context",
+                    tool_name="browse_web",
+                    arguments={"url": target}
+                )
+
+                if mcp_result:
+                    try:
+                        # Format and return the result
+                        formatted_response = format_browser_response(target, mcp_result, config, chat_models)
+
+                        # Always print the formatted response
+                        print(f"{config.GREEN}Successfully formatted MCP browser response{config.RESET}")
+
+                        if formatted_response and len(formatted_response) > 0:
+                            print_streamed_message(formatted_response, config.CYAN, config)
+                        else:
+                            print(f"{config.RED}Empty formatted response{config.RESET}")
+
+                        return formatted_response
+                    except Exception as format_error:
+                        print(f"{config.YELLOW}Error formatting MCP browser response: {str(format_error)}. Using raw response.{config.RESET}")
+                        return mcp_result
+                else:
+                    # If MCP tool returns nothing, continue with normal execution
+                    print(f"{config.YELLOW}MCP tool returned no result. Continuing with normal execution.{config.RESET}")
+            except Exception as mcp_error:
+                print(f"{config.YELLOW}MCP browse_web tool failed: {str(mcp_error)}. Continuing with normal execution.{config.RESET}")
+
+            # Fall back to the original execution path
             if result and not result.get("error"):
                 # Format and return the result
                 formatted_response = format_browser_response(target, json.dumps(result), config, chat_models)
-                
+
                 # If the response is a string, print it directly
                 if isinstance(formatted_response, str):
                     print_streamed_message(formatted_response, config.CYAN)
@@ -313,15 +469,73 @@ def process_input_based_on_mode(query, config, chat_models):
         
         # Handle different tool types
         if result.get("tool") == "web_content":
-            # Use web content agent
+            # Use web content agent with our updated prioritization
             if result.get("operation") in ["fetch", "browse", "search"]:
+                # For browse/search operations, use our specialized function for better prioritization
+                if result.get("operation") in ["browse", "search"]:
+                    # Import both needed functions at once
+                    from .script_handlers import try_browser_search, format_browser_response
+
+                    # For browse operations, use the URL directly
+                    if result.get("operation") == "browse" and "url_or_query" in result:
+                        print(f"{config.CYAN}Using specialized browser search for URL: {result['url_or_query']}{config.RESET}")
+                        browser_result = try_browser_search(result['url_or_query'], config, chat_models)
+
+                        # Format the response if needed
+                        if browser_result:
+                            # If already a string, just return it
+                            if isinstance(browser_result, str):
+                                # If it's a JSON string, try to format it
+                                if browser_result.strip().startswith('{') and browser_result.strip().endswith('}'):
+                                    try:
+                                        formatted_response = format_browser_response(result['url_or_query'], browser_result, config, chat_models)
+                                        print_streamed_message(formatted_response, config.CYAN, config)
+                                        return formatted_response
+                                    except Exception as e:
+                                        print(f"{config.RED}Error formatting browser response: {str(e)}{config.RESET}")
+                                        return browser_result
+                                # Otherwise just print it directly
+                                print_streamed_message(browser_result, config.CYAN, config)
+                                return browser_result
+                        else:
+                            error_msg = f"Failed to browse {result['url_or_query']}"
+                            print(f"{config.RED}{error_msg}{config.RESET}")
+                            return error_msg
+
+                    # For search operations, use the query
+                    elif result.get("operation") == "search" and "url_or_query" in result:
+                        print(f"{config.CYAN}Using specialized browser search for query: {result['url_or_query']}{config.RESET}")
+                        browser_result = try_browser_search(result['url_or_query'], config, chat_models)
+
+                        # Format and return the response
+                        if browser_result:
+                            try:
+                                formatted_response = format_browser_response(result['url_or_query'], browser_result, config, chat_models)
+                                print_streamed_message(formatted_response, config.CYAN, config)
+                                return formatted_response
+                            except Exception as e:
+                                print(f"{config.RED}Error formatting browser response: {str(e)}{config.RESET}")
+                                print_streamed_message(browser_result, config.CYAN, config)
+                                return browser_result
+                        else:
+                            error_msg = f"Failed to search for {result['url_or_query']}"
+                            print(f"{config.RED}{error_msg}{config.RESET}")
+                            return error_msg
+
+                # Fall back to standard web_agent for other operations
                 response = web_agent.execute_command(f"{result['operation']} {result['url_or_query']} {result.get('mode', 'basic')}")
                 if response.get("error"):
                     print(f"{config.RED}Error: {response['error']}{config.RESET}")
                     return f"Error: {response['error']}"
-                
+
                 # Update context with the response
                 context_agent.update_context(result['operation'], response)
+
+                # Format the response if needed
+                if isinstance(response, dict) and not response.get("error"):
+                    formatted_response = format_browser_response(result.get('url_or_query', 'query'), response, config, chat_models)
+                    print_streamed_message(formatted_response, config.CYAN, config)
+                    return formatted_response
                 return response
                 
         elif result.get("tool") == "file_operation":

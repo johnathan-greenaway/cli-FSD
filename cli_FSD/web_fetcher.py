@@ -101,14 +101,19 @@ class WebContentFetcher:
     
     def fetch_url(self, url: str, use_cache: bool = True) -> Optional[str]:
         """Fetch content from a URL.
-        
+
         Args:
             url: The URL to fetch
             use_cache: Whether to use cached content if available
-            
+
         Returns:
             The HTML content as string or None if fetching failed
         """
+        # Add http:// if the URL doesn't have a scheme
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            logger.info(f"Added https:// prefix to URL: {url}")
+
         # Validate URL
         try:
             parsed = urlparse(url)
@@ -385,33 +390,47 @@ class WebContentFetcher:
 
     def fetch_and_process(self, url: str, mode: str = "basic", use_cache: bool = True) -> Dict[str, Any]:
         """Fetch and process a URL in one operation.
-        
+
         Args:
             url: The URL to fetch and process
             mode: Processing mode ('basic', 'detailed', or 'summary')
             use_cache: Whether to use cached content if available
-            
+
         Returns:
-            Processed content as dictionary
+            Processed content as dictionary or simple text
         """
         html = self.fetch_url(url, use_cache)
-        
+
         if not html:
             return {
                 "error": f"Failed to fetch content from {url}",
                 "url": url,
                 "timestamp": time.time()
             }
-        
+
         web_content = self.process_html(html, url, mode)
-        
-        # Return appropriate format based on mode
+
+        # Get the appropriate format based on mode
         if mode == "detailed":
-            return web_content.to_detailed_dict()
+            result = web_content.to_detailed_dict()
         elif mode == "summary":
-            return web_content.to_summary_dict()
+            result = web_content.to_summary_dict()
         else:  # "basic" mode
-            return web_content.to_basic_dict()
+            result = web_content.to_basic_dict()
+
+        # Add a simpler text representation - this is useful for simpler models
+        # Create a markdown-formatted text representation
+        markdown_text = f"# {result['title']}\n\nSource: {url}\n\n"
+
+        # Add text content
+        if "text_content" in result and result["text_content"]:
+            markdown_text += result["text_content"]
+
+        # Add the markdown text to the result
+        result["markdown_content"] = markdown_text
+
+        # Return the dictionary result directly - we don't need the JSON repair anymore
+        return result
 
 
 # Create a singleton instance

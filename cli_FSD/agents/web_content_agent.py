@@ -311,15 +311,20 @@ class WebContentAgent:
     
     def fetch_content(self, url: str, mode: str = "basic", use_cache: bool = True) -> Dict[str, Any]:
         """Fetch and process web content.
-        
+
         Args:
             url: URL to fetch
             mode: Processing mode ('basic', 'detailed', or 'summary')
             use_cache: Whether to use cached content if available
-            
+
         Returns:
             Processed content as dictionary
         """
+        # Add http:// if the URL doesn't have a scheme
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            logger.info(f"Added https:// prefix to URL: {url}")
+
         # Validate URL
         try:
             parsed = urlparse(url)
@@ -331,45 +336,133 @@ class WebContentAgent:
             error_msg = f"Error parsing URL {url}: {e}"
             logger.error(error_msg)
             return {"error": error_msg}
-        
+
         # Validate mode
         if mode not in ["basic", "detailed", "summary"]:
             error_msg = f"Invalid mode: {mode}. Must be one of: basic, detailed, summary"
             logger.error(error_msg)
             return {"error": error_msg}
-        
-        # Try using direct fetcher first if available
+
+        # Priority 1: Special direct scraper for Hacker News
+        if "news.ycombinator.com" in url:
+            try:
+                from ..utils import direct_scrape_hacker_news
+                logger.info(f"Priority 1: Using direct Hacker News scraper for {url}...")
+
+                hn_result = direct_scrape_hacker_news(url)
+                if hn_result:
+                    logger.info(f"Direct Hacker News scraper returned content for {url}")
+                    # Instead of complex JSON handling, try to return a simple format
+                    try:
+                        # If the result is a string and looks like JSON, parse it
+                        if isinstance(hn_result, str) and hn_result.strip().startswith('{') and hn_result.strip().endswith('}'):
+                            parsed = json.loads(hn_result)
+                            # Simple text output format
+                            if parsed.get("title") and parsed.get("content"):
+                                # Create a simple markdown structure
+                                content = f"# {parsed['title']}\n\n"
+                                content += f"Source: {url}\n\n"
+
+                                # Add content sections
+                                for section in parsed.get("content", []):
+                                    if isinstance(section, dict):
+                                        if section.get("type") == "section" and section.get("title"):
+                                            content += f"## {section['title']}\n\n"
+                                            for block in section.get("blocks", []):
+                                                if isinstance(block, dict) and block.get("text"):
+                                                    content += f"{block['text']}\n\n"
+                                        elif section.get("type") == "story" and section.get("title"):
+                                            content += f"## {section['title']}\n\n"
+                                            if section.get("metadata"):
+                                                for key, value in section["metadata"].items():
+                                                    content += f"**{key.capitalize()}**: {value}\n"
+                                                content += "\n"
+
+                                return {"content_type": "webpage", "url": url, "title": parsed['title'], "text_content": content}
+                            return parsed
+                        return {"content_type": "webpage", "url": url, "text_content": hn_result}
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse HN result as JSON, using as raw content")
+                        return {"content_type": "webpage", "url": url, "text_content": hn_result}
+            except ImportError:
+                logger.warning("Direct Hacker News scraper not available, falling back to web fetcher")
+            except Exception as e:
+                logger.warning(f"Direct Hacker News scraper failed: {str(e)}. Falling back to web fetcher...")
+
+        # Priority 2: General web fetcher
         try:
             from ..web_fetcher import fetcher
-            logger.info(f"Using direct web fetcher for {url}")
-            return fetcher.fetch_and_process(url, mode, use_cache)
+            logger.info(f"Priority 2: Using web fetcher for {url}...")
+            result = fetcher.fetch_and_process(url, mode, use_cache)
+
+            # Try to simplify the response if possible
+            if isinstance(result, dict):
+                # Add simplified text content if possible
+                if result.get("title") and result.get("text_content"):
+                    simple_text = f"# {result['title']}\n\nSource: {url}\n\n{result['text_content']}"
+                    result["simple_text"] = simple_text
+
+                return result
+            return {"content_type": "webpage", "url": url, "text_content": str(result)}
         except ImportError:
-            logger.warning("WebContentFetcher module not available, falling back to API")
+            logger.warning("WebContentFetcher module not available, falling back to MCP")
         except Exception as e:
-            logger.warning(f"Direct fetching failed: {e}, falling back to API")
-        
-        # Fall back to API request
+            logger.warning(f"Web fetcher failed: {e}, falling back to MCP")
+
+        # Priority 3: MCP browser tool
         try:
-            logger.info(f"Making API request to {self.endpoint}")
+            from ..utils import use_mcp_tool
+            logger.info(f"Priority 3: Using MCP browser tool for {url}...")
+
+            mcp_result = use_mcp_tool(
+                server_name="small-context",
+                tool_name="browse_web",
+                arguments={"url": url}
+            )
+
+            if mcp_result:
+                logger.info(f"MCP browser tool returned content for {url}")
+                # Return content directly if possible
+                if isinstance(mcp_result, str):
+                    # If not JSON, return as text content
+                    if not (mcp_result.strip().startswith('{') and mcp_result.strip().endswith('}')):
+                        return {"content_type": "webpage", "url": url, "text_content": mcp_result}
+
+                    # If JSON, try parsing it for simpler return format
+                    try:
+                        parsed = json.loads(mcp_result)
+                        return parsed
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse MCP result as JSON, using as raw content")
+                        return {"content_type": "webpage", "url": url, "text_content": mcp_result}
+                return mcp_result
+        except ImportError:
+            logger.warning("MCP tool module not available, falling back to API")
+        except Exception as e:
+            logger.warning(f"MCP browser tool failed: {str(e)}. Falling back to API...")
+
+        # Last resort: API request
+        try:
+            logger.info(f"Last resort: Making API request to {self.endpoint}")
             payload = {
                 "url": url,
                 "mode": mode,
                 "use_cache": use_cache
             }
-            
+
             response = self.session.post(self.endpoint, json=payload, timeout=30)
             response.raise_for_status()
-            
+
             return response.json()
-            
+
         except requests.exceptions.RequestException as e:
             error_msg = f"API request error: {e}"
             logger.error(error_msg)
-            return {"error": error_msg}
+            return {"error": error_msg, "url": url}
         except json.JSONDecodeError as e:
             error_msg = f"Error parsing API response: {e}"
             logger.error(error_msg)
-            return {"error": error_msg}
+            return {"error": error_msg, "url": url}
     
     def format_for_context(self, content: Dict[str, Any], priority: str = "important") -> Dict[str, Any]:
         """Format web content for the small context protocol.
@@ -511,16 +604,63 @@ class WebContentAgent:
     
     def browse(self, url: str, mode: str = "basic") -> Dict[str, Any]:
         """Browse a webpage and format it for the context agent.
-        
+
         Args:
             url: URL to browse
             mode: Processing mode ('basic', 'detailed', or 'summary')
-            
+
         Returns:
             Formatted message for the small context agent
         """
-        content = self.fetch_content(url, mode)
-        return self.format_for_context(content)
+        # Use script_handlers.try_browser_search for a more aligned prioritization
+        try:
+            from ..script_handlers import try_browser_search
+
+            # Get the config object - needed for colors in log output
+            try:
+                from ..configuration import Config
+                config = Config()
+            except ImportError:
+                config = None
+
+            # Use the specialized browse function with proper prioritization
+            logger.info(f"Using try_browser_search for improved prioritization: {url}")
+            result = try_browser_search(url, config, None)
+
+            # If result is a JSON string, parse it
+            if isinstance(result, str):
+                if result.strip().startswith('{') and result.strip().endswith('}'):
+                    try:
+                        import json
+                        result = json.loads(result)
+                    except json.JSONDecodeError:
+                        # If parsing fails, create a simple response
+                        result = {
+                            "content_type": "webpage",
+                            "url": url,
+                            "text_content": result
+                        }
+                else:
+                    # Create a simple response with the text content
+                    result = {
+                        "content_type": "webpage",
+                        "url": url,
+                        "title": "Web Content",
+                        "text_content": result
+                    }
+
+            # Format the response and return
+            return self.format_for_context(result)
+        except ImportError:
+            # Fall back to traditional fetch_content if try_browser_search is not available
+            logger.warning("try_browser_search not available, falling back to fetch_content")
+            content = self.fetch_content(url, mode)
+            return self.format_for_context(content)
+        except Exception as e:
+            # Log the error and fall back to traditional fetch_content
+            logger.error(f"Error using try_browser_search: {str(e)}. Falling back to fetch_content")
+            content = self.fetch_content(url, mode)
+            return self.format_for_context(content)
     
     def search_for_information(self, urls: List[str], query: str) -> Dict[str, Any]:
         """Search multiple pages for specific information.
