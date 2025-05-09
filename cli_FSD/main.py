@@ -69,26 +69,47 @@ def main():
 
     # Initialize command history
     command_history = CommandHistory()
-    
+
     # Set up readline for query history
     readline.set_history_length(1000)
-    
+
     def completer(text, state):
         """Query completer for fuzzy search."""
         if not text:
             return None
-        
+
         # Get fuzzy matches from command history
         matches = command_history.fuzzy_search(text)
         if state < len(matches):
             return matches[state]
         return None
-    
+
     # Set up readline completer
     readline.set_completer(completer)
     readline.parse_and_bind('tab: complete')
 
-    # Display greeting
+    # Process command line arguments if provided
+    # This handles direct commands like "@ visit example.com"
+    if args.query and len(args.query) > 0:
+        # Join the query arguments to form a single command
+        direct_command = ' '.join(args.query)
+        logging.info(f"Processing direct command: {direct_command}")
+
+        try:
+            # Special handling for browse/visit commands
+            if direct_command.lower().startswith(('browse ', 'visit ')):
+                result = process_input_based_on_mode(direct_command, config, chat_models)
+                sys.exit(0)  # Exit after processing the direct command
+            else:
+                # Process other commands
+                result = process_input_based_on_mode(direct_command, config, chat_models)
+                sys.exit(0)  # Exit after processing the direct command
+        except Exception as e:
+            logging.error(f"Error processing direct command: {str(e)}")
+            print(f"Error processing command: {str(e)}")
+            sys.exit(1)
+
+    # Display greeting for interactive mode
     display_greeting()
 
     while True:
