@@ -31,7 +31,11 @@ class Config:
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.server_port = int(os.getenv("SERVER_PORT", 5000))
         
-        # Load configurations
+        # Sequential Thinking settings
+        self.sequential_thinking_enabled = False
+        self.sequential_thinking_llm_choice = False
+        
+        # Load preferences
         self.load_preferences()
         self.load_mcp_settings()
 
@@ -40,11 +44,16 @@ class Config:
             # GPT-4o Models
             "gpt-4o": "gpt-4o",
             "gpt-4o-mini": "gpt-4o-mini",
-            
-            # o1 Models
+            "gpt-4.1": "gpt-4.1",
+            "gpt-4.1-mini": "gpt-4.1-mini",
+            "gpt-4.1-nano": "gpt-4.1-nano",
+
+            # Reasoning Models
             "o1": "o1",
             "o1-mini": "o1-mini",
             "o1-preview": "o1-preview",
+            "o3": "o3",
+            "o4-mini": "o4-mini",
             
             # Legacy GPT-4 Models
             "gpt-4-turbo": "gpt-4-turbo",
@@ -54,9 +63,11 @@ class Config:
             # Claude Models
             "claude-3-opus": "claude-3-opus-20240229",
             "claude-3-sonnet": "claude-3-sonnet-20240229",
-            "claude-3-haiku": "claude-3-haiku-20240307"
-        }
-
+            "claude-3-haiku": "claude-3-haiku-20240307",
+            "claude-3.5-sonnet": "claude-3-5-sonnet-latest",
+            "claude-3-7-sonnet": "claude-3-7-sonnet-latest"
+                  }
+        
     def load_preferences(self):
         """Load preferences from file or set defaults"""
         try:
@@ -71,6 +82,10 @@ class Config:
                     self.use_groq = prefs.get('use_groq', False)
                     self.scriptreviewer_on = prefs.get('scriptreviewer_on', False)
                     self.last_ollama_model = prefs.get('last_ollama_model', 'llama3.1:8b')
+                    
+                    # Load sequential thinking preferences
+                    self.sequential_thinking_enabled = prefs.get('sequential_thinking_enabled', False)
+                    self.sequential_thinking_llm_choice = prefs.get('sequential_thinking_llm_choice', False)
             else:
                 self.session_model = None
                 self.safe_mode = False
@@ -106,10 +121,12 @@ class Config:
                 'use_ollama': self.use_ollama,
                 'use_groq': self.use_groq,
                 'scriptreviewer_on': self.scriptreviewer_on,
-                'last_ollama_model': self.last_ollama_model
+                'last_ollama_model': self.last_ollama_model,
+                'sequential_thinking_enabled': self.sequential_thinking_enabled,
+                'sequential_thinking_llm_choice': self.sequential_thinking_llm_choice
             }
             with open(self.preferences_file, 'w') as f:
-                json.dump(prefs, f)
+                json.dump(prefs, f, indent=2)
         except Exception as e:
             print(f"Error saving preferences: {e}")
 

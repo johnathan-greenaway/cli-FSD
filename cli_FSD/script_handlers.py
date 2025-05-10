@@ -497,7 +497,10 @@ def format_browser_response(query: str, response: str, config, chat_models) -> s
                     chat_models=chat_models,
                     system_prompt=(
                         "You are an expert at formatting raw web data into helpful responses. "
-                        "Focus on extracting the most relevant information and presenting it clearly."
+                        "Focus on extracting the most relevant information and presenting it clearly. "
+                        "Prioritize key facts, figures, and actionable insights. "
+                        "Use bullet points, lists, and concise paragraphs to structure the information. "
+                        "Omit any irrelevant details or promotional content."
                     )
                 )
                 
@@ -1930,120 +1933,91 @@ def recall_history_item(config, index):
         return message
 
 def display_session_status(config):
-    """Display current session status."""
-    # Box dimensions
-    box_width = 60
+    """Display current session status in a formatted dashboard."""
+    print(f"\n{config.CYAN}╭{'─' * 60}╮{config.RESET}")
+    print(f"{config.CYAN}│{'SESSION STATUS DASHBOARD':^60}│{config.RESET}")
+    print(f"{config.CYAN}├{'─' * 60}┤{config.RESET}")
     
-    # Headers for each section
-    model_header = "🤖 MODEL"
-    cache_header = "💾 CACHE"
-    history_header = "📜 HISTORY"
-    settings_header = "⚙️ SETTINGS"
+    # Model Status
+    print(f"{config.CYAN}│ 🤖 MODEL{' ' * 51}│{config.RESET}")
+    print(f"{config.CYAN}│ • Active Model: {config.current_model:<40}│{config.RESET}")
+    print(f"{config.CYAN}│ • Available: Claude | Ollama | Groq{' ' * 30}│{config.RESET}")
     
-    # Print title box
-    print(f"\n{config.CYAN}╭─{'─' * box_width}╮{config.RESET}")
-    print(f"{config.CYAN}│ {config.BOLD}{config.YELLOW}SESSION STATUS DASHBOARD{' ' * (box_width - 24)}│{config.RESET}")
-    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    # Cache Status
+    print(f"{config.CYAN}├{'─' * 60}┤{config.RESET}")
+    print(f"{config.CYAN}│ 💾 CACHE{' ' * 51}│{config.RESET}")
+    from .script_handlers import _content_cache
+    cache_status = "Empty" if not _content_cache['raw_content'] else "Loaded"
+    formatted_status = "Yes" if _content_cache['formatted_content'] else "No"
+    print(f"{config.CYAN}│ • Browser Cache: {cache_status:<40}│{config.RESET}")
+    print(f"{config.CYAN}│ • Formatted Content: {formatted_status:<35}│{config.RESET}")
     
-    # MODEL SECTION
-    print(f"{config.CYAN}│ {config.BOLD}{model_header}{' ' * (box_width - len(model_header) - 2)}│{config.RESET}")
-    print(f"{config.CYAN}│{config.RESET} • Active Model: {config.GREEN}{config.session_model or 'Default'}{config.RESET}{' ' * (box_width - 16 - len(config.session_model or 'Default'))}{config.CYAN}│{config.RESET}")
-    
-    model_status = []
-    if hasattr(config, 'use_claude') and config.use_claude:
-        model_status.append(f"{config.GREEN}Claude{config.RESET}")
-    else:
-        model_status.append(f"{config.RED}Claude{config.RESET}")
-        
-    if hasattr(config, 'use_ollama') and config.use_ollama:
-        model_status.append(f"{config.GREEN}Ollama{config.RESET}")
-    else:
-        model_status.append(f"{config.RED}Ollama{config.RESET}")
-        
-    if hasattr(config, 'use_groq') and config.use_groq:
-        model_status.append(f"{config.GREEN}Groq{config.RESET}")
-    else:
-        model_status.append(f"{config.RED}Groq{config.RESET}")
-    
-    print(f"{config.CYAN}│{config.RESET} • Available: {' | '.join(model_status)}{' ' * (box_width - 14 - len(' | '.join(['Claude', 'Ollama', 'Groq'])))}{config.CYAN}│{config.RESET}")
-    
-    # Divider
-    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
-    
-    # CACHE SECTION
-    print(f"{config.CYAN}│ {config.BOLD}{cache_header}{' ' * (box_width - len(cache_header) - 2)}│{config.RESET}")
-    
-    # Browser cache status
-    has_browser_cache = bool(_content_cache['raw_content'])
-    cache_status = f"{config.GREEN}Available{config.RESET}" if has_browser_cache else f"{config.RED}Empty{config.RESET}"
-    print(f"{config.CYAN}│{config.RESET} • Browser Cache: {cache_status}{' ' * (box_width - 17 - len('Available' if has_browser_cache else 'Empty'))}{config.CYAN}│{config.RESET}")
-    
-    # Show formatted content status
-    has_formatted = bool(_content_cache['formatted_content'])
-    formatted_status = f"{config.GREEN}Yes{config.RESET}" if has_formatted else f"{config.RED}No{config.RESET}"
-    print(f"{config.CYAN}│{config.RESET} • Formatted Content: {formatted_status}{' ' * (box_width - 21 - len('Yes' if has_formatted else 'No'))}{config.CYAN}│{config.RESET}")
-    
-    # Divider
-    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
-    
-    # HISTORY SECTION
-    print(f"{config.CYAN}│ {config.BOLD}{history_header}{' ' * (box_width - len(history_header) - 2)}│{config.RESET}")
-    
-    # History count
+    # History Status
+    print(f"{config.CYAN}├{'─' * 60}┤{config.RESET}")
+    print(f"{config.CYAN}│ 📜 HISTORY{' ' * 50}│{config.RESET}")
     history_count = len(config.session_history) if hasattr(config, 'session_history') else 0
-    print(f"{config.CYAN}│{config.RESET} • Items: {config.YELLOW}{history_count}{config.RESET}{' ' * (box_width - 9 - len(str(history_count)))}{config.CYAN}│{config.RESET}")
+    context_count = len(config.context_history) if hasattr(config, 'context_history') else 0
+    print(f"{config.CYAN}│ • Items: {history_count:<45}│{config.RESET}")
+    print(f"{config.CYAN}│ • Context Items: {context_count:<40}│{config.RESET}")
     
-    # Context items count
-    context_count = len(_response_context['previous_responses'])
-    print(f"{config.CYAN}│{config.RESET} • Context Items: {config.YELLOW}{context_count}{config.RESET}{' ' * (box_width - 17 - len(str(context_count)))}{config.CYAN}│{config.RESET}")
+    # Settings Status
+    print(f"{config.CYAN}├{'─' * 60}┤{config.RESET}")
+    print(f"{config.CYAN}│ ⚙️ SETTINGS{' ' * 50}│{config.RESET}")
+    print(f"{config.CYAN}│ • Response Tolerance: {config.tolerance_level:<35}│{config.RESET}")
+    print(f"{config.CYAN}│ • Safe Mode: {'Enabled' if config.safe_mode else 'Disabled':<40}│{config.RESET}")
+    print(f"{config.CYAN}│ • Autopilot Mode: {'Enabled' if config.autopilot_mode else 'Disabled':<35}│{config.RESET}")
+    print(f"{config.CYAN}│ • Script Reviewer: {'Enabled' if config.scriptreviewer_on else 'Disabled':<35}│{config.RESET}")
+    print(f"{config.CYAN}│ • Sequential Thinking: {'Enabled' if config.sequential_thinking_enabled else 'Disabled':<30}│{config.RESET}")
+    if config.sequential_thinking_enabled:
+        print(f"{config.CYAN}│ • LLM Choice: {'Enabled' if config.sequential_thinking_llm_choice else 'Disabled':<40}│{config.RESET}")
     
-    # Divider
-    print(f"{config.CYAN}├─{'─' * box_width}┤{config.RESET}")
+    print(f"{config.CYAN}╰{'─' * 60}╯{config.RESET}")
+
+def show_session_status(config):
+    """Display current session status and available commands."""
+    print(f"\n{config.CYAN}=== Session Status ==={config.RESET}")
+    print(f"Model: {config.current_model}")
+    print(f"Mode: {'Autopilot' if config.autopilot_mode else 'Safe' if config.safe_mode else 'Normal'}")
+    print(f"Script Reviewer: {'Enabled' if config.scriptreviewer_on else 'Disabled'}")
+    print(f"Sequential Thinking: {'Enabled' if config.sequential_thinking_enabled else 'Disabled'}")
+    if config.sequential_thinking_enabled:
+        print(f"LLM Choice: {'Enabled' if config.sequential_thinking_llm_choice else 'Disabled'}")
     
-    # SETTINGS SECTION
-    print(f"{config.CYAN}│ {config.BOLD}{settings_header}{' ' * (box_width - len(settings_header) - 2)}│{config.RESET}")
+    print(f"\n{config.CYAN}=== Available Commands ==={config.RESET}")
+    print(f"{config.YELLOW}Session Management:{config.RESET}")
+    print("  history          - Show conversation history")
+    print("  recall <index>   - Recall specific history item")
+    print("  clear history    - Clear conversation history")
+    print("  save            - Save last response to file")
+    print("  reset           - Reset conversation")
     
-    # Tolerance level with appropriate color
-    tolerance = _response_context['tolerance_level']
-    if tolerance == 'strict':
-        tolerance_display = f"{config.RED}strict{config.RESET}"
-    elif tolerance == 'lenient':
-        tolerance_display = f"{config.GREEN}lenient{config.RESET}"
+    print(f"\n{config.YELLOW}Model & Mode Control:{config.RESET}")
+    print("  model           - Change model")
+    print("  list_models     - List available models")
+    print("  safe            - Switch to safe mode")
+    print("  autopilot       - Switch to autopilot mode")
+    print("  normal          - Switch to normal mode")
+    
+    print(f"\n{config.YELLOW}Sequential Thinking:{config.RESET}")
+    print("  sequential thinking on/off           - Enable/disable sequential thinking")
+    print("  sequential thinking llm choice on/off - Enable/disable LLM choice")
+    print("  sequential thinking history          - Show thought history")
+    print("  sequential thinking clear            - Clear thought history")
+    
+    print(f"\n{config.YELLOW}File Operations:{config.RESET}")
+    print("  file            - Browse and view files")
+    print("  fileint         - Advanced file operations")
+    
+    print(f"\n{config.YELLOW}Other Commands:{config.RESET}")
+    print("  script          - Handle script execution")
+    print("  config          - Show current configuration")
+    print("  session         - Show this help message")
+    print("  exit            - Exit command mode")
+    
+    print(f"\n{config.CYAN}=== Current Session ==={config.RESET}")
+    if hasattr(config, 'session_history') and config.session_history:
+        print(f"History items: {len(config.session_history)}")
+        for i, item in enumerate(config.session_history):
+            print(f"{i}: {item[:50]}..." if len(item) > 50 else f"{i}: {item}")
     else:
-        tolerance_display = f"{config.YELLOW}medium{config.RESET}"
-    
-    print(f"{config.CYAN}│{config.RESET} • Response Tolerance: {tolerance_display}{' ' * (box_width - 21 - len(tolerance))}{config.CYAN}│{config.RESET}")
-    
-    # Modes with appropriate colors
-    safe_mode = f"{config.GREEN}Enabled{config.RESET}" if config.safe_mode else f"{config.RED}Disabled{config.RESET}"
-    print(f"{config.CYAN}│{config.RESET} • Safe Mode: {safe_mode}{' ' * (box_width - 13 - len('Enabled' if config.safe_mode else 'Disabled'))}{config.CYAN}│{config.RESET}")
-    
-    autopilot_mode = f"{config.GREEN}Enabled{config.RESET}" if config.autopilot_mode else f"{config.RED}Disabled{config.RESET}"
-    print(f"{config.CYAN}│{config.RESET} • Autopilot Mode: {autopilot_mode}{' ' * (box_width - 18 - len('Enabled' if config.autopilot_mode else 'Disabled'))}{config.CYAN}│{config.RESET}")
-    
-    scriptreviewer = f"{config.GREEN}Enabled{config.RESET}" if hasattr(config, 'scriptreviewer_on') and config.scriptreviewer_on else f"{config.RED}Disabled{config.RESET}"
-    print(f"{config.CYAN}│{config.RESET} • Script Reviewer: {scriptreviewer}{' ' * (box_width - 19 - len('Enabled' if hasattr(config, 'scriptreviewer_on') and config.scriptreviewer_on else 'Disabled'))}{config.CYAN}│{config.RESET}")
-    
-    # Print footer
-    print(f"{config.CYAN}╰─{'─' * box_width}╯{config.RESET}\n")
-    
-    # Return formatted string for status
-    result = ["Current Session Status:"]
-    
-    # Model information
-    result.append(f"Model: {config.session_model or 'Default'}")
-    
-    # Browser cache status
-    result.append(f"Browser cache: {'Available' if has_browser_cache else 'Empty'}")
-    
-    # History count
-    result.append(f"History items: {history_count}")
-    
-    # Tolerance level
-    result.append(f"Response tolerance: {_response_context['tolerance_level']}")
-    
-    # Modes
-    result.append(f"Safe mode: {'Enabled' if config.safe_mode else 'Disabled'}")
-    result.append(f"Autopilot mode: {'Enabled' if config.autopilot_mode else 'Disabled'}")
-    
-    return "\n".join(result)
+        print("No history items")
