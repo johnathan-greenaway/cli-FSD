@@ -11,6 +11,7 @@ cli_FSD.egg-info
 *.assembled_
 # Distribution / packaging
 .Python
+.command_history.json
 build/
 develop-eggs/
 dist/
@@ -166,3 +167,7 @@ cython_debug/
 last_instructions_display.txt
 dump.rdb
 CLAUDE.md
+.command_history.json
+.command_history.json
+
+**/.claude/settings.local.json
