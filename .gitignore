@@ -171,3 +171,4 @@ CLAUDE.md
 .command_history.json
 
 **/.claude/settings.local.json
+.command_history.json
