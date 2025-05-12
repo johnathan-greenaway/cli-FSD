@@ -106,8 +106,34 @@ def print_streamed_message(message, color=CYAN, config=None):
 
 
 def get_weather():
+    """Get weather information for the user's location."""
     try:
-        response = requests.get('http://wttr.in/?format=3')
+        # First try to get location from IP
+        location_response = requests.get('http://ip-api.com/json/', timeout=5)
+        if location_response.status_code == 200:
+            location_data = location_response.json()
+            if location_data.get('status') == 'success':
+                city = location_data.get('city', '')
+                country = location_data.get('country', '')
+                is_us = country == 'United States'
+                
+                # Get weather with more details
+                weather_url = f'http://wttr.in/{city}?format=%l:+%c+%t+%w+%h'
+                weather_response = requests.get(weather_url, timeout=5)
+                
+                if weather_response.status_code == 200:
+                    weather_text = weather_response.text.strip()
+                    
+                    # If in US, add Fahrenheit
+                    if is_us and '°C' in weather_text:
+                        temp_c = float(weather_text.split('°C')[0].split()[-1])
+                        temp_f = (temp_c * 9/5) + 32
+                        weather_text = weather_text.replace('°C', f'°C ({temp_f:.1f}°F)')
+                    
+                    return weather_text
+                
+        # Fallback to simple format if detailed fetch fails
+        response = requests.get('http://wttr.in/?format=3', timeout=5)
         if response.status_code == 200:
             return response.text
         else:
@@ -117,45 +143,31 @@ def get_weather():
 
 
 def display_greeting():
-    today = date.today()
-    last_run_file = ".last_run.txt"
-    last_run = None
-
-    if os.path.exists(last_run_file):
-        with open(last_run_file, "r") as file:
-            last_run = file.read().strip()
-    
-    with open(last_run_file, "w") as file:
-        file.write(str(today))
-
     from . import configuration
     config = configuration.Config()
     
-    if str(today) != last_run:
-        weather = get_weather()
-        system_info = get_system_info()
-        print(f"{BOLD}Terminal Companion with Full Self Drive Mode {config.SMALL_FONT}(v{config.VERSION}){RESET}")
-        print(f"{weather}")
-        print(f"{system_info}")
-        
-        # Add decorated box for session commands
-        box_width = 60
-        print(f"\n{CYAN}╭─{'─' * box_width}╮{RESET}")
-        print(f"{CYAN}│ {BOLD}{YELLOW}SESSION MANAGEMENT COMMANDS{' ' * (box_width - 27)}│{RESET}")
-        print(f"{CYAN}├─{'─' * box_width}┤{RESET}")
-        print(f"{CYAN}│ {GREEN}• history{RESET}{' ' * (box_width - 10)}│{RESET}")
-        print(f"{CYAN}│   View list of past interactions{' ' * (box_width - 32)}│{RESET}")
-        print(f"{CYAN}│ {GREEN}• recall N{RESET}{' ' * (box_width - 11)}│{RESET}")
-        print(f"{CYAN}│   Display full content of history item N{' ' * (box_width - 40)}│{RESET}")
-        print(f"{CYAN}│ {GREEN}• session status{RESET}{' ' * (box_width - 17)}│{RESET}")
-        print(f"{CYAN}│   Show current session information{' ' * (box_width - 35)}│{RESET}")
-        print(f"{CYAN}│ {GREEN}• set tolerance [strict|medium|lenient]{RESET}{' ' * (box_width - 39)}│{RESET}")
-        print(f"{CYAN}│   Adjust how strictly responses are evaluated{' ' * (box_width - 46)}│{RESET}")
-        print(f"{CYAN}╰─{'─' * box_width}╯{RESET}")
-        print("\nWhat would you like to do today?")
-    else:
-        # For returning users, just show a minimal reminder
-        print(f"{GREEN}Tip: Use 'history', 'recall N', or 'session status' to manage your session{RESET}")
+    # Always show the full greeting
+    weather = get_weather()
+    system_info = get_system_info()
+    print(f"{BOLD}Terminal Companion with Full Self Drive Mode {config.SMALL_FONT}(v{config.VERSION}){RESET}")
+    print(f"{weather}")
+    print(f"{system_info}")
+    
+    # Add decorated box for session commands
+    box_width = 60
+    print(f"\n{CYAN}╭─{'─' * box_width}╮{RESET}")
+    print(f"{CYAN}│ {BOLD}{YELLOW}SESSION MANAGEMENT COMMANDS{' ' * (box_width - 27)}│{RESET}")
+    print(f"{CYAN}├─{'─' * box_width}┤{RESET}")
+    print(f"{CYAN}│ {GREEN}• history{RESET}{' ' * (box_width - 10)}│{RESET}")
+    print(f"{CYAN}│   View list of past interactions{' ' * (box_width - 32)}│{RESET}")
+    print(f"{CYAN}│ {GREEN}• recall N{RESET}{' ' * (box_width - 11)}│{RESET}")
+    print(f"{CYAN}│   Display full content of history item N{' ' * (box_width - 40)}│{RESET}")
+    print(f"{CYAN}│ {GREEN}• session status{RESET}{' ' * (box_width - 17)}│{RESET}")
+    print(f"{CYAN}│   Show current session information{' ' * (box_width - 35)}│{RESET}")
+    print(f"{CYAN}│ {GREEN}• set tolerance [strict|medium|lenient]{RESET}{' ' * (box_width - 39)}│{RESET}")
+    print(f"{CYAN}│   Adjust how strictly responses are evaluated{' ' * (box_width - 46)}│{RESET}")
+    print(f"{CYAN}╰─{'─' * box_width}╯{RESET}")
+    print("\nWhat would you like to do today?")
 
     sys.stdout.flush()
 

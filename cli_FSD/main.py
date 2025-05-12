@@ -50,7 +50,7 @@ def main():
         filename='cli_fsd.log',
         filemode='a',
         format='%(asctime)s - %(levelname)s - %(message)s',
-        level=logging.DEBUG
+        level=logging.WARNING
     )
 
     logging.info("cli-FSD started")
@@ -58,7 +58,6 @@ def main():
     # Initialize web fetcher early
     try:
         from .web_fetcher import fetcher
-        logging.info("Initialized WebContentFetcher")
     except Exception as e:
         logging.error(f"Failed to initialize WebContentFetcher: {e}")
         print(f"Warning: WebContentFetcher initialization failed: {e}")
