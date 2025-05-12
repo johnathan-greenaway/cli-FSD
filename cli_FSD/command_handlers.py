@@ -2,6 +2,7 @@ import os
 import subprocess
 import readline
 import sys
+import asyncio
 from .utils import print_streamed_message
 from .script_handlers import extract_script_from_response, assemble_final_script, auto_handle_script_execution
 from .chat_models import initialize_chat_models # Import necessary function
@@ -98,7 +99,7 @@ def handle_command_mode(config, chat_models):
         'sequential thinking history', 'sequential thinking clear',
         'session', 'session status', 'history', 'recall',
         'model', 'list_models', 'config', 'clear history',
-        'file', 'fileint'
+        'file', 'fileint', 'ollama models'
     ]
     
     # Set up readline for command history
@@ -149,6 +150,7 @@ def handle_command_mode(config, chat_models):
     print("  clear history          - Clear conversation history")
     print("  file                   - Browse and view files")
     print("  fileint                - Advanced file operations")
+    print("  ollama models          - Browse and manage Ollama models")
     print("\nType part of a command and press TAB to cycle through matching commands.")
     
     while True:
@@ -238,6 +240,8 @@ def handle_command_mode(config, chat_models):
                 handle_file_command(config)
             elif command.lower().startswith('fileint'):
                 handle_file_interaction_command(config)
+            elif command.lower() == 'ollama models' or command.lower() == 'ollama':
+                handle_ollama_models_command(config)
             else:
                 # Execute the command as a shell command only if it's not an internal command
                 result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=config.safe_mode)
@@ -267,6 +271,7 @@ Available commands:
   sequential thinking llm choice off - Disable LLM choice for sequential thinking
   sequential thinking history - Show thought history
   sequential thinking clear - Clear thought history
+  ollama models          - Browse and manage Ollama models
   <any other command>    - Execute as shell command
 """)
 
@@ -305,6 +310,8 @@ def process_command(command, config, chat_models):
         handle_file_command(config)
     elif command.startswith('fileint'):
         handle_file_interaction_command(config)
+    elif command == 'ollama models' or command == 'ollama':
+        handle_ollama_models_command(config)
     # Add sequential thinking commands
     elif command == 'sequential thinking on':
         config.sequential_thinking_enabled = True
@@ -364,8 +371,8 @@ def reset_conversation(config):
 def save_last_response(config):
     file_path = input("Enter the file path to save the last response: ")
     try:
-        with open(file_path, "w") as file:
-            file.write(config.last_response)
+        with open(file_path, "w") as f:
+            f.write(config.last_response)
         print(f"Response saved to {file_path}")
     except Exception as e:
         print(f"Error saving response: {e}")
@@ -453,6 +460,8 @@ def show_current_config(config):
     print(f"Safe Mode: {'Enabled' if config.safe_mode else 'Disabled'}")
     print(f"Using Claude: {'Yes' if config.use_claude else 'No'}")
     print(f"Using Ollama: {'Yes' if config.use_ollama else 'No'}")
+    if config.use_ollama:
+        print(f"Current Ollama Model: {config.last_ollama_model}")
     print(f"Using Groq: {'Yes' if config.use_groq else 'No'}")
     print(f"Script Reviewer: {'Enabled' if config.scriptreviewer_on else 'Disabled'}")
 
@@ -558,6 +567,13 @@ def handle_file_command(config):
                 print(f"{config.RED}Error reading file '{full_path}': {e}{config.RESET}")
     except (ValueError, IndexError):
         print(f"{config.YELLOW}Invalid selection.{config.RESET}")
+
+def handle_ollama_models_command(config):
+    """Browse and manage Ollama models with interactive UI."""
+    from .ollama_models import run_ollama_browser
+
+    # Simply run the interactive browser
+    asyncio.run(run_ollama_browser(config))
 
 def handle_file_interaction_command(config):
     """Advanced file interaction using the file-interaction MCP server."""

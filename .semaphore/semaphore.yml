@@ -16,13 +16,20 @@ blocks:
             - checkout
             - python -m pip install --upgrade pip
             - pip install -r requirements.txt
-            - pip install flake8
+            - pip install flake8 pytest twine build
+            
+            # 1. Clean
+            - rm -rf build/ cli_FSD.egg-info/
+            
+            # 2. Build
+            - python -m build
+            
+            # 3. Test
             - flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
             - flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-            - pip install pytest
             # - pytest --no-tests-exit-0
             
-            # Extract base version from version module
+            # Get version and handle branch-specific versioning
             - export BASE_VERSION=$(python -c "import version; print(version.__version__)")
             - echo "Base version is $BASE_VERSION"
             
@@ -51,10 +58,8 @@ blocks:
               # Update version in setup.py
               sed -i "s/version=[\"'][^\"']*[\"']/version=\"$FINAL_VERSION\"/" setup.py
               
-              # Build and upload
-              pip install twine build
+              # Build again with the updated version
               python -m build
               
               # Always use --skip-existing flag to prevent errors on uploads
-
               TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose --skip-existing dist/*

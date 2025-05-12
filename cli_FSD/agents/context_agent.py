@@ -394,3 +394,81 @@ Only output valid shell commands that can be executed on this system."""
             return f"{operation} {url_or_query} {mode}"
         
         return ''
+
+    def execute_tool_selection(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a tool selection based on the analysis.
+        
+        Args:
+            analysis: Dictionary containing tool selection analysis
+            
+        Returns:
+            Dictionary containing the tool execution details
+        """
+        selected_tool = analysis.get("selected_tool", "default")
+        parameters = analysis.get("parameters", {})
+        
+        # Handle small context tool
+        if selected_tool == "small_context":
+            context_config = analysis.get("context_management", {})
+            if not context_config.get("required", False):
+                return {"error": "Context management not required"}
+                
+            return {
+                "tool": "use_mcp_tool",
+                "server": "small-context",
+                "operation": parameters.get("operation", "create_context"),
+                "arguments": {
+                    "contextId": parameters.get("context_id", ""),
+                    "content": parameters.get("content", ""),
+                    "priority": context_config.get("priority_level", "important"),
+                    "entities": context_config.get("entities", []),
+                    "relationships": context_config.get("relationships", [])
+                }
+            }
+            
+        # Handle fetch tool
+        elif selected_tool == "fetch":
+            return {
+                "tool": "use_mcp_tool",
+                "server": "fetch-server",
+                "operation": "fetch",
+                "arguments": {
+                    "url": parameters.get("url", ""),
+                    "selector": parameters.get("selector", "")
+                }
+            }
+            
+        # Handle sequential thinking tool
+        elif selected_tool == "sequential_thinking":
+            return {
+                "tool": "use_mcp_tool",
+                "server": "sequential-thinking",
+                "operation": "think",
+                "arguments": {
+                    "steps": parameters.get("steps", []),
+                    "problem": parameters.get("problem", "")
+                }
+            }
+            
+        # Handle web content tools
+        elif selected_tool in self.tools['web_content']:
+            url = parameters.get("url", "")
+            return {
+                "tool": "use_mcp_tool",
+                "server": "small-context",
+                "operation": selected_tool,
+                "arguments": {
+                    "url": url,
+                    "mode": parameters.get("mode", "basic")
+                }
+            }
+            
+        # Default to command execution
+        return {
+            "tool": "execute_command",
+            "arguments": {
+                "command": parameters.get("command", ""),
+                "operation": parameters.get("operation", "process_command"),
+                "content": parameters.get("content", "")
+            }
+        }
