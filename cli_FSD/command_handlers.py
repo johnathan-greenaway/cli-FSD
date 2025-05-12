@@ -569,107 +569,11 @@ def handle_file_command(config):
         print(f"{config.YELLOW}Invalid selection.{config.RESET}")
 
 def handle_ollama_models_command(config):
-    """Browse and manage Ollama models."""
-    from .ollama_models import (
-        OllamaModelManager, 
-        list_local_models_cli, 
-        search_models_cli, 
-        pull_model_cli, 
-        delete_model_cli,
-        show_model_details_cli
-    )
-    
-    print(f"{config.CYAN}Ollama Models Management{config.RESET}")
-    print(f"\n{config.YELLOW}Available commands:{config.RESET}")
-    print("1. list    - List local Ollama models")
-    print("2. search  - Search for available Ollama models")
-    print("3. pull    - Download an Ollama model")
-    print("4. delete  - Delete an Ollama model")
-    print("5. details - Show details of a specific model")
-    print("6. set     - Set the active Ollama model")
-    print("7. exit    - Exit Ollama models management")
+    """Browse and manage Ollama models with interactive UI."""
+    from .ollama_models import run_ollama_browser
 
-    while True:
-        cmd = input(f"\n{config.GREEN}OLLAMA>{config.RESET} ").strip().lower()
-        
-        if cmd in ('exit', 'quit', '7'):
-            print(f"{config.CYAN}Exiting Ollama models management.{config.RESET}")
-            break
-        
-        elif cmd in ('list', '1'):
-            try:
-                # Run the async function in a new event loop
-                asyncio.run(list_local_models_cli())
-            except Exception as e:
-                print(f"{config.RED}Error listing Ollama models: {str(e)}{config.RESET}")
-
-        elif cmd in ('search', '2'):
-            try:
-                query = input("Enter search term (or leave empty to list all): ").strip()
-                # Run the async function in a new event loop
-                asyncio.run(search_models_cli(query))
-            except Exception as e:
-                print(f"{config.RED}Error searching Ollama models: {str(e)}{config.RESET}")
-
-        elif cmd in ('pull', '3'):
-            try:
-                model_id = input("Enter model name to download (e.g., llama3, gemma:7b): ").strip()
-                if model_id:
-                    print(f"{config.CYAN}Downloading model {model_id}...{config.RESET}")
-                    # Run the async function in a new event loop
-                    asyncio.run(pull_model_cli(model_id))
-                else:
-                    print(f"{config.YELLOW}No model name provided.{config.RESET}")
-            except Exception as e:
-                print(f"{config.RED}Error downloading model: {str(e)}{config.RESET}")
-
-        elif cmd in ('delete', '4'):
-            try:
-                # First list available models
-                asyncio.run(list_local_models_cli())
-                model_id = input("Enter model name to delete: ").strip()
-                if model_id:
-                    # Run the async function in a new event loop
-                    asyncio.run(delete_model_cli(model_id))
-                else:
-                    print(f"{config.YELLOW}No model name provided.{config.RESET}")
-            except Exception as e:
-                print(f"{config.RED}Error deleting model: {str(e)}{config.RESET}")
-
-        elif cmd in ('details', '5'):
-            try:
-                # First list available models
-                asyncio.run(list_local_models_cli())
-                model_id = input("Enter model name for details: ").strip()
-                if model_id:
-                    # Run the async function in a new event loop
-                    asyncio.run(show_model_details_cli(model_id))
-                else:
-                    print(f"{config.YELLOW}No model name provided.{config.RESET}")
-            except Exception as e:
-                print(f"{config.RED}Error getting model details: {str(e)}{config.RESET}")
-
-        elif cmd in ('set', '6'):
-            try:
-                # First list available models
-                asyncio.run(list_local_models_cli())
-                model_id = input("Enter model name to set as active: ").strip()
-                if model_id:
-                    # Set as the current Ollama model
-                    config.last_ollama_model = model_id
-                    # If using Ollama, update current_model as well
-                    if config.use_ollama:
-                        config.current_model = model_id
-                    config.save_preferences()
-                    print(f"{config.GREEN}Set {model_id} as the active Ollama model.{config.RESET}")
-                else:
-                    print(f"{config.YELLOW}No model name provided.{config.RESET}")
-            except Exception as e:
-                print(f"{config.RED}Error setting active model: {str(e)}{config.RESET}")
-
-        else:
-            print(f"{config.YELLOW}Unknown command: {cmd}{config.RESET}")
-            print("Type a number (1-7) or command name.")
+    # Simply run the interactive browser
+    asyncio.run(run_ollama_browser(config))
 
 def handle_file_interaction_command(config):
     """Advanced file interaction using the file-interaction MCP server."""

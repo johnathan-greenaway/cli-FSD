@@ -5,7 +5,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Optional, AsyncGenerator
+from typing import List, Dict, Any, Optional
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -351,190 +351,484 @@ class OllamaModelManager:
         return f"{size_bytes:.2f} {suffixes[i]}"
 
 
-# Helper functions for CLI interface
-
-async def list_local_models_cli():
-    """CLI function to list local Ollama models"""
-    manager = OllamaModelManager()
-    models = await manager.get_local_models()
+class InteractiveOllamaModelBrowser:
+    """
+    An interactive browser for Ollama models with improved UI and workflow.
+    """
+    def __init__(self, config=None):
+        self.config = config
+        self.manager = OllamaModelManager()
+        self.local_models = []
+        self.available_models = []
+        self.page_size = 10  # Number of models shown per page
+        
+    async def initialize(self):
+        """Initialize the browser by fetching initial data"""
+        # Fetch local models
+        self.local_models = await self.manager.get_local_models()
+        
+    def _get_color(self, text, color_code, reset_code):
+        """Apply color to text if config is available"""
+        if self.config and hasattr(self.config, color_code) and hasattr(self.config, reset_code):
+            return f"{getattr(self.config, color_code)}{text}{getattr(self.config, reset_code)}"
+        return text
+        
+    def _colored_text(self, text, color):
+        """Formats text with terminal colors based on config"""
+        if not self.config:
+            return text
+            
+        color_codes = {
+            'green': 'GREEN',
+            'cyan': 'CYAN',
+            'yellow': 'YELLOW',
+            'red': 'RED',
+            'bold': 'BOLD',
+            'reset': 'RESET'
+        }
+        
+        if color in color_codes and hasattr(self.config, color_codes[color]):
+            return f"{getattr(self.config, color_codes[color])}{text}{self.config.RESET}"
+        return text
     
-    if not models:
-        print("No local Ollama models found.")
-        return
+    def print_header(self, title):
+        """Print a styled header"""
+        if self.config:
+            print(f"\n{self.config.CYAN}{self.config.BOLD}=== {title} ==={self.config.RESET}")
+        else:
+            print(f"\n=== {title} ===")
     
-    print("\n=== Local Ollama Models ===")
-    print(f"{'Model Name':<30} {'Size':<15} {'Modified':<20}")
-    print("-" * 65)
+    def print_divider(self):
+        """Print a divider line"""
+        print("-" * 80)
     
-    for model in models:
-        size = OllamaModelManager.format_size(model.get("size", 0))
-        modified = model.get("modified_at", "Unknown")
-        if isinstance(modified, str) and modified:
-            # Try to format the date if possible
+    def print_menu(self, options, prompt="Select an option"):
+        """Print a menu with numbered options"""
+        self.print_divider()
+        for idx, option in enumerate(options, 1):
+            print(f"{idx}. {option}")
+        self.print_divider()
+        
+        if self.config:
+            return input(f"{self.config.YELLOW}{prompt}:{self.config.RESET} ").strip()
+        else:
+            return input(f"{prompt}: ").strip()
+    
+    async def display_local_models(self, page=0):
+        """Display local models with pagination and selection options"""
+        if not self.local_models:
+            self.local_models = await self.manager.get_local_models()
+            
+        if not self.local_models:
+            print(self._colored_text("No local Ollama models found.", 'yellow'))
+            return None
+            
+        self.print_header("LOCAL OLLAMA MODELS")
+        
+        # Calculate pagination
+        total_pages = (len(self.local_models) + self.page_size - 1) // self.page_size
+        start_idx = page * self.page_size
+        end_idx = min(start_idx + self.page_size, len(self.local_models))
+        
+        # Display page info
+        if total_pages > 1:
+            print(self._colored_text(f"Page {page+1}/{total_pages} - Models {start_idx+1}-{end_idx} of {len(self.local_models)}", 'cyan'))
+            
+        # Print table header
+        print(f"{'#':<3} {'Model Name':<25} {'Size':<12} {'Modified':<20}")
+        self.print_divider()
+        
+        # Print models
+        for idx in range(start_idx, end_idx):
+            model = self.local_models[idx]
+            size = self.manager.format_size(model.get("size", 0))
+            modified = model.get("modified_at", "Unknown")
+            if isinstance(modified, str) and modified:
+                # Try to format the date if possible
+                try:
+                    dt = datetime.fromisoformat(modified.replace('Z', '+00:00'))
+                    modified = dt.strftime("%Y-%m-%d %H:%M")
+                except (ValueError, TypeError):
+                    pass
+            
+            print(f"{idx-start_idx+1:<3} {model['name']:<25} {size:<12} {modified:<20}")
+            
+        # Navigation options
+        options = []
+        if page > 0:
+            options.append(f"{self._colored_text('P', 'bold')}revious page")
+        if page < total_pages - 1:
+            options.append(f"{self._colored_text('N', 'bold')}ext page")
+        
+        options.extend([
+            f"{self._colored_text('S', 'bold')}elect a model",
+            f"{self._colored_text('D', 'bold')}elete a model",
+            f"{self._colored_text('B', 'bold')}ack to main menu"
+        ])
+        
+        choice = self.print_menu(options)
+        
+        if choice.lower() == 'p' and page > 0:
+            # Previous page
+            return await self.display_local_models(page - 1)
+        elif choice.lower() == 'n' and page < total_pages - 1:
+            # Next page
+            return await self.display_local_models(page + 1)
+        elif choice.lower() == 's':
+            # Select a model
+            model_idx = input("Enter the number of the model to select: ").strip()
             try:
-                dt = datetime.fromisoformat(modified.replace('Z', '+00:00'))
-                modified = dt.strftime("%Y-%m-%d %H:%M")
-            except (ValueError, TypeError):
-                pass
+                idx = int(model_idx) - 1
+                if 0 <= idx < end_idx - start_idx:
+                    model_id = self.local_models[start_idx + idx]['name']
+                    return self.activate_model(model_id)
+                else:
+                    print(self._colored_text("Invalid model number.", 'red'))
+                    return await self.display_local_models(page)
+            except ValueError:
+                print(self._colored_text("Invalid input. Please enter a number.", 'red'))
+                return await self.display_local_models(page)
+        elif choice.lower() == 'd':
+            # Delete a model
+            model_idx = input("Enter the number of the model to delete: ").strip()
+            try:
+                idx = int(model_idx) - 1
+                if 0 <= idx < end_idx - start_idx:
+                    model_id = self.local_models[start_idx + idx]['name']
+                    confirm = input(f"Are you sure you want to delete model '{model_id}'? (y/N): ").strip().lower()
+                    if confirm == 'y':
+                        result = await self.manager.delete_model(model_id)
+                        if result.get('success', False):
+                            print(self._colored_text(f"Model '{model_id}' deleted successfully!", 'green'))
+                            # Refresh the model list
+                            self.local_models = await self.manager.get_local_models()
+                        else:
+                            print(self._colored_text(f"Error deleting model: {result.get('message')}", 'red'))
+                    else:
+                        print("Deletion cancelled.")
+                    return await self.display_local_models(page)
+                else:
+                    print(self._colored_text("Invalid model number.", 'red'))
+                    return await self.display_local_models(page)
+            except ValueError:
+                print(self._colored_text("Invalid input. Please enter a number.", 'red'))
+                return await self.display_local_models(page)
         
-        print(f"{model['name']:<30} {size:<15} {modified:<20}")
-    print()
-
-async def search_models_cli(query=""):
-    """CLI function to search for available Ollama models"""
-    manager = OllamaModelManager()
-    models = await manager.search_models(query)
+        # Default: back to main menu
+        return None
     
-    if not models:
-        print(f"No models found matching '{query}'." if query else "No models available.")
-        return
-    
-    header = f"\n=== Available Ollama Models"
-    if query:
-        header += f" matching '{query}'"
-    header += " ==="
-    print(header)
-    print(f"{'Model Name':<25} {'Parameter Size':<15} {'Family':<15} {'Description':<40}")
-    print("-" * 95)
-    
-    for model in models:
-        name = model.get("name", "Unknown")
-        size = model.get("parameter_size", "Unknown")
-        family = model.get("model_family", "Unknown")
-        description = model.get("description", "")
-        # Truncate description if too long
-        if len(description) > 40:
-            description = description[:37] + "..."
+    async def browse_remote_models(self, query="", page=0):
+        """Browse and search for remote models with enhanced UI"""
+        if query:
+            self.print_header(f"REMOTE OLLAMA MODELS MATCHING '{query}'")
+            self.available_models = await self.manager.search_models(query)
+        else:
+            self.print_header("REMOTE OLLAMA MODELS")
+            if not self.available_models:
+                self.available_models = await self.manager.get_registry_models()
         
-        print(f"{name:<25} {size:<15} {family:<15} {description:<40}")
-    print()
+        if not self.available_models:
+            print(self._colored_text("No models found.", 'yellow'))
+            # Offer to go back
+            input(self._colored_text("Press Enter to return to main menu...", 'cyan'))
+            return None
+        
+        # Calculate pagination
+        total_pages = (len(self.available_models) + self.page_size - 1) // self.page_size
+        start_idx = page * self.page_size
+        end_idx = min(start_idx + self.page_size, len(self.available_models))
+        
+        # Display page info
+        if total_pages > 1:
+            print(self._colored_text(f"Page {page+1}/{total_pages} - Models {start_idx+1}-{end_idx} of {len(self.available_models)}", 'cyan'))
+            
+        # Print table header
+        print(f"{'#':<3} {'Model Name':<20} {'Size':<10} {'Family':<15} {'Description'}")
+        self.print_divider()
+        
+        # Check which models are already installed
+        local_model_names = [model["name"] for model in self.local_models]
+        
+        # Print models
+        for idx in range(start_idx, end_idx):
+            model = self.available_models[idx]
+            name = model.get("name", "Unknown")
+            size = model.get("parameter_size", "Unknown")
+            family = model.get("model_family", "Unknown")
+            description = model.get("description", "")
+            # Truncate description if too long
+            if len(description) > 40:
+                description = description[:37] + "..."
+            
+            # Mark installed models
+            status = ""
+            if name in local_model_names:
+                status = self._colored_text(" [INSTALLED]", 'green')
+            
+            print(f"{idx-start_idx+1:<3} {name:<20} {size:<10} {family:<15} {description}{status}")
+            
+        # Navigation options
+        options = []
+        if page > 0:
+            options.append(f"{self._colored_text('P', 'bold')}revious page")
+        if page < total_pages - 1:
+            options.append(f"{self._colored_text('N', 'bold')}ext page")
+        
+        options.extend([
+            f"{self._colored_text('D', 'bold')}ownload a model",
+            f"{self._colored_text('S', 'bold')}earch for models",
+            f"{self._colored_text('I', 'bold')}nfo about a model",
+            f"{self._colored_text('B', 'bold')}ack to main menu"
+        ])
+        
+        choice = self.print_menu(options)
+        
+        if choice.lower() == 'p' and page > 0:
+            # Previous page
+            return await self.browse_remote_models(query, page - 1)
+        elif choice.lower() == 'n' and page < total_pages - 1:
+            # Next page
+            return await self.browse_remote_models(query, page + 1)
+        elif choice.lower() == 'd':
+            # Download a model
+            model_idx = input("Enter the number of the model to download: ").strip()
+            try:
+                idx = int(model_idx) - 1
+                if 0 <= idx < end_idx - start_idx:
+                    model_id = self.available_models[start_idx + idx]['name']
+                    # Check if already installed
+                    if model_id in local_model_names:
+                        use_anyway = input(f"Model '{model_id}' is already installed. Set as active model? (y/N): ").strip().lower()
+                        if use_anyway == 'y':
+                            return self.activate_model(model_id)
+                        return await self.browse_remote_models(query, page)
+                        
+                    print(self._colored_text(f"Downloading model {model_id}...", 'cyan'))
+                    
+                    # Define a progress callback to display download progress
+                    async def progress_callback(data):
+                        if "status" in data:
+                            print(f"Status: {data['status']}")
+                        if "completed" in data and "total" in data:
+                            if data["total"] > 0:
+                                progress = (data["completed"] / data["total"]) * 100
+                                print(f"Progress: {progress:.1f}% ({data['completed']}/{data['total']})")
+                    
+                    result = await self.manager.pull_model(model_id, progress_callback)
+                    
+                    if result.get("success", False):
+                        print(self._colored_text(f"Model {model_id} downloaded successfully!", 'green'))
+                        use_model = input("Set as active model? (Y/n): ").strip().lower()
+                        if use_model != 'n':
+                            return self.activate_model(model_id)
+                    else:
+                        print(self._colored_text(f"Error downloading model: {result.get('message')}", 'red'))
+                        
+                    # Refresh local models
+                    self.local_models = await self.manager.get_local_models()
+                    return await self.browse_remote_models(query, page)
+                else:
+                    print(self._colored_text("Invalid model number.", 'red'))
+                    return await self.browse_remote_models(query, page)
+            except ValueError:
+                print(self._colored_text("Invalid input. Please enter a number.", 'red'))
+                return await self.browse_remote_models(query, page)
+        elif choice.lower() == 's':
+            # Search for models
+            new_query = input("Enter search term (or leave empty for all models): ").strip()
+            return await self.browse_remote_models(new_query, 0)  # Reset to first page with new query
+        elif choice.lower() == 'i':
+            # Show model info
+            model_idx = input("Enter the number of the model for details: ").strip()
+            try:
+                idx = int(model_idx) - 1
+                if 0 <= idx < end_idx - start_idx:
+                    model_id = self.available_models[start_idx + idx]['name']
+                    await self.show_model_info(model_id)
+                    return await self.browse_remote_models(query, page)
+                else:
+                    print(self._colored_text("Invalid model number.", 'red'))
+                    return await self.browse_remote_models(query, page)
+            except ValueError:
+                print(self._colored_text("Invalid input. Please enter a number.", 'red'))
+                return await self.browse_remote_models(query, page)
+        
+        # Default: back to main menu
+        return None
+    
+    async def show_model_info(self, model_id):
+        """Show detailed information about a model"""
+        self.print_header(f"MODEL DETAILS: {model_id}")
+        
+        # First check if model is local
+        is_local = any(model["name"] == model_id for model in self.local_models)
+        
+        if is_local:
+            details = await self.manager.get_model_details(model_id)
+            
+            if "error" in details and details["error"]:
+                print(self._colored_text(f"Error getting model details: {details['error']}", 'red'))
+            else:
+                # Display model details in a structured way
+                if "modelfile" in details:
+                    print(self._colored_text("\nModelfile:", 'bold'))
+                    print(details["modelfile"])
+                
+                if "parameters" in details and details["parameters"]:
+                    print(self._colored_text("\nParameters:", 'bold'))
+                    for param, value in details["parameters"].items():
+                        print(f"  {param}: {value}")
+                
+                size = self.manager.format_size(details.get("size", 0))
+                print(f"\n{self._colored_text('Size:', 'bold')} {size}")
+                
+                if "created_at" in details and details["created_at"]:
+                    try:
+                        dt = datetime.fromisoformat(details["created_at"].replace('Z', '+00:00'))
+                        created = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"{self._colored_text('Created:', 'bold')} {created}")
+                    except (ValueError, TypeError):
+                        print(f"{self._colored_text('Created:', 'bold')} {details['created_at']}")
+                
+                if "modified_at" in details and details["modified_at"]:
+                    try:
+                        dt = datetime.fromisoformat(details["modified_at"].replace('Z', '+00:00'))
+                        modified = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"{self._colored_text('Last modified:', 'bold')} {modified}")
+                    except (ValueError, TypeError):
+                        print(f"{self._colored_text('Last modified:', 'bold')} {details['modified_at']}")
+        else:
+            # Show information from available models
+            model_info = None
+            for model in self.available_models:
+                if model["name"] == model_id:
+                    model_info = model
+                    break
+            
+            if not model_info:
+                # Not in our list, get info from registry
+                all_models = await self.manager.get_registry_models()
+                for model in all_models:
+                    if model["name"] == model_id:
+                        model_info = model
+                        break
+            
+            if model_info:
+                print(f"{self._colored_text('Name:', 'bold')} {model_info.get('name')}")
+                print(f"{self._colored_text('Family:', 'bold')} {model_info.get('model_family')}")
+                print(f"{self._colored_text('Parameter Size:', 'bold')} {model_info.get('parameter_size')}")
+                print(f"{self._colored_text('Description:', 'bold')} {model_info.get('description')}")
+                
+                if "tags" in model_info and model_info["tags"]:
+                    print(f"{self._colored_text('Tags:', 'bold')} {', '.join(model_info['tags'])}")
+                
+                # Add download option
+                download = input(f"\nDownload this model? (y/N): ").strip().lower() == 'y'
+                if download:
+                    print(self._colored_text(f"Downloading model {model_id}...", 'cyan'))
+                    
+                    async def progress_callback(data):
+                        if "status" in data:
+                            print(f"Status: {data['status']}")
+                        if "completed" in data and "total" in data:
+                            if data["total"] > 0:
+                                progress = (data["completed"] / data["total"]) * 100
+                                print(f"Progress: {progress:.1f}% ({data['completed']}/{data['total']})")
+                    
+                    result = await self.manager.pull_model(model_id, progress_callback)
+                    
+                    if result.get("success", False):
+                        print(self._colored_text(f"Model {model_id} downloaded successfully!", 'green'))
+                        use_model = input("Set as active model? (Y/n): ").strip().lower()
+                        if use_model != 'n':
+                            return self.activate_model(model_id)
+                    else:
+                        print(self._colored_text(f"Error downloading model: {result.get('message')}", 'red'))
+                    
+                    # Refresh local models
+                    self.local_models = await self.manager.get_local_models()
+            else:
+                print(self._colored_text(f"No information available for model '{model_id}'", 'yellow'))
+        
+        # Wait for user
+        input("\nPress Enter to continue...")
+        return None
+    
+    def activate_model(self, model_id):
+        """Set a model as the active Ollama model in the CLI configuration"""
+        if not self.config:
+            print(self._colored_text("Cannot set active model: configuration not available.", 'red'))
+            return None
+            
+        # Set as the current Ollama model
+        self.config.last_ollama_model = model_id
+        # If using Ollama, update current_model as well
+        if self.config.use_ollama:
+            self.config.current_model = model_id
+        self.config.save_preferences()
+        
+        print(self._colored_text(f"Model '{model_id}' is now set as the active Ollama model.", 'green'))
+        
+        # Ask if user wants to switch to Ollama mode
+        if not self.config.use_ollama:
+            switch = input("Switch to Ollama mode? (Y/n): ").strip().lower()
+            if switch != 'n':
+                self.config.session_model = "ollama"
+                self.config.use_ollama = True
+                self.config.use_claude = False
+                self.config.use_groq = False
+                self.config.save_preferences()
+                print(self._colored_text("Switched to Ollama mode.", 'green'))
+                
+                # Remind to restart or reinitialize chat models
+                print(self._colored_text("Please reinitialize chat models to apply the changes.", 'yellow'))
+        
+        input("\nPress Enter to continue...")
+        return True
+    
+    async def run(self):
+        """Run the interactive Ollama model browser"""
+        await self.initialize()
+        
+        while True:
+            self.print_header("OLLAMA MODEL BROWSER")
+            
+            options = [
+                f"{self._colored_text('L', 'bold')}ocal models - View and manage your installed models",
+                f"{self._colored_text('R', 'bold')}emote models - Browse and download new models",
+                f"{self._colored_text('S', 'bold')}earch models - Find specific models",
+                f"{self._colored_text('E', 'bold')}xit - Return to CLI"
+            ]
+            
+            # Show current model if available
+            if self.config and self.config.use_ollama:
+                print(self._colored_text(f"Current Ollama model: {self.config.last_ollama_model}", 'cyan'))
+            
+            choice = self.print_menu(options, prompt="Select an option (L/R/S/E)")
+            
+            if choice.lower() == 'l':
+                # View local models
+                await self.display_local_models()
+            elif choice.lower() == 'r':
+                # Browse remote models
+                await self.browse_remote_models()
+            elif choice.lower() == 's':
+                # Search for models
+                query = input("Enter search term: ").strip()
+                if query:
+                    await self.browse_remote_models(query)
+            elif choice.lower() == 'e' or not choice:
+                # Exit
+                break
+            else:
+                print(self._colored_text("Invalid option. Please try again.", 'yellow'))
 
-async def pull_model_cli(model_id):
-    """CLI function to pull an Ollama model"""
-    if not model_id:
-        print("Error: Model name is required.")
-        return
-    
-    manager = OllamaModelManager()
-    
-    # Define a progress callback for the CLI
-    async def progress_callback(data):
-        if "status" in data:
-            print(f"Status: {data['status']}")
-        if "completed" in data and "total" in data:
-            if data["total"] > 0:
-                progress = (data["completed"] / data["total"]) * 100
-                print(f"Progress: {progress:.1f}% ({data['completed']}/{data['total']})")
-    
-    print(f"Pulling model: {model_id}...")
-    print("This may take a while depending on the model size and your internet connection.")
-    result = await manager.pull_model(model_id, progress_callback)
-    
-    if result.get("success", False):
-        print(f"Success: {result.get('message')}")
-    else:
-        print(f"Error: {result.get('message')}")
 
-async def delete_model_cli(model_id):
-    """CLI function to delete an Ollama model"""
-    if not model_id:
-        print("Error: Model name is required.")
-        return
-    
-    manager = OllamaModelManager()
-    
-    # First check if the model exists
-    models = await manager.get_local_models()
-    model_exists = any(model["name"] == model_id for model in models)
-    
-    if not model_exists:
-        print(f"Error: Model '{model_id}' not found locally.")
-        return
-    
-    # Confirm deletion
-    confirm = input(f"Are you sure you want to delete the model '{model_id}'? (y/N): ")
-    if confirm.lower() != 'y':
-        print("Operation cancelled.")
-        return
-    
-    print(f"Deleting model: {model_id}...")
-    result = await manager.delete_model(model_id)
-    
-    if result.get("success", False):
-        print(f"Success: {result.get('message')}")
-    else:
-        print(f"Error: {result.get('message')}")
+async def run_ollama_browser(config=None):
+    """Run the interactive Ollama model browser with the given config"""
+    browser = InteractiveOllamaModelBrowser(config)
+    await browser.run()
 
-async def show_model_details_cli(model_id):
-    """CLI function to show details of a specific Ollama model"""
-    if not model_id:
-        print("Error: Model name is required.")
-        return
-    
-    manager = OllamaModelManager()
-    details = await manager.get_model_details(model_id)
-    
-    if "error" in details and details["error"]:
-        print(f"Error getting model details: {details['error']}")
-        return
-    
-    print(f"\n=== Details for model: {model_id} ===")
-    
-    # Format and display model details
-    if "modelfile" in details:
-        print("\nModelfile:")
-        print(details["modelfile"])
-    
-    if "parameters" in details and details["parameters"]:
-        print("\nParameters:")
-        for param, value in details["parameters"].items():
-            print(f"  {param}: {value}")
-    
-    size = OllamaModelManager.format_size(details.get("size", 0))
-    print(f"\nSize: {size}")
-    
-    if "created_at" in details and details["created_at"]:
-        try:
-            dt = datetime.fromisoformat(details["created_at"].replace('Z', '+00:00'))
-            created = dt.strftime("%Y-%m-%d %H:%M:%S")
-            print(f"Created: {created}")
-        except (ValueError, TypeError):
-            print(f"Created: {details['created_at']}")
-    
-    if "modified_at" in details and details["modified_at"]:
-        try:
-            dt = datetime.fromisoformat(details["modified_at"].replace('Z', '+00:00'))
-            modified = dt.strftime("%Y-%m-%d %H:%M:%S")
-            print(f"Last modified: {modified}")
-        except (ValueError, TypeError):
-            print(f"Last modified: {details['modified_at']}")
-    print()
-
-# Test function
-async def test():
-    """Test the Ollama model manager functionality"""
-    manager = OllamaModelManager()
-    
-    print("Testing Ollama Model Manager...")
-    
-    # List local models
-    print("\nListing local models:")
-    local_models = await manager.get_local_models()
-    for model in local_models:
-        print(f"- {model['name']}")
-    
-    # Search for models
-    query = "llama"
-    print(f"\nSearching for models with query '{query}':")
-    search_results = await manager.search_models(query)
-    for model in search_results:
-        print(f"- {model['name']}: {model.get('description', '')}")
-    
-    # Use the CLI functions
-    print("\nTesting CLI functions:")
-    await list_local_models_cli()
-    await search_models_cli("llama")
-
-if __name__ == "__main__":
-    # Run the test
-    asyncio.run(test())
+def handle_ollama_models_command(config):
+    """Entry point for the ollama models command"""
+    asyncio.run(run_ollama_browser(config))
