@@ -120,7 +120,10 @@ def main():
     while True:
         try:
             # Get user input with history navigation
-            user_input = input(f"{config.GREEN}You: {config.SMALL_FONT}v{config.VERSION} + @{config.RESET} ").strip()
+            # Format the prompt with model and version
+            model_display = config.current_model if hasattr(config, 'current_model') else 'default'
+            prompt = f"{config.GREEN}{model_display}@{config.VERSION}{config.RESET} "
+            user_input = input(prompt).strip()
             
             # Add query to history
             command_history.add_command(user_input)

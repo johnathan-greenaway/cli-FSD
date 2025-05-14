@@ -21,24 +21,32 @@ def initialize_ollama_client(config):
     try:
         client = OllamaClient(host=host)
         # Get running models
-        response = requests.get(f"{host}/api/ps")
+        response = requests.get(f"{host}/api/tags")
         if response.status_code == 200:
             models = response.json().get("models", [])
             if models:
-                running_model = models[0]["name"]
-                print(f"Connected to Ollama at {host}. Using running model: {running_model}")
-                # Store the running model on the client object
-                client.running_model = running_model
-                # Update last used model in config
-                config.last_ollama_model = running_model
-                config.save_preferences()
-                return client
+                # Filter out known non-chat models
+                chat_models = [m for m in models if not any(non_chat in m["name"].lower() for non_chat in 
+                    ["embed", "nomic", "all-minilm", "bge", "e5"])]
+                
+                if chat_models:
+                    running_model = chat_models[0]["name"]
+                    print(f"Connected to Ollama at {host}. Using chat model: {running_model}")
+                    # Store the running model on the client object
+                    client.running_model = running_model
+                    # Update last used model in config
+                    config.last_ollama_model = running_model
+                    config.save_preferences()
+                    return client
+                else:
+                    print(f"Connected to Ollama at {host}, but no chat-capable models found. Will use last model: {config.last_ollama_model}")
+                    # No chat model found, use the last known model from preferences
+                    client.running_model = config.last_ollama_model
             else:
-                print(f"Connected to Ollama at {host}, but no running models found. Will use last model: {config.last_ollama_model}")
-                # No running model, use the last known model from preferences
+                print(f"Connected to Ollama at {host}, but no models found. Will use last model: {config.last_ollama_model}")
                 client.running_model = config.last_ollama_model
         else:
-            print(f"Connected to Ollama at {host}, but couldn't get running models. Will use last model: {config.last_ollama_model}")
+            print(f"Connected to Ollama at {host}, but couldn't get models. Will use last model: {config.last_ollama_model}")
             client.running_model = config.last_ollama_model
         return client
     except Exception as e:
