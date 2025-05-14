@@ -143,9 +143,12 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
                         print(f"Error using {model_name}: {e}")
                         continue
             
-            # Final fallback to OpenAI if all else failed
-            if result is None:
+            # Only fall back to OpenAI if no specific model is configured
+            if result is None and not any([config.use_ollama, config.use_groq, config.use_claude]):
                 result = chat_with_openai(message, config, system_prompt)
+            elif result is None:
+                # If we have a specific model configured but it failed, return an error
+                return f"Error: Failed to get response from configured model. Please check your configuration and try again."
         
         return result
     finally:
