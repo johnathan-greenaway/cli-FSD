@@ -86,6 +86,12 @@ def main():
     # Set up readline completer
     readline.set_completer(completer)
     readline.parse_and_bind('tab: complete')
+    readline.parse_and_bind('set show-all-if-ambiguous on')
+    readline.parse_and_bind('set completion-ignore-case on')
+    
+    # Add key bindings for history navigation
+    readline.parse_and_bind('"\e[A": history-search-backward')  # Up arrow
+    readline.parse_and_bind('"\e[B": history-search-forward')   # Down arrow
 
     # Process command line arguments if provided
     # This handles direct commands like "@ visit example.com"
