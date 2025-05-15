@@ -123,7 +123,7 @@ def main():
             # Format the prompt with model and version
             model_display = config.current_model if hasattr(config, 'current_model') else 'default'
             prompt = f"{config.GREEN}{model_display}@{config.VERSION}{config.RESET} "
-            user_input = input(prompt).strip()
+            user_input = multiline_input(prompt).strip()
             
             # Add query to history
             command_history.add_command(user_input)
@@ -680,3 +680,13 @@ def process_input_in_safe_mode(query, config, chat_models):
             return "Command execution aborted by user."
     
     return response
+
+def multiline_input(prompt="> "):
+    print(f"{prompt}(Enter 'EOF' on a new line to finish)")
+    lines = []
+    while True:
+        line = input()
+        if line.strip() == "EOF":
+            break
+        lines.append(line)
+    return "\n".join(lines)
