@@ -86,6 +86,12 @@ def main():
     # Set up readline completer
     readline.set_completer(completer)
     readline.parse_and_bind('tab: complete')
+    readline.parse_and_bind('set show-all-if-ambiguous on')
+    readline.parse_and_bind('set completion-ignore-case on')
+    
+    # Add key bindings for history navigation
+    readline.parse_and_bind('"\e[A": history-search-backward')  # Up arrow
+    readline.parse_and_bind('"\e[B": history-search-forward')   # Down arrow
 
     # Process command line arguments if provided
     # This handles direct commands like "@ visit example.com"
@@ -114,7 +120,10 @@ def main():
     while True:
         try:
             # Get user input with history navigation
-            user_input = input(f"{config.GREEN}You: {config.SMALL_FONT}v{config.VERSION} + @{config.RESET} ").strip()
+            # Format the prompt with model and version
+            model_display = config.current_model if hasattr(config, 'current_model') else 'default'
+            prompt = f"{config.GREEN}{model_display}@{config.VERSION}{config.RESET} "
+            user_input = input(prompt).strip()
             
             # Add query to history
             command_history.add_command(user_input)
