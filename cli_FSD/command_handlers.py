@@ -687,15 +687,10 @@ def handle_file_interaction_command(config):
                 print(f"{config.YELLOW}No file path provided.{config.RESET}")
                 continue
                 
-            print(f"{config.CYAN}Enter content (type 'EOF' on a new line to finish):{config.RESET}")
-            content_lines = []
-            while True:
-                line = input()
-                if line == 'EOF':
-                    break
-                content_lines.append(line)
-            
-            content = '\n'.join(content_lines)
+            # Use multiline_input function from main.py
+            from .main import multiline_input
+            print(f"{config.CYAN}Enter content:{config.RESET}")
+            content = multiline_input("", show_hint=True)
             requires_approval = input("Require approval before writing? (y/n, default: y): ").strip().lower() != 'n'
             
             try:
@@ -792,15 +787,10 @@ def handle_file_interaction_command(config):
                     else:
                         line_number = None
                         
-                    print(f"{config.CYAN}Enter content (type 'EOF' on a new line to finish):{config.RESET}")
-                    content_lines = []
-                    while True:
-                        line = input()
-                        if line == 'EOF':
-                            break
-                        content_lines.append(line)
-                    
-                    content = '\n'.join(content_lines)
+                    # Use multiline_input function from main.py
+                    from .main import multiline_input
+                    print(f"{config.CYAN}Enter content:{config.RESET}")
+                    content = multiline_input("", show_hint=True)
                     
                     op = {
                         "type": "insert",

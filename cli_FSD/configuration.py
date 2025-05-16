@@ -171,6 +171,7 @@ def initialize_config(args):
             config.use_ollama = True
             config.use_claude = False
             config.use_groq = False
+            config.current_model = config.last_ollama_model
         if args.groq:
             config.session_model = "groq"
             config.use_groq = True
