@@ -681,12 +681,32 @@ def process_input_in_safe_mode(query, config, chat_models):
     
     return response
 
-def multiline_input(prompt="> "):
-    print(f"{prompt}(Enter 'EOF' on a new line to finish)")
-    lines = []
-    while True:
-        line = input()
-        if line.strip() == "EOF":
-            break
-        lines.append(line)
-    return "\n".join(lines)
+def multiline_input(prompt="> ", show_hint=False):
+    """
+    Enhanced multiline input with better control.
+    - Type 'EOF' on a new line to send multiline input
+    - Type ';' at the end of a line to continue to next line
+    - Press Enter without ';' to send single line immediately
+    """
+    # Show hint if requested (for places where users might be confused)
+    if show_hint:
+        prompt = prompt + "(';' for multiline) "
+    
+    # First line
+    line = input(prompt)
+    
+    # Check if it ends with ; - if so, start multiline mode
+    if line.endswith(';'):
+        lines = [line[:-1]]  # Remove the trailing ;
+        print("(Multiline mode - enter 'EOF' to finish or ';;' to send)")
+        
+        while True:
+            next_line = input("... ")
+            if next_line.strip() == "EOF" or next_line.strip() == ";;":
+                break
+            lines.append(next_line)
+        
+        return "\n".join(lines)
+    else:
+        # Single line mode - return immediately
+        return line
