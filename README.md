@@ -83,6 +83,7 @@ A lightweight and portable autopilot utility for CLI tasks that takes natural la
     ```
 
 - For additional options, you can enter `CMD` mode by typing `CMD` at any prompt.
+- To browse directories and view file contents, type `browse` at the prompt and follow on-screen instructions.
 
 ### Low-stakes Demos
 Letting an LLM execute code on your computer is objectively dangerous. I've used cli-FSD on every computer I own but think it's important for users to understand the risk associated with this concept. 
@@ -94,7 +95,9 @@ If you don't want to run it locally:
 [![Run on Replit](https://replit.com/badge/github/wazacraft/cli-FSD)](https://replit.com/@wazacraft/cli-FSD)
 
 ## Project Progress
-v0.94
+v2.0.9
+- [x] - Added file interaction tool that allows the agent to modify files in the active directory and all subdirectories with user permission
+- [x] - Added `fileint` command in CMD mode for interactive file operations (list, read, write, modify, delete, search, create directories)
 - [x] - Added support for [Ollama]([url](https://github.com/ollama/ollama)) (use -o to run cli-FSD using any supported local LLM model)
 - [x] - support for script custom gpt-4-turbo assistant OpenAI's Assistants API to revie
 v0.87
@@ -120,6 +123,17 @@ v0.52
    - [ ] - voice notation
 - [ ] - automation schedules and background states
 
+
+### Version Management
+
+The project uses a central version management system:
+
+1. The authoritative version is stored in `cli_FSD/version.py`
+2. To update the version, use the provided script:
+   ```bash
+   python scripts/bump_version.py [major|minor|patch]
+   ```
+3. This will automatically update the version displayed in the UI and used in setup.py
 
 ### Contributing
 

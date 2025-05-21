@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from .chat_models import chat_with_model
 from .configuration import Config
+from .web_fetcher import fetcher
 
 app = Flask(__name__)
 CORS(app)
@@ -58,6 +59,33 @@ def change_model():
         return jsonify({"status": "success", "current_model": config.current_model})
     else:
         return jsonify({"status": "error", "message": "Invalid model"}), 400
+
+@app.route("/fetch_web_content", methods=["POST"])
+def fetch_web_content():
+    """Fetch and process web content based on provided parameters.
+    
+    Expected JSON payload:
+    {
+        "url": "https://example.com",
+        "mode": "basic|detailed|summary",
+        "use_cache": true|false
+    }
+    """
+    url = request.json.get("url")
+    mode = request.json.get("mode", "basic")
+    use_cache = request.json.get("use_cache", True)
+    
+    if not url:
+        return jsonify({"error": "URL is required"}), 400
+        
+    if mode not in ["basic", "detailed", "summary"]:
+        return jsonify({"error": "Invalid mode - must be one of: basic, detailed, summary"}), 400
+    
+    try:
+        result = fetcher.fetch_and_process(url, mode, use_cache)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e), "url": url}), 500
 
 if __name__ == "__main__":
     app.run(port=config.server_port)

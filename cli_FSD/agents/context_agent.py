@@ -1,278 +1,474 @@
-"""Context Management Agent for determining optimal tool selection.
+"""Context Agent for tool selection and command parsing.
 
-This agent analyzes user requests and determines whether to use the Small Context Protocol
-or other tools like fetch, sequential thinking, etc. based on the nature of the task.
-It can also provide hybrid responses that combine latent knowledge with tool-based answers.
+This module provides an agent that analyzes user requests and determines
+which tools to use for processing them.
 """
 
-from typing import Any, Dict, List, Optional, Union
 import json
-import time
-import threading
+import logging
+from typing import Dict, Any, Optional, List
+import platform
+import os
+from datetime import datetime
 
+# Configure logging
+logging.basicConfig(level=logging.INFO,
+                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class ContextAgent:
-    """Agent for context-aware tool selection with hybrid response capabilities."""
+    """Agent for analyzing requests and selecting appropriate tools."""
     
     def __init__(self):
         """Initialize the context agent."""
-        self._tool_response_cache = {}
-        self._background_tasks = {}
+        self.system_info = self._get_system_info()
+        self.tools = {
+            'web_content': ['fetch', 'browse', 'search'],
+            'file_operation': ['read', 'write', 'append', 'delete'],
+            'command': ['shell', 'python', 'bash']
+        }
+        self.context = {
+            'last_web_content': None,
+            'last_operation': None,
+            'last_url': None,
+            'last_query': None,
+            'session_history': []
+        }
     
-    def analyze_request(self, request: str) -> Dict[str, Any]:
-        """Analyze user request to determine optimal tool selection.
+    def _get_system_info(self) -> Dict[str, str]:
+        """Get system information for context.
         
-        This method generates a prompt for the LLM to analyze the request and
-        determine which tools/approaches would be most effective, including
-        the possibility of a hybrid response.
-        
-        Args:
-            request: The user's natural language request
-            
         Returns:
-            Dict containing:
-            - prompt: The generated prompt for LLM analysis
-            - requires_llm_processing: Whether LLM processing is needed
+            Dictionary containing system information
         """
         return {
-            "prompt": f"""Analyze this request: "{request}"
+            'os': platform.system(),
+            'os_version': platform.version(),
+            'architecture': platform.machine(),
+            'python_version': platform.python_version(),
+            'cpu': platform.processor(),
+            'cwd': os.getcwd()
+        }
+    
+    def update_context(self, operation: str, result: Dict[str, Any]) -> None:
+        """Update the context with the latest operation result.
+        
+        Args:
+            operation: The operation that was performed
+            result: The result of the operation
+        """
+        self.context['last_operation'] = operation
+        if operation in self.tools['web_content']:
+            self.context['last_web_content'] = result
+            if 'url' in result:
+                self.context['last_url'] = result['url']
+        elif operation in self.tools['file_operation']:
+            self.context['last_file_operation'] = result
+            if 'filepath' in result:
+                self.context['last_filepath'] = result['filepath']
+        
+        # Add to session history
+        self.context['session_history'].append({
+            'timestamp': datetime.now().isoformat(),
+            'operation': operation,
+            'result': result
+        })
+    
+    def analyze_request(self, query: str) -> Dict[str, Any]:
+        """Analyze a user request to determine which tool to use.
+        
+        Args:
+            query: User's request to analyze
+            
+        Returns:
+            Dictionary containing analysis results and prompt for LLM
+        """
+        # Check for follow-up queries
+        is_follow_up = self._is_follow_up_query(query)
+        
+        # For file operations like creating directories, return a direct response
+        if "make a folder" in query.lower() or "create a directory" in query.lower():
+            folder_name = query.lower().replace("make a folder", "").replace("create a directory", "").replace("called", "").strip()
+            return {
+                "tool": "command",
+                "operation": "shell",
+                "command": f"mkdir {folder_name}",
+                "requires_llm_processing": False,
+                "description": f"Create a directory named '{folder_name}'"
+            }
+        
+        # For file creation requests, provide a more structured prompt
+        if any(word in query.lower() for word in ['create', 'make', 'write', 'using', 'in', 'with']):
+            prompt = f"""Analyze the following request and determine how to create the requested file.
+System Information:
+{json.dumps(self.system_info, indent=2)}
 
-You are an expert in tool selection and content analysis. Your task is to determine the best way to handle this request.
+Available Tools:
+{json.dumps(self.tools, indent=2)}
 
-Respond with a JSON object in this format:
+{self._get_context_prompt() if is_follow_up else ''}
+
+User Request: {query}
+
+Please respond with a JSON object containing:
+1. "tool": "file_operation"
+2. "operation": "write"
+3. "filepath": The full path where the file should be created
+4. "content": The complete content of the file to be created
+5. "description": A brief description of what the file will do
+
+Example response for creating a Python script:
 {{
-    "response_type": "direct_knowledge|tool_based|hybrid",
-    "confidence": 0.0-1.0,
-    "selected_tool": "tool_name",
-    "reasoning": "Explanation of why this approach was selected",
-    "parameters": {{
-        "operation": "operation_name",
-        "url": "url_if_needed",
-        "content": "{request}"
-    }},
-    "context_management": {{
-        "required": true,
-        "priority_level": "important",
-        "entities": [],
-        "relationships": []
-    }}
+    "tool": "file_operation",
+    "operation": "write",
+    "filepath": "scripts/example.py",
+    "content": "def main():\\n    print('Hello, World!')\\n\\nif __name__ == '__main__':\\n    main()",
+    "description": "Create a Python script that prints 'Hello, World!'"
 }}
 
-Response types:
-1. direct_knowledge: Use when you can confidently answer with your latent knowledge
-2. tool_based: Use when a tool is clearly needed to provide an accurate response
-3. hybrid: Use when you can provide a partial answer from latent knowledge but a tool would provide more complete information
+IMPORTANT: 
+- Ensure the filepath is valid for the current system ({self.system_info['os']})
+- Include all necessary imports and code structure
+- Make sure the content is properly escaped for JSON
+- The content should be a complete, working file"""
 
-Available tools and operations:
-1. small_context
-   - browse_web: For web browsing and content extraction
-   - create_context: For managing conversation context
-2. fetch: For data retrieval
-3. sequential_thinking: For complex reasoning
-4. default: For simple commands. USE THIS FOR WEATHER REQUESTS.
+            return {
+                "prompt": prompt,
+                "requires_llm_processing": True
+            }
+        
+        # For other requests, use the default prompt
+        prompt = f"""Analyze the following request and determine which tool to use.
+System Information:
+{json.dumps(self.system_info, indent=2)}
 
-Guidelines:
-1. For web browsing:
-   - Always include complete URLs with https://
-   - Choose authoritative sources
-   - Consider the type of content needed
-2. For context management:
-   - Set appropriate priority level
-   - Identify relevant entities
-   - Track relationships between concepts
-3. For tool selection:
-   - Consider the complexity of the request
-   - Evaluate need for context preservation
-   - Assess if external data is needed
-   - Set confidence level based on how certain you are that the selected approach is optimal
-4. IMPORTANT: For specific commands:
-   - Queries that mention weather: Use 'curl wttr.in/[location]' command instead of web browsing
-   - Time queries: Use appropriate system commands
-   - File operations: Use standard Unix commands
-5. For hybrid responses:
-   - Provide a confidence score between 0.5-0.8 (indicating partial confidence)
-   - Select the tool that would provide the most complete information
-   - The system will provide a preview of latent knowledge while preparing the tool response""",
+Available Tools:
+{json.dumps(self.tools, indent=2)}
+
+{self._get_context_prompt() if is_follow_up else ''}
+
+User Request: {query}
+
+Please respond with a JSON object containing:
+1. "tool": The type of tool to use (web_content, file_operation, or command)
+2. "operation": The specific operation to perform
+3. Additional fields based on the tool type:
+   - For web_content: "url_or_query" and optional "mode"
+   - For file_operation: "filepath" and optional "content"
+   - For command: "command" (the shell command to execute)
+
+Example responses:
+{{
+    "tool": "web_content",
+    "operation": "fetch",
+    "url_or_query": "https://example.com",
+    "mode": "basic"
+}}
+
+{{
+    "tool": "file_operation",
+    "operation": "write",
+    "filepath": "output.txt",
+    "content": "Hello, World!"
+}}
+
+{{
+    "tool": "command",
+    "operation": "shell",
+    "command": "ls -la"
+}}
+
+IMPORTANT: For command operations, ensure the command is compatible with the current system ({self.system_info['os']}).
+Only output valid shell commands that can be executed on this system."""
+
+        return {
+            "prompt": prompt,
             "requires_llm_processing": True
         }
     
-    def execute_tool_selection(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the selected tool based on LLM analysis.
+    def _is_follow_up_query(self, query: str) -> bool:
+        """Check if the query is a follow-up to a previous operation.
         
         Args:
-            analysis: The LLM's analysis of the request
+            query: The query to check
             
         Returns:
-            Dict containing execution results
+            True if the query appears to be a follow-up
         """
-        try:
-            response_type = analysis.get("response_type", "tool_based")
-            selected_tool = analysis.get("selected_tool")
-            parameters = analysis.get("parameters", {})
-            confidence = analysis.get("confidence", 0.0)
-            
-            # Handle different response types
-            if response_type == "direct_knowledge":
-                return {
-                    "type": "direct_knowledge",
-                    "confidence": confidence,
-                    "requires_tools": False,
-                    "message": "Use latent knowledge to answer directly"
-                }
-            elif response_type == "hybrid":
-                return self._handle_hybrid_response(
-                    selected_tool,
-                    parameters,
-                    analysis.get("context_management", {}),
-                    confidence
-                )
-            else:  # tool_based (default)
-                if selected_tool == "small_context":
-                    return self._handle_small_context(
-                        parameters,
-                        analysis.get("context_management", {})
-                    )
-                elif selected_tool == "fetch":
-                    return self._handle_fetch(parameters)
-                elif selected_tool == "sequential_thinking":
-                    return self._handle_sequential_thinking(parameters)
-                else:
-                    return self._handle_default_tools(parameters)
-        except Exception as e:
-            return {
-                "type": "error",
-                "error": f"Tool execution failed: {str(e)}"
-            }
+        follow_up_indicators = [
+            'it', 'that', 'this', 'those', 'these', 'them',
+            'the story', 'the article', 'the page', 'the file',
+            'read', 'show', 'tell me more', 'what about',
+            'how about', 'and', 'but', 'also'
+        ]
+        
+        query_lower = query.lower()
+        return any(indicator in query_lower for indicator in follow_up_indicators)
     
-    def _handle_hybrid_response(
-        self,
-        selected_tool: str,
-        parameters: Dict[str, Any],
-        context_config: Dict[str, Any],
-        confidence: float
-    ) -> Dict[str, Any]:
-        """Handle hybrid response that combines latent knowledge with tool-based answers.
+    def _get_context_prompt(self) -> str:
+        """Get a prompt describing the current context.
+        
+        Returns:
+            A string describing the current context
+        """
+        context_parts = []
+        
+        if self.context.get('last_web_content'):
+            context_parts.append(f"Last web content: {self.context['last_web_content'].get('title', 'Unknown')}")
+            if self.context.get('last_url'):
+                context_parts.append(f"Last URL: {self.context['last_url']}")
+        
+        if self.context.get('last_operation'):
+            context_parts.append(f"Last operation: {self.context['last_operation']}")
+            if self.context.get('last_filepath'):
+                context_parts.append(f"Last filepath: {self.context['last_filepath']}")
+        
+        if context_parts:
+            return "Current Context:\n" + "\n".join(context_parts) + "\n"
+        return ""
+    
+    def parse_command(self, command: str) -> Dict[str, Any]:
+        """Parse a command string into its components.
         
         Args:
-            selected_tool: The tool selected for the complete answer
-            parameters: Parameters for tool execution
-            context_config: Configuration for context management
-            confidence: Confidence level in the latent knowledge portion
+            command: Command string to parse
             
         Returns:
-            Dict containing hybrid response configuration
+            Dictionary containing parsed command details
         """
-        # Create a unique ID for this hybrid response
-        response_id = f"hybrid_{int(time.time())}"
+        # Check for natural language commands first
+        if self._is_natural_language_command(command):
+            return self._parse_natural_language_command(command)
         
-        # Prepare the tool response in the background
-        tool_response = None
-        if selected_tool == "small_context":
-            tool_response = self._handle_small_context(parameters, context_config)
-        elif selected_tool == "fetch":
-            tool_response = self._handle_fetch(parameters)
-        elif selected_tool == "sequential_thinking":
-            tool_response = self._handle_sequential_thinking(parameters)
-        else:
-            tool_response = self._handle_default_tools(parameters)
+        # Basic command parsing
+        parts = command.strip().split()
+        if not parts:
+            return {'error': 'Empty command'}
         
-        # Cache the tool response
-        self._tool_response_cache[response_id] = tool_response
+        operation = parts[0].lower()
         
-        # Return hybrid response configuration
+        # Check if operation matches any known tool
+        for tool_type, operations in self.tools.items():
+            if operation in operations:
+                return {
+                    'tool': tool_type,
+                    'operation': operation,
+                    'args': parts[1:] if len(parts) > 1 else []
+                }
+        
+        # If no matching operation found, treat as a shell command
         return {
-            "type": "hybrid",
-            "response_id": response_id,
-            "confidence": confidence,
-            "preview_message": "Provide a brief answer from latent knowledge",
-            "tool_info": {
-                "tool": selected_tool,
-                "parameters": parameters
-            },
-            "requires_user_choice": True
+            'tool': 'command',
+            'operation': 'shell',
+            'command': command
         }
     
-    def get_cached_tool_response(self, response_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve a cached tool response by ID.
+    def _is_natural_language_command(self, command: str) -> bool:
+        """Check if the command is in natural language format.
         
         Args:
-            response_id: The unique ID of the cached response
+            command: The command to check
             
         Returns:
-            The cached tool response or None if not found
+            True if the command appears to be in natural language
         """
-        return self._tool_response_cache.get(response_id)
-    
-    def _handle_small_context(
-        self,
-        parameters: Dict[str, Any],
-        context_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Handle Small Context Protocol execution."""
-        operation = parameters.get("operation", "create_context")
+        # Check for common natural language patterns
+        patterns = [
+            'browse', 'read', 'show', 'tell me about', 'what is',
+            'find', 'search', 'look up', 'get', 'fetch',
+            'organize', 'sort', 'arrange', 'manage',
+            'create', 'make', 'write', 'save'
+        ]
         
-        # Handle web browsing operation
-        if operation == "browse_web":
-            # Create a new context ID for this browsing session
-            context_id = f"web_{int(time.time())}"
+        command_lower = command.lower()
+        return any(pattern in command_lower for pattern in patterns)
+    
+    def _parse_natural_language_command(self, command: str) -> Dict[str, Any]:
+        """Parse a natural language command into a structured command.
+        
+        Args:
+            command: The natural language command to parse
             
-            # Get URL from parameters or use default
-            url = parameters.get("url")
-            if not url:
-                # This shouldn't happen since the LLM should always provide a URL
-                url = "https://www.google.com"  # Fallback to Google if somehow no URL was provided
+        Returns:
+            Dictionary containing parsed command details
+        """
+        command_lower = command.lower()
+        
+        # Handle web content requests
+        if any(word in command_lower for word in ['browse', 'read', 'show', 'tell me about']):
+            if 'hacker news' in command_lower or 'hn' in command_lower:
+                return {
+                    'tool': 'web_content',
+                    'operation': 'browse',
+                    'url_or_query': 'https://news.ycombinator.com/',
+                    'mode': 'basic'
+                }
+            elif 'reddit' in command_lower:
+                return {
+                    'tool': 'web_content',
+                    'operation': 'browse',
+                    'url_or_query': 'https://www.reddit.com/',
+                    'mode': 'basic'
+                }
+            else:
+                # Extract the search query
+                query = command_lower.replace('browse', '').replace('read', '').replace('show', '').replace('tell me about', '').strip()
+                return {
+                    'tool': 'web_content',
+                    'operation': 'search',
+                    'url_or_query': query,
+                    'mode': 'basic'
+                }
+        
+        # Handle file operations
+        elif any(word in command_lower for word in ['organize', 'sort', 'arrange', 'manage']):
+            return {
+                'tool': 'file_operation',
+                'operation': 'organize',
+                'filepath': '.',  # Current directory
+                'content': None
+            }
+        
+        # Default to web search for unknown commands
+        return {
+            'tool': 'web_content',
+            'operation': 'search',
+            'url_or_query': command,
+            'mode': 'basic'
+        }
+    
+    def validate_command(self, command: Dict[str, Any]) -> bool:
+        """Validate a parsed command for the current system.
+        
+        Args:
+            command: Parsed command to validate
+            
+        Returns:
+            True if command is valid, False otherwise
+        """
+        if command.get('tool') == 'command':
+            cmd = command.get('command', '')
+            
+            # Basic validation for shell commands
+            if self.system_info['os'] == 'Windows':
+                # Windows-specific validation
+                if cmd.startswith('./') or cmd.startswith('bash '):
+                    return False
+            else:
+                # Unix-like system validation
+                if cmd.startswith('cmd ') or cmd.startswith('powershell '):
+                    return False
+            
+            # Check for potentially dangerous commands
+            dangerous_commands = ['rm -rf', 'format', 'dd', 'mkfs']
+            if any(dc in cmd.lower() for dc in dangerous_commands):
+                return False
+        
+        return True
+    
+    def format_command(self, command: Dict[str, Any]) -> str:
+        """Format a parsed command for execution.
+        
+        Args:
+            command: Parsed command to format
+            
+        Returns:
+            Formatted command string
+        """
+        if command.get('tool') == 'command':
+            return command.get('command', '')
+        
+        if command.get('tool') == 'file_operation':
+            operation = command.get('operation', '')
+            filepath = command.get('filepath', '')
+            content = command.get('content', '')
+            
+            if operation in ['write', 'append']:
+                return f"{operation} {filepath} {content}"
+            return f"{operation} {filepath}"
+        
+        if command.get('tool') == 'web_content':
+            operation = command.get('operation', '')
+            url_or_query = command.get('url_or_query', '')
+            mode = command.get('mode', 'basic')
+            return f"{operation} {url_or_query} {mode}"
+        
+        return ''
+
+    def execute_tool_selection(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a tool selection based on the analysis.
+        
+        Args:
+            analysis: Dictionary containing tool selection analysis
+            
+        Returns:
+            Dictionary containing the tool execution details
+        """
+        selected_tool = analysis.get("selected_tool", "default")
+        parameters = analysis.get("parameters", {})
+        
+        # Handle small context tool
+        if selected_tool == "small_context":
+            context_config = analysis.get("context_management", {})
+            if not context_config.get("required", False):
+                return {"error": "Context management not required"}
                 
             return {
                 "tool": "use_mcp_tool",
                 "server": "small-context",
-                "operation": "browse_web",
+                "operation": parameters.get("operation", "create_context"),
                 "arguments": {
-                    "url": url,
-                    "priority": context_config.get("priority_level", "important"),
-                    "context_id": context_id
-                }
-            }
-            
-        # Handle standard context operations
-        if context_config.get("required", False):
-            return {
-                "tool": "use_mcp_tool",
-                "server": "small-context",
-                "operation": operation,
-                "arguments": {
-                    "contextId": parameters.get("context_id"),
-                    "content": parameters.get("content"),
+                    "contextId": parameters.get("context_id", ""),
+                    "content": parameters.get("content", ""),
                     "priority": context_config.get("priority_level", "important"),
                     "entities": context_config.get("entities", []),
                     "relationships": context_config.get("relationships", [])
                 }
             }
-        return {"error": "Context management not required"}
-    
-    def _handle_fetch(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle fetch tool execution."""
+            
+        # Handle fetch tool
+        elif selected_tool == "fetch":
+            return {
+                "tool": "use_mcp_tool",
+                "server": "fetch-server",
+                "operation": "fetch",
+                "arguments": {
+                    "url": parameters.get("url", ""),
+                    "selector": parameters.get("selector", "")
+                }
+            }
+            
+        # Handle sequential thinking tool
+        elif selected_tool == "sequential_thinking":
+            return {
+                "tool": "use_mcp_tool",
+                "server": "sequential-thinking",
+                "operation": "think",
+                "arguments": {
+                    "steps": parameters.get("steps", []),
+                    "problem": parameters.get("problem", "")
+                }
+            }
+            
+        # Handle web content tools
+        elif selected_tool in self.tools['web_content']:
+            url = parameters.get("url", "")
+            return {
+                "tool": "use_mcp_tool",
+                "server": "small-context",
+                "operation": selected_tool,
+                "arguments": {
+                    "url": url,
+                    "mode": parameters.get("mode", "basic")
+                }
+            }
+            
+        # Default to command execution
         return {
-            "tool": "use_mcp_tool",
-            "server": "fetch-server",
-            "operation": "fetch",
-            "arguments": parameters
-        }
-    
-    def _handle_sequential_thinking(
-        self,
-        parameters: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Handle sequential thinking execution."""
-        return {
-            "tool": "use_mcp_tool",
-            "server": "sequential-thinking",
-            "operation": "think",
-            "arguments": parameters
-        }
-    
-    def _handle_default_tools(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle default tool execution."""
-        return {
-            "tool": parameters.get("tool", "execute_command"),
-            "arguments": parameters
+            "tool": "execute_command",
+            "arguments": {
+                "command": parameters.get("command", ""),
+                "operation": parameters.get("operation", "process_command"),
+                "content": parameters.get("content", "")
+            }
         }

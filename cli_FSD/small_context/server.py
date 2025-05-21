@@ -1,22 +1,21 @@
 """Small Context Protocol MCP Server Implementation."""
 
-import json
-import sys
-import asyncio
 import aiohttp
+import asyncio
+import json
 import os
-import time
 import socket
 import subprocess
+import sys
+import time
 from bs4 import BeautifulSoup, NavigableString
-from urllib.parse import urlparse, urljoin
-from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
-import os
-import sys
+from typing import Any, Dict, List, Tuple, Optional
+from urllib.parse import urljoin, urlparse
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from small_context.cache import ContentCache, CachedContent
+from small_context.cache import CachedContent, ContentCache
 
 @dataclass
 class Message:
@@ -218,7 +217,7 @@ class SmallContextServer:
             return {
                 "error": {
                     "code": "method_not_found",
-                    "message": f"Unknown tool: {tool_name}"
+                    "message": f"Unknown method: {tool_name}"
                 }
             }
         
@@ -250,36 +249,83 @@ class SmallContextServer:
             if not parsed.scheme or not parsed.netloc:
                 raise ValueError("Invalid URL format")
             
-            async with aiohttp.ClientSession(headers=self.default_headers) as session:
-                async with session.get(url, timeout=30, ssl=False, allow_redirects=True, max_redirects=5) as response:
-                    response.raise_for_status()
-                    html = await response.text()
-                    
-                    await asyncio.sleep(2)
-                    
-                    try:
-                        async with session.get(str(response.url), timeout=30, ssl=False) as updated_response:
-                            updated_html = await updated_response.text()
-                            if len(updated_html) > len(html):
-                                html = updated_html
-                    except Exception:
-                        pass
+            # Add retry logic for network issues
+            max_retries = 3
+            retry_delay = 2
             
-            soup = BeautifulSoup(html, 'html.parser')
+            for attempt in range(max_retries):
+                try:
+                    async with aiohttp.ClientSession(headers=self.default_headers) as session:
+                        async with session.get(url, timeout=30, ssl=False, allow_redirects=True, max_redirects=5) as response:
+                            response.raise_for_status()
+                            html = await response.text()
+                            
+                            # Wait for dynamic content
+                            await asyncio.sleep(retry_delay)
+                            
+                            # Try to get updated content
+                            try:
+                                async with session.get(str(response.url), timeout=30, ssl=False) as updated_response:
+                                    updated_html = await updated_response.text()
+                                    if len(updated_html) > len(html):
+                                        html = updated_html
+                            except Exception:
+                                pass
+                            
+                            break  # Success, exit retry loop
+                except aiohttp.ClientError as e:
+                    if attempt == max_retries - 1:  # Last attempt
+                        error_msg = str(e)
+                        if "SSL" in error_msg:
+                            error_msg = "SSL certificate verification failed. Please check the URL or try a different site."
+                        elif "DNS" in error_msg:
+                            error_msg = "Could not resolve domain name. Please check the URL."
+                        elif "timeout" in str(e).lower():
+                            error_msg = "Request timed out. The server may be busy or unavailable."
+                        elif "too many redirects" in str(e).lower():
+                            error_msg = "Too many redirects. The URL may be redirecting in a loop."
+                        else:
+                            error_msg = f"Network error: {error_msg}"
+                        return {
+                            "type": "error",
+                            "url": url,
+                            "timestamp": time.time(),
+                            "error": error_msg
+                        }
+                    await asyncio.sleep(retry_delay)  # Wait before retry
+                    continue
             
-            # Remove unwanted elements
-            for selector in [
-                '#cookie-consent', '.cookie-banner', '.cookie-notice',
-                '.consent-overlay', '.modal', '.popup', '.overlay',
-                '#gdpr', '.gdpr', '.subscription-overlay', '.paywall',
-                '.ad-overlay', 'script', 'style', 'meta', 'link',
-                'iframe', 'noscript', 'svg', 'footer', 'nav',
-                '[role="complementary"]', '[role="navigation"]',
-                '.sidebar', '.comments', '.related-articles',
-                '.advertisement', '.social-share', '.newsletter'
-            ]:
-                for element in soup.select(selector):
-                    element.decompose()
+            try:
+                soup = BeautifulSoup(html, 'html.parser')
+            except Exception as e:
+                return {
+                    "type": "error",
+                    "url": url,
+                    "timestamp": time.time(),
+                    "error": f"Error parsing HTML with BeautifulSoup: {str(e)}"
+                }
+
+            try:
+                # Remove unwanted elements
+                for selector in [
+                    '#cookie-consent', '.cookie-banner', '.cookie-notice',
+                    '.consent-overlay', '.modal', '.popup', '.overlay',
+                    '#gdpr', '.gdpr', '.subscription-overlay', '.paywall',
+                    '.ad-overlay', 'script', 'style', 'meta', 'link',
+                    'iframe', 'noscript', 'svg', 'footer', 'nav',
+                    '[role="complementary"]', '[role="navigation"]',
+                    '.sidebar', '.comments', '.related-articles',
+                    '.advertisement', '.social-share', '.newsletter'
+                ]:
+                    for element in soup.select(selector):
+                        element.decompose()
+            except Exception as e:
+                return {
+                    "type": "error",
+                    "url": url,
+                    "timestamp": time.time(),
+                    "error": f"Error removing unwanted elements: {str(e)}"
+                }
             
             # Extract title
             title = soup.title.string.strip() if soup.title else ''
@@ -360,61 +406,35 @@ class SmallContextServer:
                 return block if block["text"] else None
 
             # Process content based on page structure
-            if "news.ycombinator.com" in url:
-                # Handle HN-specific structure
-                stories = soup.select('tr.athing')
-                for story in stories:
-                    title_cell = story.select_one('td.title > span.titleline')
-                    if title_cell and (title_link := title_cell.find('a')):
-                        story_block = {
-                            "type": "story",
-                            "title": title_link.get_text().strip(),
-                            "url": urljoin(url, title_link['href']) if title_link.get('href') else "",
-                            "metadata": {}
-                        }
-                        
-                        if meta_row := story.find_next_sibling('tr'):
-                            if meta := meta_row.select_one('td.subtext'):
-                                if points := meta.select_one('span.score'):
-                                    story_block["metadata"]["points"] = points.get_text()
-                                if author := meta.select_one('a.hnuser'):
-                                    story_block["metadata"]["author"] = author.get_text()
-                                if time_el := meta.select_one('span.age'):
-                                    story_block["metadata"]["time"] = time_el.get_text()
-                                if comments := meta.find_all('a')[-1]:
-                                    story_block["metadata"]["comments"] = comments.get_text()
-                        
-                        content["content"].append(story_block)
-            else:
-                # Handle generic webpage structure
-                for tag in soup.find_all(['article', 'main', '[role="main"]', '.content', '#content']):
-                    section = {
-                        "type": "section",
-                        "blocks": []
-                    }
-                    
-                    # Extract headings
-                    for heading in tag.find_all(['h1', 'h2', 'h3']):
-                        if block := extract_content_block(heading):
-                            block["type"] = "heading"
-                            section["blocks"].append(block)
-                    
-                    # Extract paragraphs and lists
-                    for element in tag.find_all(['p', 'div', 'section', 'ul', 'ol']):
-                        if block := extract_content_block(element):
-                            section["blocks"].append(block)
-                    
-                    if section["blocks"]:
-                        content["content"].append(section)
+            # Handle generic webpage structure
+            for tag in soup.find_all(['article', 'main', '[role="main"]', '.content', '#content']):
+                section = {
+                    "type": "section",
+                    "blocks": []
+                }
                 
-                # Fallback to any content if no structured content found
-                if not content["content"]:
-                    for tag in soup.find_all(['p', 'div', 'section']):
-                        if block := extract_content_block(tag):
-                            content["content"].append({
-                                "type": "section",
-                                "blocks": [block]
-                            })
+                # Extract headings
+                for heading in tag.find_all(['h1', 'h2', 'h3']):
+                    if block := extract_content_block(heading):
+                        block["type"] = "heading"
+                        section["blocks"].append(block)
+                
+                # Extract paragraphs and lists
+                for element in tag.find_all(['p', 'div', 'section', 'ul', 'ol']):
+                    if block := extract_content_block(element):
+                        section["blocks"].append(block)
+                
+                if section["blocks"]:
+                    content["content"].append(section)
+            
+            # Fallback to any content if no structured content found
+            if not content["content"]:
+                for tag in soup.find_all(['p', 'div', 'section']):
+                    if block := extract_content_block(tag):
+                        content["content"].append({
+                            "type": "section",
+                            "blocks": [block]
+                        })
             
             # Cache the content
             cached_content = CachedContent(
@@ -431,28 +451,13 @@ class SmallContextServer:
             self.cache.cache_content(cached_content)
             
             return content
-            
+        
         except Exception as e:
-            error_msg = str(e)
-            if isinstance(e, aiohttp.ClientError):
-                if "SSL" in error_msg:
-                    error_msg = "SSL certificate verification failed"
-                elif "DNS" in error_msg:
-                    error_msg = "Could not resolve domain name"
-                elif "timeout" in error_msg.lower():
-                    error_msg = "Request timed out"
-                elif "too many redirects" in error_msg.lower():
-                    error_msg = "Too many redirects"
-                else:
-                    error_msg = f"Network error: {error_msg}"
-            elif isinstance(e, ValueError):
-                error_msg = f"Invalid URL format: {error_msg}"
-            
             return {
                 "type": "error",
                 "url": url,
                 "timestamp": time.time(),
-                "error": error_msg
+                "error": f"Error extracting content: {str(e)}"
             }
     
     def _handle_select_content(self, args: Dict[str, Any]) -> Dict[str, Any]:

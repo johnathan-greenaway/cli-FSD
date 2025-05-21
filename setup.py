@@ -1,8 +1,19 @@
 from setuptools import setup, find_packages
+import os
+import re
+
+# Get version from version.py
+with open(os.path.join('cli_FSD', 'version.py'), 'r') as f:
+    version_file = f.read()
+    version_match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]", version_file, re.M)
+    if version_match:
+        version = version_match.group(1)
+    else:
+        raise RuntimeError("Unable to find version string in version.py")
 
 setup(
     name='cli-FSD',
-    version='1.8.1',
+    version=version,
     author='JG',
     author_email='wazacraftRFID@gmail.com',
     description='LLM-enabled companion utility for your terminal.',
