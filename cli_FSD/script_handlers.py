@@ -840,6 +840,14 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
     # Reset browser attempts counter for new queries
     browser_attempts = 0
     
+    # Smart Query Routing - Classify query before processing
+    from .query_router import QueryRouter
+    from .web_search import WebSearchHandler, format_search_response
+    
+    router = QueryRouter()
+    route_info = router.classify_query(user_input)
+    config.route_info = route_info  # Store for use by chat models
+    
     # Check for session management commands
     if user_input.lower() == 'history':
         return display_session_history(config)
@@ -853,6 +861,25 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
     elif user_input.lower() == 'session status':
         return display_session_status(config)
     
+    # Route-specific processing based on query classification
+    if route_info['route'] == 'web_search':
+        print(f"{config.CYAN}🔍 Web search route detected: {route_info['reason']}{config.RESET}")
+        web_handler = WebSearchHandler()
+        search_result = web_handler.search_web(user_input)
+        formatted_response = format_search_response(search_result)
+        print_streamed_message(formatted_response, config.CYAN)
+        return formatted_response
+    
+    elif route_info['route'] == 'direct_llm':
+        print(f"{config.CYAN}💡 Direct LLM route detected: {route_info['reason']}{config.RESET}")
+        # Use enhanced prompt for direct LLM processing
+        enhanced_prompt = router.get_enhanced_prompt(user_input, route_info)
+        from .chat_models import chat_with_model
+        llm_response = chat_with_model(enhanced_prompt, config, chat_models)
+        print_streamed_message(llm_response, config.CYAN)
+        return llm_response
+    
+    # Continue with existing processing for other routes
     # Direct command to browse a site (special handler for local models)
     elif user_input.lower().startswith(('browse ', '@browse ', '@ browse ')):
         # Extract the site name - handle "using the browse tool" and similar phrases
