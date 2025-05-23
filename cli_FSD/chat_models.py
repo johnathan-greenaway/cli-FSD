@@ -78,6 +78,15 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
     import threading
     from .utils import animated_loading
     
+    # Check for routing information and apply enhanced prompts
+    route_info = getattr(config, 'route_info', None)
+    if route_info and system_prompt is None:
+        # Use enhanced prompt based on routing decision
+        from .query_router import QueryRouter
+        router = QueryRouter()
+        enhanced_prompt = router.get_enhanced_prompt(message, route_info)
+        system_prompt = f"{enhanced_prompt}\n\nSystem info: {get_system_info()}"
+    
     # Use provided system prompt or default
     if system_prompt is None:
         system_prompt = (
