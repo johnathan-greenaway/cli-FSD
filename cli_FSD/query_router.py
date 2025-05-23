@@ -59,11 +59,37 @@ class QueryRouter:
             r'\b(network|port|ping|curl|wget)\b'
         ]
         
+        # Simple command patterns - operations that should use basic commands
+        self.simple_command_patterns = [
+            r'\bls\b',
+            r'\bdir\b',
+            r'\blist files\b',
+            r'\bshow files\b',
+            r'\bview files\b',
+            r'\b(list|show|view|display|see|review)\b.*\b(file|files|directory|directories|folder|folders)\b',
+            r'\b(review|check|examine)\b.*\b(file|files|directory|directories|repo|repository)\b',
+            r'\b(show|list)\b.*\b(content|contents)\b',
+            r'\b(what|what\'s)\b.*\b(file|files)\b.*\b(in|inside|are)\b',
+            r'\b(what|what\'s)\b.*\b(in|inside)\b.*\b(directory|folder|repo|repository)\b',
+            r'\bwhat files are in\b',
+            r'\bwhat files are\b.*\b(directory|folder)\b',
+            r'\b(count|how many)\b.*\b(file|files)\b',
+            r'\b(find|search)\b.*\b(file|files)\b.*\b(in|inside)\b',
+            r'\b(copy|cp|move|mv)\b.*\b(file|files)\b',
+            r'\b(add|append|insert)\b.*\b(content|contents|text)\b.*\b(to|into)\b',
+            r'\breview.*files.*repo\b',
+            r'\breview.*files.*directory\b',
+            r'\bshow.*files.*in\b',
+            r'\blist.*files.*in\b',
+            r'\bshow files in\b',
+            r'\bview.*files.*in.*folder\b'
+        ]
+        
         # Web search indicators - explicit search requests
         self.web_search_indicators = [
             r'\b(search|find|lookup|look up)\b',
             r'\b(google|bing|duckduckgo)\b',
-            r'\b(what is|who is|where is|when is)\b',
+            r'\b(what is|who is|where is|when is)\b(?!.*\b(file|files|directory|folder)\b)',
             r'\b(definition|meaning|explain)\b',
             r'\b(website|url|link)\b'
         ]
@@ -97,6 +123,7 @@ class QueryRouter:
         current_info_score = self._calculate_pattern_score(query_lower, self.current_info_patterns)
         code_help_score = self._calculate_pattern_score(query_lower, self.code_help_patterns)
         system_ops_score = self._calculate_pattern_score(query_lower, self.system_ops_patterns)
+        simple_command_score = self._calculate_pattern_score(query_lower, self.simple_command_patterns)
         web_search_score = self._calculate_pattern_score(query_lower, self.web_search_indicators)
         
         # Assess internal confidence
@@ -112,7 +139,7 @@ class QueryRouter:
         
         # Make routing decision
         route_info = self._make_routing_decision(
-            current_info_score, code_help_score, system_ops_score,
+            current_info_score, code_help_score, system_ops_score, simple_command_score,
             internal_confidence, is_time_sensitive, explicit_web_search
         )
         
@@ -122,6 +149,7 @@ class QueryRouter:
                 'current_info': current_info_score,
                 'code_help': code_help_score,
                 'system_ops': system_ops_score,
+                'simple_command': simple_command_score,
                 'web_search': web_search_score,
                 'internal_confidence': internal_confidence
             },
@@ -210,7 +238,7 @@ class QueryRouter:
         return any(indicator in query for indicator in time_indicators)
     
     def _make_routing_decision(self, current_info_score: float, code_help_score: float,
-                             system_ops_score: float, internal_confidence: float,
+                             system_ops_score: float, simple_command_score: float, internal_confidence: float,
                              is_time_sensitive: bool, explicit_web_search: bool) -> Dict[str, Any]:
         """
         Make final routing decision based on all factors.
@@ -219,6 +247,7 @@ class QueryRouter:
             current_info_score: Score for current information patterns
             code_help_score: Score for code help patterns
             system_ops_score: Score for system operations patterns
+            simple_command_score: Score for simple command patterns
             internal_confidence: Internal knowledge confidence
             is_time_sensitive: Whether query is time-sensitive
             explicit_web_search: Whether user explicitly requested web search
@@ -234,7 +263,15 @@ class QueryRouter:
                 'confidence': 'high'
             }
         
-        # Priority 2: Time-sensitive queries
+        # Priority 2: Simple command operations (highest priority for basic file operations)
+        if simple_command_score > 0.5:
+            return {
+                'route': 'simple_command',
+                'reason': 'simple_file_or_command_operation',
+                'confidence': 'high'
+            }
+        
+        # Priority 3: Time-sensitive queries
         if is_time_sensitive or current_info_score > 50:
             return {
                 'route': 'web_search',
@@ -242,7 +279,7 @@ class QueryRouter:
                 'confidence': 'high'
             }
         
-        # Priority 3: High-confidence technical queries (adjusted thresholds)
+        # Priority 4: High-confidence technical queries (adjusted thresholds)
         if (code_help_score > 10 or system_ops_score > 8) and internal_confidence >= 50:
             return {
                 'route': 'direct_llm',
@@ -250,7 +287,7 @@ class QueryRouter:
                 'confidence': 'high'
             }
         
-        # Priority 4: Moderate confidence queries with enhancement (adjusted threshold)
+        # Priority 5: Moderate confidence queries with enhancement (adjusted threshold)
         if internal_confidence > 40 or code_help_score > 5 or system_ops_score > 5:
             return {
                 'route': 'enhanced_llm',
@@ -279,6 +316,19 @@ class QueryRouter:
         route = route_info.get('route', 'tool_selection')
         
         prompt_templates = {
+            'simple_command': """This query is asking for a simple file or command operation that should be handled with basic commands.
+Provide the exact command(s) needed, such as 'ls', 'cat', 'find', 'cp', 'mv', etc.
+Do NOT create scripts or complex solutions - use the most basic, direct approach.
+If multiple commands are needed, chain them together simply (e.g., ls -la /path/to/directory).
+
+For file listing: use 'ls' with appropriate flags
+For viewing file contents: use 'cat' or 'head'  
+For copying files: use 'cp'
+For moving files: use 'mv'
+For finding files: use 'find' or 'locate'
+
+User query: {query}""",
+            
             'direct_llm': """The user's query appears to be about technical topics you have strong knowledge of.
 Use your internal knowledge to provide a comprehensive answer.
 Do NOT suggest using external tools unless absolutely necessary.

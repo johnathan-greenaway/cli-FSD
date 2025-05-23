@@ -487,13 +487,27 @@ def process_input_based_on_mode(query, config, chat_models):
         llm_analysis = chat_with_model(analysis["prompt"], config, chat_models)
         
         try:
-            # Clean up the response by removing markdown code block markers
-            cleaned_response = llm_analysis.replace("```json", "").replace("```", "").strip()
-            result = json.loads(cleaned_response)
+            # Use improved JSON extraction from script_handlers
+            from .script_handlers import extract_json_from_response
+            json_content = extract_json_from_response(llm_analysis)
+            if json_content:
+                result = json.loads(json_content)
+            else:
+                # Fall back to simple cleaning
+                cleaned_response = llm_analysis.replace("```json", "").replace("```", "").strip()
+                result = json.loads(cleaned_response)
         except json.JSONDecodeError:
             print(f"{config.YELLOW}Failed to parse LLM analysis response.{config.RESET}")
             print(f"\n{config.CYAN}Raw LLM response for debugging:{config.RESET}")
             print(f"```json\n{llm_analysis}\n```")
+            
+            # Show extracted JSON if available for debugging
+            from .script_handlers import extract_json_from_response
+            extracted_json = extract_json_from_response(llm_analysis)
+            if extracted_json:
+                print(f"\n{config.CYAN}Extracted JSON content:{config.RESET}")
+                print(f"```json\n{extracted_json}\n```")
+            
             return "Error: Could not parse tool selection response."
         
         # Handle different tool types

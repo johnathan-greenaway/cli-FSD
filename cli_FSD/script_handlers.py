@@ -8,6 +8,56 @@ import regex  # For more advanced regex support
 from datetime import datetime, date
 from typing import Any
 
+
+def extract_json_from_response(response: str) -> str:
+    """
+    Extract JSON content from LLM responses that may contain markdown code blocks
+    and additional explanatory text.
+    
+    Args:
+        response: The full LLM response text
+        
+    Returns:
+        Extracted JSON string, or empty string if no JSON found
+    """
+    # Try to find JSON within markdown code blocks
+    json_patterns = [
+        r'```json\s*\n(.*?)\n```',  # ```json ... ```
+        r'```\s*\n(\{.*?\})\s*\n```',  # ``` { ... } ```
+        r'(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})',  # Direct JSON object
+    ]
+    
+    for pattern in json_patterns:
+        matches = re.findall(pattern, response, re.DOTALL | re.MULTILINE)
+        if matches:
+            # Return the first match that looks like valid JSON
+            for match in matches:
+                cleaned_match = match.strip()
+                if cleaned_match.startswith('{') and cleaned_match.endswith('}'):
+                    return cleaned_match
+    
+    # If no markdown blocks found, try to find JSON-like content
+    # Look for lines that start and end with braces
+    lines = response.split('\n')
+    json_lines = []
+    in_json = False
+    brace_count = 0
+    
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('{'):
+            in_json = True
+            json_lines = [line]
+            brace_count = stripped.count('{') - stripped.count('}')
+        elif in_json:
+            json_lines.append(line)
+            brace_count += stripped.count('{') - stripped.count('}')
+            if brace_count <= 0:
+                # Found complete JSON object
+                return '\n'.join(json_lines)
+    
+    return ""
+
 def attempt_json_repair(json_str):
     """
     Attempt to repair malformed JSON strings with common errors.
@@ -287,6 +337,79 @@ def _find_matching_content(query):
         pass
     
     return None
+
+def handle_simple_command_execution(llm_response: str, original_query: str, config) -> str:
+    """
+    Extract and execute simple commands from LLM response.
+    
+    Args:
+        llm_response: Response from LLM containing command(s)
+        original_query: Original user query
+        config: Configuration object
+        
+    Returns:
+        String containing command output or error message
+    """
+    import subprocess
+    import re
+    
+    # Extract commands from the LLM response
+    # Look for bash code blocks first
+    bash_pattern = r'```(?:bash|sh)?\n(.*?)\n```'
+    matches = re.findall(bash_pattern, llm_response, re.DOTALL)
+    
+    if matches:
+        command = matches[0].strip()
+    else:
+        # Look for standalone commands (no code blocks)
+        lines = llm_response.strip().split('\n')
+        # Find lines that look like commands
+        command_lines = []
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('#') and any(cmd in line for cmd in ['ls', 'cat', 'find', 'head', 'tail', 'grep', 'cp', 'mv']):
+                command_lines.append(line)
+        
+        if command_lines:
+            command = command_lines[0]  # Use first command found
+        else:
+            # Fallback: use the whole response as command if it's short and looks like a command
+            if len(llm_response.strip()) < 100 and any(cmd in llm_response for cmd in ['ls', 'cat', 'find', 'head', 'tail', 'grep']):
+                command = llm_response.strip()
+            else:
+                return f"Could not extract a simple command from the response. LLM suggested: {llm_response}"
+    
+    print(f"{config.YELLOW}Executing command: {command}{config.RESET}")
+    
+    # Execute the command
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30  # 30 second timeout for simple commands
+        )
+        
+        output = ""
+        if result.stdout:
+            output += result.stdout
+        
+        if result.stderr:
+            output += f"\n{config.YELLOW}Warnings/Errors:{config.RESET}\n{result.stderr}"
+        
+        if result.returncode != 0:
+            output += f"\n{config.RED}Command failed with exit code: {result.returncode}{config.RESET}"
+        
+        if not output.strip():
+            output = f"{config.GREEN}Command executed successfully (no output){config.RESET}"
+        
+        return f"Command: `{command}`\n\nOutput:\n{output}"
+        
+    except subprocess.TimeoutExpired:
+        return f"Command `{command}` timed out after 30 seconds"
+    except Exception as e:
+        return f"Error executing command `{command}`: {str(e)}"
 
 def set_evaluation_tolerance(level: str):
     """
@@ -870,6 +993,18 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         print_streamed_message(formatted_response, config.CYAN)
         return formatted_response
     
+    elif route_info['route'] == 'simple_command':
+        print(f"{config.CYAN}⚡ Simple command route detected: {route_info['reason']}{config.RESET}")
+        # Use enhanced prompt for simple command processing
+        enhanced_prompt = router.get_enhanced_prompt(user_input, route_info)
+        from .chat_models import chat_with_model
+        llm_response = chat_with_model(enhanced_prompt, config, chat_models)
+        
+        # Extract and execute the command directly
+        command_response = handle_simple_command_execution(llm_response, user_input, config)
+        print_streamed_message(command_response, config.CYAN)
+        return command_response
+    
     elif route_info['route'] == 'direct_llm':
         print(f"{config.CYAN}💡 Direct LLM route detected: {route_info['reason']}{config.RESET}")
         # Use enhanced prompt for direct LLM processing
@@ -1139,12 +1274,25 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
             try:
                 tool_selection = json.loads(llm_analysis)
             except json.JSONDecodeError:
-                # If that fails, try to repair the JSON
-                repaired_json, was_repaired = attempt_json_repair(llm_analysis)
-                if was_repaired:
-                    tool_selection = json.loads(repaired_json)
+                # Try to extract JSON from markdown code blocks
+                json_content = extract_json_from_response(llm_analysis)
+                if json_content:
+                    try:
+                        tool_selection = json.loads(json_content)
+                    except json.JSONDecodeError:
+                        # If that fails, try to repair the JSON
+                        repaired_json, was_repaired = attempt_json_repair(json_content)
+                        if was_repaired:
+                            tool_selection = json.loads(repaired_json)
+                        else:
+                            raise ValueError("Could not parse tool selection JSON")
                 else:
-                    raise ValueError("Could not parse tool selection JSON")
+                    # If that fails, try to repair the original JSON
+                    repaired_json, was_repaired = attempt_json_repair(llm_analysis)
+                    if was_repaired:
+                        tool_selection = json.loads(repaired_json)
+                    else:
+                        raise ValueError("Could not parse tool selection JSON")
 
             # Validate the tool selection
             if not isinstance(tool_selection, dict):
