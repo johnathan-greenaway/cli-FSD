@@ -957,7 +957,7 @@ def _validate_query(query: str) -> bool:
 def process_input_based_on_mode(user_input: str, config: Any) -> str:
     """Process user input based on the current mode."""
     # Initialize chat models
-    from .chat_models import initialize_chat_models
+    from .chat_models import initialize_chat_models, chat_with_model
     chat_models = initialize_chat_models(config)
     
     # Reset browser attempts counter for new queries
@@ -1013,6 +1013,11 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         llm_response = chat_with_model(enhanced_prompt, config, chat_models)
         print_streamed_message(llm_response, config.CYAN)
         return llm_response
+    
+    elif route_info['route'] == 'tool_selection':
+        print(f"{config.CYAN}🔧 Tool selection route detected: {route_info['reason']}{config.RESET}")
+        # Fall through to ContextAgent processing with routing metadata
+        pass
     
     # Continue with existing processing for other routes
     # Direct command to browse a site (special handler for local models)
@@ -1248,34 +1253,53 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
 
     try:
         agent = ContextAgent()
-        analysis = agent.analyze_request(user_input)
+        # Pass routing metadata if available
+        routing_metadata = route_info if route_info.get('route') == 'tool_selection' else None
+        analysis = agent.analyze_request(user_input, routing_metadata=routing_metadata)
         
         # Validate analysis object
         if not analysis or not isinstance(analysis, dict) or "prompt" not in analysis:
             # Fall back to direct LLM processing if analysis fails
             print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
-            llm_response = chat_with_model(user_input, config, chat_models)
+            llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
             final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
             print_streamed_message(final_response, config.CYAN)
             return final_response
 
         # Extract the prompt from the analysis
         llm_analysis = analysis.get("prompt", "")
+        
+        # Debug output for tool selection route
+        if route_info.get('route') == 'tool_selection':
+            print(f"{config.CYAN}ContextAgent routing metadata: {routing_metadata}{config.RESET}")
+        
         if not llm_analysis:
             print(f"{config.YELLOW}No response received from tool selection LLM analysis.{config.RESET}")
-            llm_response = chat_with_model(user_input, config, chat_models)
+            llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
             final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
             print_streamed_message(final_response, config.CYAN)
             return final_response
 
-        # Try to extract JSON from the analysis
+        # Send the prompt to the LLM for tool selection
+        print(f"{config.CYAN}Sending to LLM for tool selection...{config.RESET}")
+        tool_selection_response = chat_with_model(
+            message=llm_analysis,
+            config=config,
+            chat_models=chat_models
+        )
+        
+        # Debug: show what the LLM returned
+        if route_info.get('route') == 'tool_selection':
+            print(f"{config.CYAN}LLM raw response: {tool_selection_response[:200]}...{config.RESET}")
+        
+        # Try to extract JSON from the LLM response
         try:
             # First try direct JSON parsing
             try:
-                tool_selection = json.loads(llm_analysis)
+                tool_selection = json.loads(tool_selection_response)
             except json.JSONDecodeError:
                 # Try to extract JSON from markdown code blocks
-                json_content = extract_json_from_response(llm_analysis)
+                json_content = extract_json_from_response(tool_selection_response)
                 if json_content:
                     try:
                         tool_selection = json.loads(json_content)
@@ -1288,12 +1312,16 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
                             raise ValueError("Could not parse tool selection JSON")
                 else:
                     # If that fails, try to repair the original JSON
-                    repaired_json, was_repaired = attempt_json_repair(llm_analysis)
+                    repaired_json, was_repaired = attempt_json_repair(tool_selection_response)
                     if was_repaired:
                         tool_selection = json.loads(repaired_json)
                     else:
                         raise ValueError("Could not parse tool selection JSON")
 
+            # Debug output for tool selection
+            if route_info.get('route') == 'tool_selection':
+                print(f"{config.CYAN}LLM tool selection JSON: {json.dumps(tool_selection, indent=2)}{config.RESET}")
+            
             # Validate the tool selection
             if not isinstance(tool_selection, dict):
                 raise ValueError("Tool selection is not a dictionary")
@@ -1311,7 +1339,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
             if tool_name == "browse_web":
                 if not url or url == "[URL will be determined based on request]":
                     print(f"{config.RED}No valid URL provided in tool selection.{config.RESET}")
-                    llm_response = chat_with_model(user_input, config, chat_models)
+                    llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
                     final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
                     print_streamed_message(final_response, config.CYAN)
                     return final_response
@@ -1378,14 +1406,14 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
 
             else:
                 # Default to standard LLM processing
-                llm_response = chat_with_model(user_input, config, chat_models)
+                llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
                 final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
                 print_streamed_message(final_response, config.CYAN)
                 return final_response
 
         except Exception as e:
             # Fallback if JSON extraction fails
-            llm_response = chat_with_model(user_input, config, chat_models)
+            llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
             final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
             print_streamed_message(final_response, config.CYAN)
             return final_response
@@ -1394,7 +1422,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         print(f"{config.RED}Error in main processing: {str(e)}{config.RESET}")
         traceback.print_exc()
         # Fallback logic remains the same
-        llm_response = chat_with_model(user_input, config, chat_models)
+        llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
         final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
         print_streamed_message(final_response, config.CYAN)
         return final_response
@@ -1423,7 +1451,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
                     print(f"{config.YELLOW}Error formatting browser response: {str(e)}. Falling back to LLM...{config.RESET}")
         
         # Default fallback if not a browse request or if browser search fails
-        llm_response = chat_with_model(user_input, config, chat_models)
+        llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
         final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
         print_streamed_message(final_response, config.CYAN)
         return final_response
@@ -1431,7 +1459,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         print(f"{config.RED}Error in fallback processing: {str(e)}{config.RESET}")
         traceback.print_exc()
         # Final fallback to direct LLM
-        llm_response = chat_with_model(user_input, config, chat_models)
+        llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
         final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
         print_streamed_message(final_response, config.CYAN)
         return final_response

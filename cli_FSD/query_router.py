@@ -94,6 +94,15 @@ class QueryRouter:
             r'\b(website|url|link)\b'
         ]
         
+        # Browse tool indicators - explicit browse tool requests
+        self.browse_tool_indicators = [
+            r'\b(use|using)\s+(the\s+)?browse(r)?\s+tool\b',
+            r'\bbrowse\s+tool\b',
+            r'\b(browse|visit|go to|open)\s+(website|site|url|page)\b',
+            r'\bweb\s+browser\b',
+            r'\bbrowse\s+(to|for)\b'
+        ]
+        
         # High confidence topics for internal knowledge
         self.high_confidence_topics = [
             'python', 'javascript', 'bash', 'git', 'linux', 'programming',
@@ -119,12 +128,34 @@ class QueryRouter:
         """
         query_lower = query.lower()
         
+        # Check for explicit tool usage requests first
+        explicit_tool_request = None
+        if any(phrase in query_lower for phrase in ['use the browse tool', 'using the browse tool', 'use browse tool', 'browse tool']):
+            explicit_tool_request = 'browse_web'
+        elif any(phrase in query_lower for phrase in ['use the file tool', 'using the file tool', 'file tool']):
+            explicit_tool_request = 'file_operation'
+        elif any(phrase in query_lower for phrase in ['use the command tool', 'using the command tool', 'command tool']):
+            explicit_tool_request = 'command'
+        
+        # If explicit tool request found, route to tool_selection with metadata
+        if explicit_tool_request:
+            return {
+                'route': 'tool_selection',
+                'reason': 'explicit_tool_request',
+                'confidence': 'high',
+                'metadata': {
+                    'requested_tool': explicit_tool_request,
+                    'user_explicit_request': True
+                }
+            }
+        
         # Calculate pattern scores
         current_info_score = self._calculate_pattern_score(query_lower, self.current_info_patterns)
         code_help_score = self._calculate_pattern_score(query_lower, self.code_help_patterns)
         system_ops_score = self._calculate_pattern_score(query_lower, self.system_ops_patterns)
         simple_command_score = self._calculate_pattern_score(query_lower, self.simple_command_patterns)
         web_search_score = self._calculate_pattern_score(query_lower, self.web_search_indicators)
+        browse_tool_score = self._calculate_pattern_score(query_lower, self.browse_tool_indicators)
         
         # Assess internal confidence
         internal_confidence = self._assess_internal_confidence(query_lower)
@@ -140,7 +171,7 @@ class QueryRouter:
         # Make routing decision
         route_info = self._make_routing_decision(
             current_info_score, code_help_score, system_ops_score, simple_command_score,
-            internal_confidence, is_time_sensitive, explicit_web_search
+            internal_confidence, is_time_sensitive, explicit_web_search, browse_tool_score
         )
         
         # Add scoring details for debugging
@@ -151,6 +182,7 @@ class QueryRouter:
                 'system_ops': system_ops_score,
                 'simple_command': simple_command_score,
                 'web_search': web_search_score,
+                'browse_tool': browse_tool_score,
                 'internal_confidence': internal_confidence
             },
             'flags': {
@@ -239,7 +271,7 @@ class QueryRouter:
     
     def _make_routing_decision(self, current_info_score: float, code_help_score: float,
                              system_ops_score: float, simple_command_score: float, internal_confidence: float,
-                             is_time_sensitive: bool, explicit_web_search: bool) -> Dict[str, Any]:
+                             is_time_sensitive: bool, explicit_web_search: bool, browse_tool_score: float) -> Dict[str, Any]:
         """
         Make final routing decision based on all factors.
         
@@ -255,7 +287,19 @@ class QueryRouter:
         Returns:
             Dictionary with routing decision and metadata
         """
-        # Priority 1: Explicit web search requests
+        # Priority 1: Browse tool indicators (even without explicit "use tool" phrase)
+        if browse_tool_score > 30:
+            return {
+                'route': 'tool_selection',
+                'reason': 'browse_tool_indicators',
+                'confidence': 'high',
+                'metadata': {
+                    'suggested_tool': 'browse_web',
+                    'browse_score': browse_tool_score
+                }
+            }
+        
+        # Priority 2: Explicit web search requests
         if explicit_web_search:
             return {
                 'route': 'web_search',
