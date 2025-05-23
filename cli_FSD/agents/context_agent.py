@@ -74,11 +74,12 @@ class ContextAgent:
             'result': result
         })
     
-    def analyze_request(self, query: str) -> Dict[str, Any]:
+    def analyze_request(self, query: str, routing_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Analyze a user request to determine which tool to use.
         
         Args:
             query: User's request to analyze
+            routing_metadata: Optional metadata from query router
             
         Returns:
             Dictionary containing analysis results and prompt for LLM
@@ -98,7 +99,13 @@ class ContextAgent:
             }
         
         # For file creation requests, provide a more structured prompt
-        if any(word in query.lower() for word in ['create', 'make', 'write', 'using', 'in', 'with']):
+        # But exclude queries that are about using tools
+        query_lower = query.lower()
+        is_file_creation = any(word in query_lower for word in ['create', 'make', 'write']) and \
+                          'file' in query_lower and \
+                          'tool' not in query_lower
+        
+        if is_file_creation:
             prompt = f"""Analyze the following request and determine how to create the requested file.
 System Information:
 {json.dumps(self.system_info, indent=2)}
@@ -137,6 +144,19 @@ IMPORTANT:
                 "requires_llm_processing": True
             }
         
+        # Build routing hints if metadata is provided
+        routing_hints = ""
+        if routing_metadata:
+            if routing_metadata.get('metadata', {}).get('requested_tool'):
+                tool = routing_metadata['metadata']['requested_tool']
+                routing_hints = f"\nROUTING HINT: The user explicitly requested to use the '{tool}' tool.\n"
+                if tool == 'browse_web' and 'news' in query.lower():
+                    routing_hints += "For news browsing, select an appropriate news website URL based on the type of news requested.\n"
+            elif routing_metadata.get('metadata', {}).get('suggested_tool'):
+                tool = routing_metadata['metadata']['suggested_tool']
+                score = routing_metadata['metadata'].get('browse_score', 0)
+                routing_hints = f"\nROUTING HINT: Query analysis suggests using the '{tool}' tool (confidence score: {score}).\n"
+        
         # For other requests, use the default prompt
         prompt = f"""Analyze the following request and determine which tool to use.
 System Information:
@@ -144,7 +164,7 @@ System Information:
 
 Available Tools:
 {json.dumps(self.tools, indent=2)}
-
+{routing_hints}
 {self._get_context_prompt() if is_follow_up else ''}
 
 User Request: {query}
@@ -159,9 +179,20 @@ Please respond with a JSON object containing:
 
 Example responses:
 {{
+    "tool": "browse_web",
+    "url": "https://news.ycombinator.com",
+    "description": "Browse Hacker News for latest tech stories"
+}}
+
+For news requests without a specific site, use one of these popular news sources:
+- Tech news: https://news.ycombinator.com or https://techcrunch.com
+- General news: https://www.reddit.com/r/news or https://news.google.com
+- World news: https://www.bbc.com/news or https://www.reuters.com
+
+{{
     "tool": "web_content",
-    "operation": "fetch",
-    "url_or_query": "https://example.com",
+    "operation": "browse",
+    "url_or_query": "latest news stories",
     "mode": "basic"
 }}
 
@@ -178,8 +209,10 @@ Example responses:
     "command": "ls -la"
 }}
 
-IMPORTANT: For command operations, ensure the command is compatible with the current system ({self.system_info['os']}).
-Only output valid shell commands that can be executed on this system."""
+IMPORTANT: 
+- For browse requests, prefer "tool": "browse_web" with a specific URL when the user wants to browse content
+- For command operations, ensure the command is compatible with the current system ({self.system_info['os']})
+- Only output valid shell commands that can be executed on this system"""
 
         return {
             "prompt": prompt,
