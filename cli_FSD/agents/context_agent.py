@@ -99,7 +99,13 @@ class ContextAgent:
             }
         
         # For file creation requests, provide a more structured prompt
-        if any(word in query.lower() for word in ['create', 'make', 'write', 'using', 'in', 'with']):
+        # But exclude queries that are about using tools
+        query_lower = query.lower()
+        is_file_creation = any(word in query_lower for word in ['create', 'make', 'write']) and \
+                          'file' in query_lower and \
+                          'tool' not in query_lower
+        
+        if is_file_creation:
             prompt = f"""Analyze the following request and determine how to create the requested file.
 System Information:
 {json.dumps(self.system_info, indent=2)}
