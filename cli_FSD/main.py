@@ -103,11 +103,13 @@ def main():
         try:
             # Special handling for browse/visit commands
             if direct_command.lower().startswith(('browse ', 'visit ')):
-                result = process_input_based_on_mode(direct_command, config, chat_models)
+                from .script_handlers import process_input_based_on_mode as process_input_script_handlers
+                result = process_input_script_handlers(direct_command, config)
                 sys.exit(0)  # Exit after processing the direct command
             else:
-                # Process other commands
-                result = process_input_based_on_mode(direct_command, config, chat_models)
+                # Process other commands using the updated script_handlers version
+                from .script_handlers import process_input_based_on_mode as process_input_script_handlers
+                result = process_input_script_handlers(direct_command, config)
                 sys.exit(0)  # Exit after processing the direct command
         except Exception as e:
             logging.error(f"Error processing direct command: {str(e)}")
@@ -153,9 +155,13 @@ def main():
                 logging.info("Switched to normal mode.")
             else:
                 if config.autopilot_mode:
-                    process_input_in_autopilot_mode(user_input, config, chat_models)
+                    from .script_handlers import process_input_based_on_mode as process_input_script_handlers, print_streamed_message
+                    result = process_input_script_handlers(user_input, config)
+                    print_streamed_message(result, config.CYAN)
                 else:
-                    process_input_based_on_mode(user_input, config, chat_models)
+                    from .script_handlers import process_input_based_on_mode as process_input_script_handlers, print_streamed_message
+                    result = process_input_script_handlers(user_input, config)
+                    print_streamed_message(result, config.CYAN)
                     
         except KeyboardInterrupt:
             print("\nExiting cli-FSD...")
