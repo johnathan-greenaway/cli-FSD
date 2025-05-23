@@ -26,7 +26,10 @@ def test_routing():
         print(f"Reason: {route_info['reason']}")
         if route_info.get('metadata'):
             print(f"Metadata: {route_info['metadata']}")
-        print(f"Browse tool score: {route_info['scores']['browse_tool']}")
+        if 'scores' in route_info:
+            print(f"Browse tool score: {route_info['scores']['browse_tool']}")
+        else:
+            print("(No scores - early routing decision)")
 
 def test_context_agent():
     """Test ContextAgent with routing metadata."""
