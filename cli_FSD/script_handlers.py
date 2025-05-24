@@ -965,10 +965,25 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
     
     # Smart Query Routing - Classify query before processing
     from .query_router import QueryRouter
+    from .llm_query_router import LLMQueryRouter
     from .web_search import WebSearchHandler, format_search_response
     
-    router = QueryRouter()
-    route_info = router.classify_query(user_input)
+    # Try LLM-based routing first if we have a chat model
+    route_info = None
+    if chat_models and 'model' in chat_models:
+        try:
+            llm_router = LLMQueryRouter(chat_models['model'], config.session_model)
+            route_info = llm_router.classify_query(user_input)
+            print(f"{config.GREEN}LLM routing decision: {route_info['route']} ({route_info.get('reason', 'no reason')}){config.RESET}")
+        except Exception as e:
+            print(f"{config.YELLOW}LLM routing failed: {e}. Falling back to pattern matching.{config.RESET}")
+    
+    # Fallback to pattern-based routing if LLM routing fails
+    if not route_info:
+        router = QueryRouter()
+        route_info = router.classify_query(user_input)
+        print(f"{config.YELLOW}Pattern routing decision: {route_info['route']} ({route_info.get('reason', 'no reason')}){config.RESET}")
+    
     config.route_info = route_info  # Store for use by chat models
     
     # Check for session management commands
