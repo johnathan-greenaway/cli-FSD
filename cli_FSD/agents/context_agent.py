@@ -25,7 +25,8 @@ class ContextAgent:
         self.tools = {
             'web_content': ['fetch', 'browse', 'search'],
             'file_operation': ['read', 'write', 'append', 'delete'],
-            'command': ['shell', 'python', 'bash']
+            'command': ['shell', 'python', 'bash'],
+            'memory': ['create_entities', 'add_observations', 'search_nodes', 'read_graph']
         }
         self.context = {
             'last_web_content': None,
@@ -209,8 +210,21 @@ For news requests without a specific site, use one of these popular news sources
     "command": "ls -la"
 }}
 
+{{
+    "tool": "memory",
+    "operation": "create_entities",
+    "entities": [{{"name": "user_preferences", "type": "configuration"}}]
+}}
+
+{{
+    "tool": "memory",
+    "operation": "add_observations",
+    "observations": [{{"entity": "user_preferences", "content": "Prefers dark mode"}}]
+}}
+
 IMPORTANT: 
 - For browse requests, prefer "tool": "browse_web" with a specific URL when the user wants to browse content
+- For memory operations, use the memory tool to store and retrieve information across sessions
 - For command operations, ensure the command is compatible with the current system ({self.system_info['os']})
 - Only output valid shell commands that can be executed on this system"""
 

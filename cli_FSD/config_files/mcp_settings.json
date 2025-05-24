@@ -14,6 +14,11 @@
       "command": "python3",
       "args": ["cli_FSD/file_interaction/server.py"],
       "env": {}
+    },
+    "memory": {
+      "command": "python3",
+      "args": ["cli_FSD/memory/server.py"],
+      "env": {}
     }
   }
 }
