@@ -9,3 +9,5 @@ redis
 flake8>=6.0.0
 rich>=13.0.0
 pylint
+groq
+regex

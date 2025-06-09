@@ -5,7 +5,9 @@ from .configuration import Config
 from .web_fetcher import fetcher
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins='*', 
+     allow_headers=['Content-Type', 'Authorization'],
+     methods=['GET', 'POST', 'OPTIONS'])
 
 # Initialize config (you might want to pass this from your main application)
 config = Config()
@@ -41,8 +43,32 @@ def save_file():
 # Additional route for getting system information
 @app.route("/system_info", methods=["GET"])
 def get_system_info():
-    from utils import get_system_info
+    from .utils import get_system_info
     return jsonify(get_system_info())
+
+@app.route("/weather", methods=["GET"])
+def get_weather():
+    try:
+        import requests
+        # Fetch weather from wttr.in
+        response = requests.get('http://wttr.in/?format=j1', timeout=10)
+        if response.status_code == 200:
+            weather_data = response.json()
+            current = weather_data['current_condition'][0]
+            location = weather_data['nearest_area'][0]
+            
+            return jsonify({
+                'location': f"{location['areaName'][0]['value']}, {location['country'][0]['value']}",
+                'temperature': f"{current['temp_C']}°C",
+                'condition': current['weatherDesc'][0]['value'],
+                'wind': f"{current['windspeedKmph']} km/h {current['winddir16Point']}",
+                'humidity': f"{current['humidity']}%",
+                'timestamp': current['observation_time']
+            })
+        else:
+            return jsonify({'error': 'Weather service unavailable'}), 503
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # Additional route for toggling autopilot mode
 @app.route("/toggle_autopilot", methods=["POST"])
