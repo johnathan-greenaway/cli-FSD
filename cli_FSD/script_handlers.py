@@ -481,7 +481,7 @@ def evaluate_response(query: str, response: str, config, chat_models, response_t
         threshold = 0.9  # Higher threshold for acceptance
     else:  # medium (default)
         strictness = "Use balanced judgment in your evaluation. For programming and technical questions, strongly prefer to accept built-in knowledge responses rather than forcing web searches. Accept responses that adequately address the main points."
-        threshold = 0.85  # Higher threshold for direct knowledge answers to reduce browser fallback
+        threshold = 0.70  # Balanced threshold for direct knowledge answers
     
     evaluation = chat_with_model(
         message=(
@@ -1343,7 +1343,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
 
             # Extract tool information
             tool_name = tool_selection.get("tool", "")
-            url = tool_selection.get("url", "")
+            url = tool_selection.get("url", "") or tool_selection.get("url_or_query", "")
             arguments = tool_selection.get("arguments", {})
 
             # Validate required fields
@@ -1351,7 +1351,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
                 raise ValueError("No tool name provided in selection")
 
             # Handle different tool types
-            if tool_name == "browse_web":
+            if tool_name in ["browse_web", "web_content"]:
                 if not url or url == "[URL will be determined based on request]":
                     print(f"{config.RED}No valid URL provided in tool selection.{config.RESET}")
                     llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
