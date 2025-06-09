@@ -5,7 +5,9 @@ from .configuration import Config
 from .web_fetcher import fetcher
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins='*', 
+     allow_headers=['Content-Type', 'Authorization'],
+     methods=['GET', 'POST', 'OPTIONS'])
 
 # Initialize config (you might want to pass this from your main application)
 config = Config()
