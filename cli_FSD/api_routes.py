@@ -21,10 +21,19 @@ def chat():
         return jsonify({"error": "No message provided"}), 400
 
     try:
+        # Debug: Print current configuration
+        print(f"DEBUG: session_model = {config.session_model}")
+        print(f"DEBUG: use_ollama = {config.use_ollama}")
+        print(f"DEBUG: use_claude = {config.use_claude}")
+        print(f"DEBUG: use_groq = {config.use_groq}")
+        print(f"DEBUG: current_model = {config.current_model}")
+        print(f"DEBUG: chat_models keys = {list(chat_models.keys()) if chat_models else 'None'}")
+        
         # Use properly initialized chat_models
         response = chat_with_model(message, config, chat_models)
         return jsonify({"response": response})
     except Exception as e:
+        print(f"DEBUG: Chat error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/save_file", methods=["POST"])
@@ -101,6 +110,8 @@ def configure_llm():
         return jsonify({"status": "error", "message": "Provider is required"}), 400
     
     try:
+        print(f"DEBUG: Configuring LLM - provider: {provider}, model: {model}")
+        
         # Update session model based on provider
         if provider == "ollama":
             config.session_model = "ollama"
@@ -109,6 +120,7 @@ def configure_llm():
             config.use_groq = False
             if model:
                 config.last_ollama_model = model
+            print(f"DEBUG: Set Ollama config - session_model: {config.session_model}, use_ollama: {config.use_ollama}")
         elif provider == "openai":
             config.session_model = None  # Use OpenAI as default
             config.use_ollama = False
@@ -143,7 +155,9 @@ def configure_llm():
         
         # Reinitialize chat models with new configuration
         global chat_models
+        print(f"DEBUG: Reinitializing chat models with config: session_model={config.session_model}")
         chat_models = initialize_chat_models(config)
+        print(f"DEBUG: Chat models after reinit: {list(chat_models.keys()) if chat_models else 'None'}")
         
         return jsonify({
             "status": "success", 

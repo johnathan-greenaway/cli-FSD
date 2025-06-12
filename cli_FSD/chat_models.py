@@ -7,19 +7,26 @@ from .utils import get_system_info
 
 def initialize_chat_models(config):
     chat_models = {}
+    print(f"DEBUG: initialize_chat_models called with session_model = {config.session_model}")
+    
     # Initialize based on session model preference
     if config.session_model == 'ollama':
-        chat_models['model'] = initialize_ollama_client(config)
+        ollama_client = initialize_ollama_client(config)
+        chat_models['model'] = ollama_client
+        print(f"DEBUG: Ollama client initialized: {ollama_client is not None}")
     elif config.session_model == 'groq':
         chat_models['model'] = initialize_groq_client()
     # Claude doesn't need initialization, handled in chat_with_claude
     
+    print(f"DEBUG: Returning chat_models: {chat_models}")
     return chat_models
 
 def initialize_ollama_client(config):
+    # Use Windows Ollama instance via localhost (WSL bridge)
     host = 'http://localhost:11434'
     try:
         client = OllamaClient(host=host)
+        print(f"DEBUG: Connecting to Ollama at {host} (Windows instance)")
         # Get running models
         response = requests.get(f"{host}/api/tags")
         if response.status_code == 200:
@@ -30,7 +37,20 @@ def initialize_ollama_client(config):
                     ["embed", "nomic", "all-minilm", "bge", "e5"])]
                 
                 if chat_models:
-                    running_model = chat_models[0]["name"]
+                    # Prefer fast models for better responsiveness
+                    preferred_models = ["smollm2:latest", "qwen2.5-coder:1.5b-base", "llama3.2:latest", "phi3:latest"]
+                    running_model = None
+                    
+                    # Try to find a preferred fast model first
+                    for preferred in preferred_models:
+                        if any(m["name"] == preferred for m in chat_models):
+                            running_model = preferred
+                            break
+                    
+                    # If no preferred model found, use the first available
+                    if not running_model:
+                        running_model = chat_models[0]["name"]
+                    
                     print(f"Connected to Ollama at {host}. Using chat model: {running_model}")
                     # Store the running model on the client object
                     client.running_model = running_model
