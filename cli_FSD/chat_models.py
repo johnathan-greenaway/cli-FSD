@@ -22,56 +22,86 @@ def initialize_chat_models(config):
     return chat_models
 
 def initialize_ollama_client(config):
-    # Use Windows Ollama instance via localhost (WSL bridge)
-    host = 'http://localhost:11434'
-    try:
-        client = OllamaClient(host=host)
-        print(f"DEBUG: Connecting to Ollama at {host} (Windows instance)")
-        # Get running models
-        response = requests.get(f"{host}/api/tags")
-        if response.status_code == 200:
-            models = response.json().get("models", [])
-            if models:
-                # Filter out known non-chat models
-                chat_models = [m for m in models if not any(non_chat in m["name"].lower() for non_chat in 
-                    ["embed", "nomic", "all-minilm", "bge", "e5"])]
+    # Try multiple Ollama endpoints in order of preference
+    ollama_endpoints = [
+        ('http://localhost:11434', 'Windows/Host Ollama'),
+        ('http://127.0.0.1:11434', 'Local WSL Ollama'),
+        ('http://10.255.255.254:11434', 'Windows via WSL bridge'),
+        ('http://172.18.0.1:11434', 'Docker bridge')
+    ]
+    
+    for host, description in ollama_endpoints:
+        try:
+            print(f"DEBUG: Trying {description} at {host}")
+            
+            # Test connection with a quick timeout
+            test_response = requests.get(f"{host}/api/tags", timeout=3)
+            if test_response.status_code != 200:
+                print(f"DEBUG: {description} returned status {test_response.status_code}")
+                continue
                 
-                if chat_models:
-                    # Prefer fast models for better responsiveness
-                    preferred_models = ["smollm2:latest", "qwen2.5-coder:1.5b-base", "llama3.2:latest", "phi3:latest"]
-                    running_model = None
-                    
-                    # Try to find a preferred fast model first
-                    for preferred in preferred_models:
-                        if any(m["name"] == preferred for m in chat_models):
-                            running_model = preferred
-                            break
-                    
-                    # If no preferred model found, use the first available
-                    if not running_model:
-                        running_model = chat_models[0]["name"]
-                    
-                    print(f"Connected to Ollama at {host}. Using chat model: {running_model}")
-                    # Store the running model on the client object
-                    client.running_model = running_model
-                    # Update last used model in config
-                    config.last_ollama_model = running_model
-                    config.save_preferences()
-                    return client
-                else:
-                    print(f"Connected to Ollama at {host}, but no chat-capable models found. Will use last model: {config.last_ollama_model}")
-                    # No chat model found, use the last known model from preferences
-                    client.running_model = config.last_ollama_model
-            else:
-                print(f"Connected to Ollama at {host}, but no models found. Will use last model: {config.last_ollama_model}")
-                client.running_model = config.last_ollama_model
-        else:
-            print(f"Connected to Ollama at {host}, but couldn't get models. Will use last model: {config.last_ollama_model}")
-            client.running_model = config.last_ollama_model
+            # Test if we can get models
+            models = test_response.json().get("models", [])
+            if not models:
+                print(f"DEBUG: {description} has no models available")
+                continue
+                
+            # Filter out non-chat models
+            chat_models = [m for m in models if not any(non_chat in m["name"].lower() for non_chat in 
+                ["embed", "nomic", "all-minilm", "bge", "e5"])]
+            
+            if not chat_models:
+                print(f"DEBUG: {description} has no chat-capable models")
+                continue
+                
+            # Connection and models check passed, this endpoint looks good
+            print(f"✅ Successfully connected to {description}")
+            
+            # Prefer fast models for better responsiveness
+            preferred_models = ["smollm2:latest", "qwen2.5-coder:1.5b-base", "llama3.2:latest", "phi3:latest", "gemma3:4b"]
+            running_model = None
+            
+            # Try to find a preferred fast model first
+            for preferred in preferred_models:
+                if any(m["name"] == preferred for m in chat_models):
+                    running_model = preferred
+                    break
+            
+            # If no preferred model found, use the first available
+            if not running_model:
+                running_model = chat_models[0]["name"]
+            
+            print(f"Using chat model: {running_model} on {description}")
+            
+            # Create the final client
+            client = OllamaClient(host=host)
+            client.running_model = running_model
+            client.endpoint_description = description
+            
+            # Update last used model in config
+            config.last_ollama_model = running_model
+            config.ollama_endpoint = host  # Store successful endpoint
+            config.save_preferences()
+            
+            return client
+                
+        except Exception as e:
+            print(f"DEBUG: Failed to connect to {description}: {str(e)}")
+            continue
+    
+    # If all endpoints failed, create a client with the last known working config
+    print("⚠️  All Ollama endpoints failed. Using last known configuration as fallback.")
+    fallback_host = getattr(config, 'ollama_endpoint', 'http://localhost:11434')
+    
+    try:
+        client = OllamaClient(host=fallback_host)
+        client.running_model = config.last_ollama_model
+        client.endpoint_description = "Fallback endpoint"
+        print(f"Created fallback client for {fallback_host} with model {config.last_ollama_model}")
         return client
     except Exception as e:
-        print(f"Failed to connect to Ollama at {host}: {str(e)}")
-    return None
+        print(f"Failed to create fallback Ollama client: {str(e)}")
+        return None
 
 def initialize_groq_client():
     groq_api_key = os.getenv("GROQ_API_KEY")

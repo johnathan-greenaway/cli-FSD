@@ -98,6 +98,31 @@ def change_model():
         return jsonify({"status": "error", "message": "Invalid model"}), 400
 
 # New route for configuring LLM provider
+@app.route("/ollama_status", methods=["GET"])
+def ollama_status():
+    """Get current Ollama endpoint and model information"""
+    try:
+        if config.session_model == 'ollama' and 'model' in chat_models:
+            ollama_client = chat_models['model']
+            endpoint = getattr(config, 'ollama_endpoint', 'Unknown')
+            model = getattr(ollama_client, 'running_model', 'Unknown')
+            description = getattr(ollama_client, 'endpoint_description', 'Unknown')
+            
+            return jsonify({
+                "status": "connected",
+                "endpoint": endpoint,
+                "model": model,
+                "description": description,
+                "session_model": config.session_model
+            })
+        else:
+            return jsonify({
+                "status": "not_configured",
+                "session_model": config.session_model
+            })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/configure_llm", methods=["POST"])
 def configure_llm():
     """Configure the LLM provider and model for the session"""
