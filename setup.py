@@ -31,7 +31,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            '@=cli_FSD.main:main', 
+            'cli-fsd=cli_FSD.main:main',
+            'fsd=cli_FSD.main:main',
+            'f=cli_FSD.main:main',
         ],
     },
     install_requires=[
