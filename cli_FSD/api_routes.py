@@ -39,6 +39,8 @@ def fetch_relevant_embeddings(query, max_results=5):
 
 @app.route("/chat", methods=["POST"])
 def chat():
+    global chat_models
+    
     message = request.json.get("message")
     use_embeddings = request.json.get("use_embeddings", True)
     requested_model = request.json.get("model")  # Get model from request
@@ -155,6 +157,8 @@ def change_model():
 @app.route("/ollama_status", methods=["GET"])
 def ollama_status():
     """Get current Ollama endpoint and model information"""
+    global chat_models
+    
     try:
         if config.session_model == 'ollama' and 'model' in chat_models:
             ollama_client = chat_models['model']
@@ -180,6 +184,8 @@ def ollama_status():
 @app.route("/configure_llm", methods=["POST"])
 def configure_llm():
     """Configure the LLM provider and model for the session"""
+    global chat_models
+    
     provider = request.json.get("provider")
     model = request.json.get("model")
     api_key = request.json.get("api_key")
@@ -237,7 +243,6 @@ def configure_llm():
         config.save_preferences()
         
         # Reinitialize chat models with new configuration
-        global chat_models
         print(f"DEBUG: Reinitializing chat models with config: session_model={config.session_model}")
         chat_models = initialize_chat_models(config)
         print(f"DEBUG: Chat models after reinit: {list(chat_models.keys()) if chat_models else 'None'}")
