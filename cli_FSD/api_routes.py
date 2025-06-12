@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from .chat_models import chat_with_model
+import os
+from .chat_models import chat_with_model, initialize_chat_models
 from .configuration import Config
 from .web_fetcher import fetcher
 
@@ -11,6 +12,7 @@ CORS(app, origins='*',
 
 # Initialize config (you might want to pass this from your main application)
 config = Config()
+chat_models = initialize_chat_models(config)
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -19,8 +21,8 @@ def chat():
         return jsonify({"error": "No message provided"}), 400
 
     try:
-        # Assuming chat_with_model is accessible and properly configured
-        response = chat_with_model(message, config, {})  # Empty dict for chat_models, adjust as needed
+        # Use properly initialized chat_models
+        response = chat_with_model(message, config, chat_models)
         return jsonify({"response": response})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -85,6 +87,73 @@ def change_model():
         return jsonify({"status": "success", "current_model": config.current_model})
     else:
         return jsonify({"status": "error", "message": "Invalid model"}), 400
+
+# New route for configuring LLM provider
+@app.route("/configure_llm", methods=["POST"])
+def configure_llm():
+    """Configure the LLM provider and model for the session"""
+    provider = request.json.get("provider")
+    model = request.json.get("model")
+    api_key = request.json.get("api_key")
+    endpoint = request.json.get("endpoint")
+    
+    if not provider:
+        return jsonify({"status": "error", "message": "Provider is required"}), 400
+    
+    try:
+        # Update session model based on provider
+        if provider == "ollama":
+            config.session_model = "ollama"
+            config.use_ollama = True
+            config.use_claude = False
+            config.use_groq = False
+            if model:
+                config.last_ollama_model = model
+        elif provider == "openai":
+            config.session_model = None  # Use OpenAI as default
+            config.use_ollama = False
+            config.use_claude = False
+            config.use_groq = False
+            if model and model in config.models:
+                config.current_model = model
+            # Note: API key handling should be done securely
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
+                config.api_key = api_key
+        elif provider == "anthropic":
+            config.session_model = "claude"
+            config.use_claude = True
+            config.use_ollama = False
+            config.use_groq = False
+            # Note: API key handling should be done securely
+            if api_key:
+                os.environ["ANTHROPIC_API_KEY"] = api_key
+        elif provider == "groq":
+            config.session_model = "groq"
+            config.use_groq = True
+            config.use_ollama = False
+            config.use_claude = False
+            if api_key:
+                os.environ["GROQ_API_KEY"] = api_key
+        else:
+            return jsonify({"status": "error", "message": f"Unsupported provider: {provider}"}), 400
+        
+        # Save preferences
+        config.save_preferences()
+        
+        # Reinitialize chat models with new configuration
+        global chat_models
+        chat_models = initialize_chat_models(config)
+        
+        return jsonify({
+            "status": "success", 
+            "provider": provider,
+            "session_model": config.session_model,
+            "current_model": config.current_model if provider == "openai" else model
+        })
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/fetch_web_content", methods=["POST"])
 def fetch_web_content():
