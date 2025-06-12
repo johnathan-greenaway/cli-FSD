@@ -61,11 +61,18 @@ def initialize_ollama_client(config):
             preferred_models = ["smollm2:latest", "qwen2.5-coder:1.5b-base", "llama3.2:latest", "phi3:latest", "gemma3:4b"]
             running_model = None
             
-            # Try to find a preferred fast model first
-            for preferred in preferred_models:
-                if any(m["name"] == preferred for m in chat_models):
-                    running_model = preferred
-                    break
+            # First, check if we have a last_ollama_model in config and if it's available
+            if hasattr(config, 'last_ollama_model') and config.last_ollama_model:
+                if any(m["name"] == config.last_ollama_model for m in chat_models):
+                    running_model = config.last_ollama_model
+                    print(f"Using previously configured model: {running_model}")
+            
+            # If no last model or it's not available, try to find a preferred fast model
+            if not running_model:
+                for preferred in preferred_models:
+                    if any(m["name"] == preferred for m in chat_models):
+                        running_model = preferred
+                        break
             
             # If no preferred model found, use the first available
             if not running_model:
@@ -210,12 +217,16 @@ def chat_with_model(message, config, chat_models, system_prompt=None):
                         print(f"Error using {model_name}: {e}")
                         continue
             
-            # Only fall back to OpenAI if no specific model is configured
-            if result is None and not any([config.use_ollama, config.use_groq, config.use_claude]):
+            # Only fall back to OpenAI if no specific model is configured AND no session_model is set
+            if result is None and not any([config.use_ollama, config.use_groq, config.use_claude]) and not config.session_model:
                 result = chat_with_openai(message, config, system_prompt)
             elif result is None:
-                # If we have a specific model configured but it failed, return an error
-                return f"Error: Failed to get response from configured model. Please check your configuration and try again."
+                # If we have a specific model configured but it failed, return provider-specific error
+                if config.session_model:
+                    provider_name = config.session_model.upper()
+                    return f"Error: {provider_name} is not available or failed to respond. Please check your {provider_name} configuration and ensure the service is running."
+                else:
+                    return f"Error: Failed to get response from configured model. Please check your configuration and try again."
         
         return result
     finally:
