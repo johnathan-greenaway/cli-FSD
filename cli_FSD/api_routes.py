@@ -18,6 +18,7 @@ chat_models = initialize_chat_models(config)
 def fetch_relevant_embeddings(query, max_results=5):
     """Fetch relevant embedded content from mem-aux service"""
     try:
+        print(f"DEBUG: Searching embeddings for query: '{query}'")
         response = requests.post('http://localhost:8000/search', 
                                json={
                                    'query': query,
@@ -26,15 +27,25 @@ def fetch_relevant_embeddings(query, max_results=5):
                                timeout=5)
         if response.ok:
             results = response.json().get('results', [])
+            print(f"DEBUG: Found {len(results)} embedding results")
             if results:
                 context_text = "\n--- RELEVANT CONTEXT FROM YOUR READING HISTORY ---\n"
                 for i, result in enumerate(results, 1):
-                    context_text += f"{i}. {result.get('text', '')[:200]}...\n"
+                    # Use more text for better context (1000 chars instead of 200)
+                    text = result.get('text', '')
+                    if len(text) > 1000:
+                        text = text[:1000] + "..."
+                    context_text += f"{i}. {text}\n\n"
                 context_text += "--- END CONTEXT ---\n\n"
+                print(f"DEBUG: Returning {len(context_text)} chars of context")
                 return context_text
+            else:
+                print("DEBUG: No results found in embeddings")
+        else:
+            print(f"DEBUG: Embeddings request failed: {response.status_code}")
         return ""
     except Exception as e:
-        print(f"Failed to fetch embeddings: {e}")
+        print(f"DEBUG: Failed to fetch embeddings: {e}")
         return ""
 
 @app.route("/chat", methods=["POST"])
