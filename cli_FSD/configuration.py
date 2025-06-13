@@ -82,6 +82,7 @@ class Config:
                     self.use_groq = prefs.get('use_groq', False)
                     self.scriptreviewer_on = prefs.get('scriptreviewer_on', False)
                     self.last_ollama_model = prefs.get('last_ollama_model', 'llama3.1:8b')
+                    self.ollama_endpoint = prefs.get('ollama_endpoint', 'http://localhost:11434')
                     
                     # Load sequential thinking preferences
                     self.sequential_thinking_enabled = prefs.get('sequential_thinking_enabled', False)
@@ -95,6 +96,7 @@ class Config:
                 self.use_groq = False
                 self.scriptreviewer_on = False
                 self.last_ollama_model = 'llama3.1:8b'  # Default Ollama model
+                self.ollama_endpoint = 'http://localhost:11434'  # Default endpoint
         except Exception as e:
             print(f"Error loading preferences: {e}")
             # Use defaults if loading fails
@@ -122,6 +124,7 @@ class Config:
                 'use_groq': self.use_groq,
                 'scriptreviewer_on': self.scriptreviewer_on,
                 'last_ollama_model': self.last_ollama_model,
+                'ollama_endpoint': self.ollama_endpoint,
                 'sequential_thinking_enabled': self.sequential_thinking_enabled,
                 'sequential_thinking_llm_choice': self.sequential_thinking_llm_choice
             }
