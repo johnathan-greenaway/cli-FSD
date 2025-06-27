@@ -132,7 +132,6 @@ def fetch_relevant_embeddings(query, max_results=5):
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    global chat_models
     
     message = request.json.get("message")
     use_embeddings = request.json.get("use_embeddings", True)
@@ -250,7 +249,6 @@ def change_model():
 @app.route("/ollama_status", methods=["GET"])
 def ollama_status():
     """Get current Ollama endpoint and model information"""
-    global chat_models
     
     try:
         if config.session_model == 'ollama' and 'model' in chat_models:
