@@ -15,42 +15,123 @@ CORS(app, origins='*',
 config = Config()
 chat_models = initialize_chat_models(config)
 
+def extract_keywords(query):
+    """Extract meaningful keywords from natural language query"""
+    import re
+    
+    # Remove common question words and phrases
+    stop_words = {
+        'what', 'do', 'you', 'know', 'about', 'tell', 'me', 'explain', 
+        'describe', 'how', 'why', 'when', 'where', 'can', 'could', 
+        'would', 'should', 'is', 'are', 'was', 'were', 'the', 'a', 
+        'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+        'of', 'with', 'by', 'from', 'up', 'about', 'into', 'through',
+        'during', 'before', 'after', 'above', 'below', 'between',
+        'some', 'any', 'have', 'had', 'has', 'been', 'will', 'would'
+    }
+    
+    # Special handling for reading-related queries
+    reading_patterns = [
+        (r"stories.*(?:i'?ve\s+)?read", ["stories", "read", "articles", "content"]),
+        (r"reference\s+text", ["reference", "text", "content", "articles"]),
+        (r"things.*(?:i'?ve\s+)?(?:read|seen|viewed)", ["content", "articles", "read"]),
+        (r"content.*(?:i'?ve\s+)?(?:browsed|viewed|seen)", ["content", "articles", "browsed"]),
+        (r"articles.*(?:i'?ve\s+)?read", ["articles", "read", "content"]),
+        (r"what.*(?:i'?ve\s+)?(?:read|seen|viewed)", ["content", "articles", "read"])
+    ]
+    
+    # Check for reading-related patterns first
+    query_lower = query.lower()
+    for pattern, fallback_terms in reading_patterns:
+        if re.search(pattern, query_lower):
+            print(f"DEBUG: Found reading pattern '{pattern}', using fallback terms: {fallback_terms}")
+            # Try each fallback term individually for better matching
+            return fallback_terms[0]  # Return the first/most specific term
+    
+    # Clean and tokenize
+    cleaned_query = re.sub(r'[^\w\s]', '', query_lower)
+    words = cleaned_query.split()
+    
+    # Filter out stop words and short words
+    keywords = [word for word in words if word not in stop_words and len(word) > 2]
+    
+    # If we filtered out too much, fall back to original query
+    if not keywords:
+        return query
+    
+    # Join keywords with spaces for better matching
+    return ' '.join(keywords)
+
 def fetch_relevant_embeddings(query, max_results=5):
     """Fetch relevant embedded content from mem-aux service"""
     try:
-        print(f"DEBUG: Searching embeddings for query: '{query}'")
+        # Try original query first
+        print(f"DEBUG: Searching embeddings for original query: '{query}'")
         response = requests.post('http://localhost:8000/search', 
                                json={
                                    'query': query,
                                    'top_k': max_results
                                }, 
                                timeout=5)
+        
+        results = []
         if response.ok:
             results = response.json().get('results', [])
-            print(f"DEBUG: Found {len(results)} embedding results")
-            if results:
-                context_text = "\n--- RELEVANT CONTEXT FROM YOUR READING HISTORY ---\n"
-                for i, result in enumerate(results, 1):
-                    # Use more text for better context (1000 chars instead of 200)
-                    text = result.get('text', '')
-                    if len(text) > 1000:
-                        text = text[:1000] + "..."
-                    context_text += f"{i}. {text}\n\n"
-                context_text += "--- END CONTEXT ---\n\n"
-                print(f"DEBUG: Returning {len(context_text)} chars of context")
-                return context_text
-            else:
-                print("DEBUG: No results found in embeddings")
+            print(f"DEBUG: Found {len(results)} results for original query")
+        
+        # If no results, try with extracted keywords
+        if not results:
+            keywords = extract_keywords(query)
+            if keywords != query:
+                print(f"DEBUG: No results for original query, trying keywords: '{keywords}'")
+                response = requests.post('http://localhost:8000/search', 
+                                       json={
+                                           'query': keywords,
+                                           'top_k': max_results
+                                       }, 
+                                       timeout=5)
+                if response.ok:
+                    results = response.json().get('results', [])
+                    print(f"DEBUG: Found {len(results)} results for keywords")
+                
+                # If still no results and it was a reading-related query, try broader terms
+                if not results and any(pattern in query.lower() for pattern in ["reference", "stories", "read", "content"]):
+                    broader_terms = ["content", "articles", "text", "read"]
+                    for term in broader_terms:
+                        print(f"DEBUG: Trying broader term: '{term}'")
+                        response = requests.post('http://localhost:8000/search', 
+                                               json={
+                                                   'query': term,
+                                                   'top_k': max_results
+                                               }, 
+                                               timeout=5)
+                        if response.ok:
+                            results = response.json().get('results', [])
+                            if results:
+                                print(f"DEBUG: Found {len(results)} results for broader term '{term}'")
+                                break
+        
+        if results:
+            context_text = "\n--- RELEVANT CONTEXT FROM YOUR READING HISTORY ---\n"
+            for i, result in enumerate(results, 1):
+                # Use more text for better context (1000 chars instead of 200)
+                text = result.get('text', '')
+                if len(text) > 1000:
+                    text = text[:1000] + "..."
+                context_text += f"{i}. {text}\n\n"
+            context_text += "--- END CONTEXT ---\n\n"
+            print(f"DEBUG: Returning {len(context_text)} chars of context")
+            return context_text
         else:
-            print(f"DEBUG: Embeddings request failed: {response.status_code}")
-        return ""
+            print("DEBUG: No results found in embeddings")
+            return ""
+            
     except Exception as e:
         print(f"DEBUG: Failed to fetch embeddings: {e}")
         return ""
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    global chat_models
     
     message = request.json.get("message")
     use_embeddings = request.json.get("use_embeddings", True)
@@ -168,7 +249,6 @@ def change_model():
 @app.route("/ollama_status", methods=["GET"])
 def ollama_status():
     """Get current Ollama endpoint and model information"""
-    global chat_models
     
     try:
         if config.session_model == 'ollama' and 'model' in chat_models:
