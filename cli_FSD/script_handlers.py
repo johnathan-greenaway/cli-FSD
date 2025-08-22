@@ -350,8 +350,11 @@ def handle_simple_command_execution(llm_response: str, original_query: str, conf
     Returns:
         String containing command output or error message
     """
-    import subprocess
     import re
+    from .execution_manager import get_execution_manager
+    
+    # Get the execution manager
+    exec_manager = get_execution_manager()
     
     # Extract commands from the LLM response
     # Look for bash code blocks first
@@ -379,37 +382,20 @@ def handle_simple_command_execution(llm_response: str, original_query: str, conf
             else:
                 return f"Could not extract a simple command from the response. LLM suggested: {llm_response}"
     
-    print(f"{config.YELLOW}Executing command: {command}{config.RESET}")
+    # Use the execution manager to handle the command with proper mode checking
+    description = f"Execute simple command: {command[:50]}..." if len(command) > 50 else f"Execute simple command: {command}"
+    result = exec_manager.execute_with_mode(
+        command, 
+        config,
+        description=description,
+        requires_confirmation=not config.autopilot_mode  # In autopilot, no confirmation needed
+    )
     
-    # Execute the command
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=30  # 30 second timeout for simple commands
-        )
-        
-        output = ""
-        if result.stdout:
-            output += result.stdout
-        
-        if result.stderr:
-            output += f"\n{config.YELLOW}Warnings/Errors:{config.RESET}\n{result.stderr}"
-        
-        if result.returncode != 0:
-            output += f"\n{config.RED}Command failed with exit code: {result.returncode}{config.RESET}"
-        
-        if not output.strip():
-            output = f"{config.GREEN}Command executed successfully (no output){config.RESET}"
-        
-        return f"Command: `{command}`\n\nOutput:\n{output}"
-        
-    except subprocess.TimeoutExpired:
-        return f"Command `{command}` timed out after 30 seconds"
-    except Exception as e:
-        return f"Error executing command `{command}`: {str(e)}"
+    # Format the output
+    if result.startswith("Error"):
+        return f"Command: `{command}`\n\n{config.RED}{result}{config.RESET}"
+    else:
+        return f"Command: `{command}`\n\nOutput:\n{result}"
 
 def set_evaluation_tolerance(level: str):
     """
@@ -427,7 +413,7 @@ def set_evaluation_tolerance(level: str):
 
 def is_raw_mcp_response(response: str) -> bool:
     """
-    Check if a response appears to be a raw MCP/browser response.
+    Enhanced check if a response appears to be a raw MCP/browser response.
     
     Args:
         response: The response to check
@@ -435,19 +421,49 @@ def is_raw_mcp_response(response: str) -> bool:
     Returns:
         bool: True if it appears to be a raw MCP response
     """
-    # Check for common patterns in raw MCP responses
-    if len(response) > 1000:  # Raw responses tend to be long
-        # Check for JSON-like structure
-        if (response.startswith('{') and response.endswith('}')) or (response.startswith('[') and response.endswith(']')):
+    if not isinstance(response, str):
+        return False
+        
+    # Check for JSON structure (even short ones)
+    stripped = response.strip()
+    if (stripped.startswith('{') and stripped.endswith('}')) or (stripped.startswith('[') and stripped.endswith(']')):
+        try:
+            json.loads(response)
+            return True
+        except:
+            # Still might be malformed JSON
+            if '"' in response and ':' in response:
+                return True
+    
+    # Check for HTML content (more comprehensive)
+    html_markers = ['<html', '<body', '<div', '<head', '<!DOCTYPE', '<meta', '<script', '<style']
+    if any(marker in response.lower() for marker in html_markers):
+        return True
+        
+    # Check for unformatted web content patterns
+    if len(response) > 500:
+        # Long responses with URLs and no formatting
+        if ('http://' in response or 'https://' in response) and response.count('\n\n') < 2:
             return True
         
-        # Check for HTML-like content
-        if '<html' in response.lower() or '<body' in response.lower():
+        # Check for raw data dumps
+        if response.count(',') > 50 or response.count(';') > 30:
             return True
             
-        # Check for common web content patterns
-        if 'http://' in response or 'https://' in response:
-            return True
+    # Check for MCP tool response patterns
+    mcp_patterns = [
+        '"tool_name":', 
+        '"server_name":', 
+        '"result":', 
+        '"content":', 
+        '"error":',
+        'browse_web',
+        'web_content',
+        '"url":',
+        '"status_code":'
+    ]
+    if any(pattern in response for pattern in mcp_patterns):
+        return True
     
     return False
 
@@ -1754,23 +1770,23 @@ def execute_script_directly(script, file_extension, config):
             try:
                 os.chmod(temp_file_path, 0o755)
                 
-                if not config.autopilot_mode and not get_user_confirmation(f"Execute script:\n{script}", config):
-                    print("Script execution aborted by the user.")
-                    return False
+                # Use execution manager for consistent handling
+                from .execution_manager import get_execution_manager
+                exec_manager = get_execution_manager()
                 
-                result = subprocess.run(
-                    ["bash", temp_file_path],
-                    capture_output=True,
-                    text=True,
-                    check=False
+                # Execute using the manager which handles mode checking
+                result_output = exec_manager.execute_with_mode(
+                    f"bash {temp_file_path}",
+                    config,
+                    description="Execute generated bash script",
+                    requires_confirmation=not config.autopilot_mode
                 )
                 
-                if result.stdout:
-                    print(result.stdout)
-                if result.stderr:
-                    print(f"{config.RED}{result.stderr}{config.RESET}")
+                # Check if execution was cancelled or had an error
+                if "cancelled" in result_output.lower() or result_output.startswith("Error"):
+                    return False
                 
-                return result.returncode == 0
+                return True
                 
             except Exception as e:
                 print(f"{config.RED}Error executing shell script: {e}{config.RESET}")

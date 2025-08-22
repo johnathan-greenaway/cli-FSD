@@ -154,14 +154,10 @@ def main():
                 print("Switched to normal mode.")
                 logging.info("Switched to normal mode.")
             else:
-                if config.autopilot_mode:
-                    from .script_handlers import process_input_based_on_mode as process_input_script_handlers, print_streamed_message
-                    result = process_input_script_handlers(user_input, config)
-                    print_streamed_message(result, config.CYAN)
-                else:
-                    from .script_handlers import process_input_based_on_mode as process_input_script_handlers, print_streamed_message
-                    result = process_input_script_handlers(user_input, config)
-                    print_streamed_message(result, config.CYAN)
+                # Process input using the unified handler (it will check autopilot mode internally)
+                from .script_handlers import process_input_based_on_mode as process_input_script_handlers, print_streamed_message
+                result = process_input_script_handlers(user_input, config)
+                print_streamed_message(result, config.CYAN)
                     
         except KeyboardInterrupt:
             print("\nExiting cli-FSD...")
@@ -461,23 +457,15 @@ def process_input_based_on_mode(query, config, chat_models):
                     print(f"\n{description}:")
                     print(f"```bash\n{command}\n```")
                     
-                    if config.autopilot_mode:
-                        print(f"{config.CYAN}Executing command in autopilot mode...{config.RESET}")
-                        result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=False)
-                        if result.startswith("Error"):
-                            print(f"{config.RED}{result}{config.RESET}")
-                        else:
-                            print(f"{config.GREEN}{result}{config.RESET}")
-                        return result
+                    # Use execution manager for consistent handling
+                    from .execution_manager import get_execution_manager
+                    exec_manager = get_execution_manager()
+                    result = exec_manager.execute_with_mode(command, config, description=description)
+                    if result.startswith("Error"):
+                        print(f"{config.RED}{result}{config.RESET}")
                     else:
-                        if get_user_confirmation(command, config):
-                            result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=True)
-                            if result.startswith("Error"):
-                                print(f"{config.RED}{result}{config.RESET}")
-                            else:
-                                print(f"{config.GREEN}{result}{config.RESET}")
-                            return result
-                        return "Command execution cancelled by user."
+                        print(f"{config.GREEN}{result}{config.RESET}")
+                    return result
             return "Error: Invalid direct response format."
         
         # Validate analysis object
@@ -632,23 +620,20 @@ def process_input_based_on_mode(query, config, chat_models):
                 print(f"\n{description}:")
                 print(f"```bash\n{command}\n```")
                 
-                if config.autopilot_mode or not requires_confirmation:
-                    print(f"{config.CYAN}Executing command...{config.RESET}")
-                    result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=not config.autopilot_mode)
-                    if result.startswith("Error"):
-                        print(f"{config.RED}{result}{config.RESET}")
-                    else:
-                        print(f"{config.GREEN}{result}{config.RESET}")
-                    return result
+                # Use execution manager for consistent handling
+                from .execution_manager import get_execution_manager
+                exec_manager = get_execution_manager()
+                result = exec_manager.execute_with_mode(
+                    command, 
+                    config, 
+                    description=description,
+                    requires_confirmation=requires_confirmation
+                )
+                if result.startswith("Error"):
+                    print(f"{config.RED}{result}{config.RESET}")
                 else:
-                    if get_user_confirmation(command, config):
-                        result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=True)
-                        if result.startswith("Error"):
-                            print(f"{config.RED}{result}{config.RESET}")
-                        else:
-                            print(f"{config.GREEN}{result}{config.RESET}")
-                        return result
-                    return "Command execution cancelled by user."
+                    print(f"{config.GREEN}{result}{config.RESET}")
+                return result
         
         # If no specific tool was selected or tool execution failed, fall back to direct LLM processing
         llm_response = chat_with_model(query, config, chat_models)

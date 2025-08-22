@@ -35,6 +35,16 @@ class ContextAgent:
             'last_query': None,
             'session_history': []
         }
+        
+        # Initialize plugin system
+        try:
+            from ..plugin_system import initialize_plugin_system, get_plugin_registry
+            initialize_plugin_system()
+            self.plugin_registry = get_plugin_registry()
+            logger.info("Plugin system initialized in ContextAgent")
+        except Exception as e:
+            logger.warning(f"Failed to initialize plugin system: {e}")
+            self.plugin_registry = None
     
     def _get_system_info(self) -> Dict[str, str]:
         """Get system information for context.

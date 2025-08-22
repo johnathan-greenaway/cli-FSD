@@ -1,0 +1,1 @@
+# Plugin directory for CLI-FSD tool extensions
