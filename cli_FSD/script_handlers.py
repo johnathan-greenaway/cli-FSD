@@ -1042,11 +1042,11 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
                 import subprocess
                 result = subprocess.run(user_input.strip(), shell=True, capture_output=True, text=True, timeout=5)
                 output = result.stdout if result.returncode == 0 else f"Error: {result.stderr}"
-                print_streamed_message(output, config.CYAN)
+                print_streamed_message(output, config.CYAN, config)
                 return output
             except Exception as e:
                 error_msg = f"Error executing {user_input}: {str(e)}"
-                print_streamed_message(error_msg, config.RED)
+                print_streamed_message(error_msg, config.RED, config)
                 return error_msg
     
     # Route-specific processing based on query classification
@@ -1055,7 +1055,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         web_handler = WebSearchHandler()
         search_result = web_handler.search_web(user_input)
         formatted_response = format_search_response(search_result)
-        print_streamed_message(formatted_response, config.CYAN)
+        print_streamed_message(formatted_response, config.CYAN, config)
         return formatted_response
     
     elif route_info['route'] == 'simple_command':
@@ -1067,7 +1067,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         
         # Extract and execute the command directly
         command_response = handle_simple_command_execution(llm_response, user_input, config)
-        print_streamed_message(command_response, config.CYAN)
+        print_streamed_message(command_response, config.CYAN, config)
         return command_response
     
     elif route_info['route'] == 'direct_llm':
@@ -1076,7 +1076,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         enhanced_prompt = router.get_enhanced_prompt(user_input, route_info)
         from .chat_models import chat_with_model
         llm_response = chat_with_model(enhanced_prompt, config, chat_models)
-        print_streamed_message(llm_response, config.CYAN)
+        print_streamed_message(llm_response, config.CYAN, config)
         return llm_response
     
     elif route_info['route'] == 'tool_selection':
@@ -1328,7 +1328,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
             print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
             llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
             final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
-            print_streamed_message(final_response, config.CYAN)
+            print_streamed_message(final_response, config.CYAN, config)
             return final_response
 
         # Extract the prompt from the analysis
@@ -1342,7 +1342,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
             print(f"{config.YELLOW}No response received from tool selection LLM analysis.{config.RESET}")
             llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
             final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
-            print_streamed_message(final_response, config.CYAN)
+            print_streamed_message(final_response, config.CYAN, config)
             return final_response
 
         # Send the prompt to the LLM for tool selection
@@ -1406,7 +1406,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
                     print(f"{config.RED}No valid URL provided in tool selection.{config.RESET}")
                     llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
                     final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
-                    print_streamed_message(final_response, config.CYAN)
+                    print_streamed_message(final_response, config.CYAN, config)
                     return final_response
 
                 # Use the MCP tool for web browsing
@@ -1422,7 +1422,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
                         try:
                             # Format and return the result
                             formatted_response = format_browser_response(user_input, mcp_result, config, chat_models)
-                            print_streamed_message(formatted_response, config.CYAN)
+                            print_streamed_message(formatted_response, config.CYAN, config)
                             return formatted_response
                         except Exception as format_error:
                             print(f"{config.YELLOW}Error formatting MCP browser response: {str(format_error)}. Trying fallback methods...{config.RESET}")
@@ -1436,7 +1436,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
                     browser_response = try_browser_search(user_input, config, chat_models)
                     if browser_response:
                         formatted_response = format_browser_response(user_input, browser_response, config, chat_models)
-                        print_streamed_message(formatted_response, config.CYAN)
+                        print_streamed_message(formatted_response, config.CYAN, config)
                         return formatted_response
                 except Exception as browser_error:
                     print(f"{config.YELLOW}Browser search failed: {str(browser_error)}. Falling back to LLM...{config.RESET}")
@@ -1521,14 +1521,14 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
                 # Default to standard LLM processing
                 llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
                 final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
-                print_streamed_message(final_response, config.CYAN)
+                print_streamed_message(final_response, config.CYAN, config)
                 return final_response
 
         except Exception as e:
             # Fallback if JSON extraction fails
             llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
             final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
-            print_streamed_message(final_response, config.CYAN)
+            print_streamed_message(final_response, config.CYAN, config)
             return final_response
 
     except Exception as e:
@@ -1537,7 +1537,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         # Fallback logic remains the same
         llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
         final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
-        print_streamed_message(final_response, config.CYAN)
+        print_streamed_message(final_response, config.CYAN, config)
         return final_response
 
     # If we get here, try browser search as a last resort
@@ -1558,7 +1558,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
             if browser_response:
                 try:
                     formatted_response = format_browser_response(search_query, browser_response, config, chat_models)
-                    print_streamed_message(formatted_response, config.CYAN)
+                    print_streamed_message(formatted_response, config.CYAN, config)
                     return formatted_response
                 except Exception as e:
                     print(f"{config.YELLOW}Error formatting browser response: {str(e)}. Falling back to LLM...{config.RESET}")
@@ -1566,7 +1566,7 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         # Default fallback if not a browse request or if browser search fails
         llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
         final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
-        print_streamed_message(final_response, config.CYAN)
+        print_streamed_message(final_response, config.CYAN, config)
         return final_response
     except Exception as e:
         print(f"{config.RED}Error in fallback processing: {str(e)}{config.RESET}")
@@ -1574,20 +1574,20 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
         # Final fallback to direct LLM
         llm_response = chat_with_model(message=user_input, config=config, chat_models=chat_models)
         final_response = process_response(user_input, llm_response, config, chat_models, allow_browser_fallback=True)
-        print_streamed_message(final_response, config.CYAN)
+        print_streamed_message(final_response, config.CYAN, config)
         return final_response
 
 def process_input_in_safe_mode(query, config, chat_models):
     """Process input in safe mode with additional checks and confirmations."""
     llm_response = chat_with_model(query, config, chat_models)
     final_response = process_response(query, llm_response, config, chat_models)
-    print_streamed_message(final_response, config.CYAN)
+    print_streamed_message(final_response, config.CYAN, config)
 
 def process_input_in_autopilot_mode(query, config, chat_models):
     """Process input in autopilot mode with automatic execution."""
     llm_response = chat_with_model(query, config, chat_models)
     final_response = process_response(query, llm_response, config, chat_models)
-    print_streamed_message(final_response, config.CYAN)
+    print_streamed_message(final_response, config.CYAN, config)
 
 # Track assembled scripts for cleanup
 _assembled_scripts = set()

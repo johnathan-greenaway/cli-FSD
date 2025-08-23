@@ -157,7 +157,7 @@ def main():
                 # Process input using the unified handler (it will check autopilot mode internally)
                 from .script_handlers import process_input_based_on_mode as process_input_script_handlers, print_streamed_message
                 result = process_input_script_handlers(user_input, config)
-                print_streamed_message(result, config.CYAN)
+                print_streamed_message(result, config.CYAN, config)
                     
         except KeyboardInterrupt:
             print("\nExiting cli-FSD...")
@@ -375,7 +375,7 @@ def process_input_based_on_mode(query, config, chat_models):
                         parsed_result = json.loads(result)
                         # Format the response
                         formatted_response = format_browser_response(target, result, config, chat_models)
-                        print_streamed_message(formatted_response, config.CYAN)
+                        print_streamed_message(formatted_response, config.CYAN, config)
                         return formatted_response
                     except Exception as e:
                         print(f"{config.RED}Error formatting Hacker News response: {str(e)}{config.RESET}")
@@ -426,7 +426,7 @@ def process_input_based_on_mode(query, config, chat_models):
 
                 # If the response is a string, print it directly
                 if isinstance(formatted_response, str):
-                    print_streamed_message(formatted_response, config.CYAN)
+                    print_streamed_message(formatted_response, config.CYAN, config)
                 # If it's a dict, format it nicely
                 elif isinstance(formatted_response, dict):
                     if "content" in formatted_response:
@@ -474,7 +474,7 @@ def process_input_based_on_mode(query, config, chat_models):
             print(f"{config.YELLOW}Failed to generate valid analysis from ContextAgent.{config.RESET}")
             llm_response = chat_with_model(query, config, chat_models)
             final_response = process_response(query, llm_response, config, chat_models, allow_browser_fallback=True)
-            print_streamed_message(final_response, config.CYAN)
+            print_streamed_message(final_response, config.CYAN, config)
             return final_response
         
         # Get LLM's tool selection decision with the analysis prompt
