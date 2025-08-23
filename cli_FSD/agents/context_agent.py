@@ -36,15 +36,9 @@ class ContextAgent:
             'session_history': []
         }
         
-        # Initialize plugin system
-        try:
-            from ..plugin_system import initialize_plugin_system, get_plugin_registry
-            initialize_plugin_system()
-            self.plugin_registry = get_plugin_registry()
-            logger.info("Plugin system initialized in ContextAgent")
-        except Exception as e:
-            logger.warning(f"Failed to initialize plugin system: {e}")
-            self.plugin_registry = None
+        # Plugin system (lazy initialization)
+        self.plugin_registry = None
+        self._plugins_initialized = False
     
     def _get_system_info(self) -> Dict[str, str]:
         """Get system information for context.
@@ -60,6 +54,19 @@ class ContextAgent:
             'cpu': platform.processor(),
             'cwd': os.getcwd()
         }
+    
+    def _ensure_plugins_initialized(self):
+        """Initialize plugin system only when needed."""
+        if not self._plugins_initialized:
+            try:
+                from ..plugin_system import initialize_plugin_system, get_plugin_registry
+                initialize_plugin_system()
+                self.plugin_registry = get_plugin_registry()
+                self._plugins_initialized = True
+                logger.info("Plugin system lazy-loaded in ContextAgent")
+            except Exception as e:
+                logger.warning(f"Failed to initialize plugin system: {e}")
+                self.plugin_registry = None
     
     def update_context(self, operation: str, result: Dict[str, Any]) -> None:
         """Update the context with the latest operation result.

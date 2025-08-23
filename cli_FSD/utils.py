@@ -95,14 +95,151 @@ def print_instructions_once_per_day():
 
 
 def print_streamed_message(message, color=CYAN, config=None):
+    # BLAZING FAST streaming - much faster than the old 0.03s delay
     for char in message:
         print(f"{color}{char}{RESET}", end='', flush=True)
-        time.sleep(0.03)
+        time.sleep(0.002)  # 15x faster streaming (0.03 -> 0.002)
     print()
     
     # Mark that this response was streamed so we don't double-print it
     if config:
         config._response_was_streamed = True
+    
+    # After streaming, check for code blocks and offer to execute them
+    if config:
+        _handle_code_blocks_in_response(message, config)
+
+
+def _handle_code_blocks_in_response(message, config):
+    """Detect and offer to execute code blocks in LLM response."""
+    code_blocks = extract_code_blocks(message)
+    
+    if not code_blocks:
+        return
+    
+    print(f"\n{config.YELLOW}🔍 Detected {len(code_blocks)} code block(s) in response{config.RESET}")
+    
+    if config.autopilot_mode:
+        print(f"{config.GREEN}🚀 Autopilot mode: Executing all code blocks automatically...{config.RESET}")
+        _execute_code_blocks(code_blocks, config, auto_execute=True)
+    else:
+        print(f"{config.CYAN}Would you like to execute these code blocks? (y/n):{config.RESET}")
+        for i, block in enumerate(code_blocks):
+            print(f"  {i+1}. {block['language']} ({len(block['code'])} characters)")
+        
+        response = input().strip().lower()
+        if response in ['y', 'yes']:
+            _execute_code_blocks(code_blocks, config, auto_execute=False)
+
+
+def extract_code_blocks(text):
+    """Extract code blocks from text with language detection."""
+    import re
+    
+    # Pattern to match code blocks with optional language specification
+    pattern = r'```(?:(\w+))?\n(.*?)\n```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    
+    code_blocks = []
+    for match in matches:
+        language = match[0].lower() if match[0] else 'unknown'
+        code = match[1].strip()
+        
+        # Auto-detect language if not specified
+        if language == 'unknown' or language == '':
+            language = _detect_code_language(code)
+        
+        # Normalize language names
+        if language in ['sh', 'shell', 'bash']:
+            language = 'bash'
+        elif language in ['py', 'python3']:
+            language = 'python'
+        
+        code_blocks.append({
+            'language': language,
+            'code': code,
+            'raw_match': match
+        })
+    
+    return code_blocks
+
+
+def _detect_code_language(code):
+    """Auto-detect programming language from code content."""
+    code_lower = code.lower().strip()
+    
+    # Python indicators
+    if any(keyword in code_lower for keyword in ['import ', 'def ', 'print(', 'if __name__']):
+        return 'python'
+    
+    # Bash indicators  
+    if any(indicator in code_lower for indicator in ['#!/bin/bash', 'sudo ', 'apt ', 'ls ', 'cd ', 'mkdir', 'chmod']):
+        return 'bash'
+    
+    # Default to bash for simple commands
+    lines = code.strip().split('\n')
+    if len(lines) == 1 and len(code) < 100:
+        return 'bash'
+    
+    return 'unknown'
+
+
+def _execute_code_blocks(code_blocks, config, auto_execute=False):
+    """Execute code blocks sequentially."""
+    from .execution_manager import get_execution_manager
+    
+    exec_manager = get_execution_manager()
+    
+    for i, block in enumerate(code_blocks):
+        language = block['language']
+        code = block['code']
+        
+        print(f"\n{config.CYAN}{'='*50}{config.RESET}")
+        print(f"{config.CYAN}Executing block {i+1}/{len(code_blocks)} ({language}){config.RESET}")
+        print(f"{config.CYAN}{'='*50}{config.RESET}")
+        
+        if language == 'bash':
+            _execute_bash_block(code, config, exec_manager, auto_execute)
+        elif language == 'python':
+            _execute_python_block(code, config, exec_manager, auto_execute)
+        else:
+            print(f"{config.YELLOW}⚠️  Unsupported language: {language}. Treating as bash.{config.RESET}")
+            _execute_bash_block(code, config, exec_manager, auto_execute)
+        
+        # Small delay between executions for readability
+        time.sleep(0.5)
+
+
+def _execute_bash_block(code, config, exec_manager, auto_execute):
+    """Execute a bash code block."""
+    print(f"{config.GREEN}📝 Bash Script:{config.RESET}")
+    print(f"```bash\n{code}\n```")
+    
+    if auto_execute or config.autopilot_mode:
+        print(f"{config.GREEN}🚀 Executing bash script...{config.RESET}")
+        result = exec_manager.execute_script(code, config, script_type='bash')
+        if "Error" in result or "cancelled" in result.lower():
+            print(f"{config.RED}{result}{config.RESET}")
+        else:
+            print(f"{config.GREEN}✅ Bash script executed successfully{config.RESET}")
+    else:
+        print(f"{config.YELLOW}⏸️  Execution skipped (not in autopilot mode){config.RESET}")
+
+
+def _execute_python_block(code, config, exec_manager, auto_execute):
+    """Execute a python code block."""
+    print(f"{config.GREEN}🐍 Python Script:{config.RESET}")
+    print(f"```python\n{code}\n```")
+    
+    if auto_execute or config.autopilot_mode:
+        print(f"{config.GREEN}🚀 Executing python script...{config.RESET}")
+        result = exec_manager.execute_script(f"#!/usr/bin/env python3\n{code}", config, script_type='python')
+        if "Error" in result or "cancelled" in result.lower():
+            print(f"{config.RED}{result}{config.RESET}")
+        else:
+            print(f"{config.GREEN}✅ Python script executed successfully{config.RESET}")
+    else:
+        print(f"{config.YELLOW}⏸️  Execution skipped (not in autopilot mode){config.RESET}")
 
 
 def get_weather():

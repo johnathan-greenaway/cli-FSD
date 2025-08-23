@@ -351,9 +351,27 @@ def handle_simple_command_execution(llm_response: str, original_query: str, conf
         String containing command output or error message
     """
     import re
-    from .execution_manager import get_execution_manager
+    import subprocess
     
-    # Get the execution manager
+    # FAST PATH: Check if original query is already a simple command
+    simple_commands = ['whoami', 'pwd', 'ls', 'date', 'uptime', 'ps', 'df', 'free', 'top']
+    if original_query.strip().lower() in simple_commands:
+        command = original_query.strip()
+        print(f"{config.GREEN}Fast-path execution: {command}{config.RESET}")
+        
+        # Direct execution for autopilot mode
+        if config.autopilot_mode:
+            try:
+                result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    return f"Command: `{command}`\n\nOutput:\n{result.stdout}"
+                else:
+                    return f"Command: `{command}`\n\n{config.RED}Error: {result.stderr}{config.RESET}"
+            except Exception as e:
+                return f"Command: `{command}`\n\n{config.RED}Error: {str(e)}{config.RESET}"
+    
+    # FALLBACK: Use execution manager for complex cases
+    from .execution_manager import get_execution_manager
     exec_manager = get_execution_manager()
     
     # Extract commands from the LLM response
@@ -1014,6 +1032,22 @@ def process_input_based_on_mode(user_input: str, config: Any) -> str:
             return "Invalid recall index. Use 'history' to see available items."
     elif user_input.lower() == 'session status':
         return display_session_status(config)
+    
+    # SUPER FAST PATH: Direct execution for obvious simple commands
+    simple_commands = ['whoami', 'pwd', 'ls', 'date', 'uptime', 'ps', 'df', 'free', 'top', 'id', 'uname']
+    if user_input.strip().lower() in simple_commands:
+        print(f"{config.GREEN}⚡ Ultra-fast execution: {user_input}{config.RESET}")
+        if config.autopilot_mode:
+            try:
+                import subprocess
+                result = subprocess.run(user_input.strip(), shell=True, capture_output=True, text=True, timeout=5)
+                output = result.stdout if result.returncode == 0 else f"Error: {result.stderr}"
+                print_streamed_message(output, config.CYAN)
+                return output
+            except Exception as e:
+                error_msg = f"Error executing {user_input}: {str(e)}"
+                print_streamed_message(error_msg, config.RED)
+                return error_msg
     
     # Route-specific processing based on query classification
     if route_info['route'] == 'web_search':
