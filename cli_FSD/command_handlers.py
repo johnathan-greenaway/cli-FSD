@@ -8,6 +8,7 @@ from .script_handlers import extract_script_from_response, assemble_final_script
 from .chat_models import initialize_chat_models # Import necessary function
 from .agents.sequential_thinking_agent import SequentialThinkingAgent
 from .command_history import CommandHistory
+from .model_manager import ModelManager
 from difflib import get_close_matches
 
 def get_user_confirmation(command: str, config=None) -> bool:
@@ -98,7 +99,7 @@ def handle_command_mode(config, chat_models):
         'sequential thinking llm choice on', 'sequential thinking llm choice off',
         'sequential thinking history', 'sequential thinking clear',
         'session', 'session status', 'history', 'recall',
-        'model', 'list_models', 'config', 'clear history',
+        'model', 'list_models', 'models_table', 'config', 'clear history',
         'file', 'fileint', 'ollama models'
     ]
     
@@ -146,6 +147,7 @@ def handle_command_mode(config, chat_models):
     print("  recall <index>         - Recall specific history item")
     print("  model                  - Change model")
     print("  list_models            - List available models")
+    print("  models_table           - Display models in detailed table format")
     print("  config                 - Show current configuration")
     print("  clear history          - Clear conversation history")
     print("  file                   - Browse and view files")
@@ -231,6 +233,8 @@ def handle_command_mode(config, chat_models):
                 change_model(config, chat_models)
             elif command.lower() == 'list_models':
                 list_available_models(config)
+            elif command.lower() == 'models_table':
+                show_models_table(config)
             elif command.lower() == 'config':
                 show_current_config(config)
             elif command.lower() == 'clear history':
@@ -271,6 +275,9 @@ Available commands:
   sequential thinking llm choice off - Disable LLM choice for sequential thinking
   sequential thinking history - Show thought history
   sequential thinking clear - Clear thought history
+  model                  - Change model interactively
+  list_models            - List available models
+  models_table           - Display models in detailed table format
   ollama models          - Browse and manage Ollama models
   <any other command>    - Execute as shell command
 """)
@@ -291,6 +298,8 @@ def process_command(command, config, chat_models):
         change_model(config, chat_models) 
     elif command == 'list_models':
         list_available_models(config)
+    elif command == 'models_table':
+        show_models_table(config)
     elif command == 'config':
         show_current_config(config)
     elif command == 'history':
@@ -396,61 +405,189 @@ def handle_script_command(config):
         print("No last response to process.")
 
 def change_model(config, chat_models):
-    """Change the active model and update related settings."""
-    list_available_models(config) # Show options first
-    new_model_key = input("Enter the key of the model to switch to (e.g., 'gpt-4o', 'claude-3.5-sonnet'): ").strip()
+    """Change the active model and update related settings with dynamic detection."""
+    print(f"{config.CYAN}Loading available models...{config.RESET}")
     
-    if new_model_key in config.models:
-        config.current_model = new_model_key # Update the specific model key
+    try:
+        model_manager = ModelManager()
+        all_models = model_manager.get_all_models()
         
-        # Determine provider and update session_model and use_ flags
-        if new_model_key.startswith("claude-"):
+        if not all_models:
+            print(f"{config.YELLOW}No models detected. Check your API keys and services.{config.RESET}")
+            return
+        
+        # Create a flat list of all available models with provider info
+        available_models = []
+        for provider, models in all_models.items():
+            for model in models:
+                if model.is_available:  # Only show available models for selection
+                    available_models.append({
+                        'id': model.model_id,
+                        'provider': provider,
+                        'description': model.display_name,
+                        'model_info': model
+                    })
+        
+        if not available_models:
+            print(f"{config.YELLOW}No available models found.{config.RESET}")
+            return
+            
+        # Display options in a numbered list for easy selection
+        print(f"\n{config.GREEN}Available Models:{config.RESET}")
+        print("-" * 60)
+        for i, model in enumerate(available_models, 1):
+            provider_color = {
+                'openai': config.BLUE,
+                'anthropic': config.MAGENTA,
+                'ollama': config.GREEN, 
+                'groq': config.YELLOW
+            }.get(model['provider'], config.WHITE)
+            
+            print(f"{i:2d}. {config.CYAN}{model['id']:<30}{config.RESET} {provider_color}[{model['provider'].upper()}]{config.RESET}")
+            if model['description'] and model['description'] != model['id']:
+                print(f"    {config.WHITE}{model['description']}{config.RESET}")
+        
+        print(f"\n{config.CYAN}Current model: {config.current_model}{config.RESET}")
+        
+        # Get user selection
+        selection = input(f"\nEnter model number (1-{len(available_models)}) or model ID: ").strip()
+        
+        selected_model = None
+        
+        # Try number selection first
+        try:
+            model_num = int(selection)
+            if 1 <= model_num <= len(available_models):
+                selected_model = available_models[model_num - 1]
+        except ValueError:
+            # Try direct model ID match
+            for model in available_models:
+                if model['id'].lower() == selection.lower():
+                    selected_model = model
+                    break
+        
+        if not selected_model:
+            print(f"{config.YELLOW}Invalid selection. Model change cancelled.{config.RESET}")
+            return
+        
+        # Update configuration based on selected model
+        config.current_model = selected_model['id']
+        provider = selected_model['provider']
+        
+        # Reset all provider flags
+        config.use_claude = config.use_ollama = config.use_groq = False
+        
+        # Set provider-specific configuration
+        if provider == 'anthropic':
             config.session_model = "claude"
             config.use_claude = True
-            config.use_ollama = config.use_groq = False
-        elif new_model_key == "ollama": # Assuming 'ollama' is a key in config.models for the generic provider
-            config.session_model = "ollama"
+        elif provider == 'ollama':
+            config.session_model = "ollama" 
             config.use_ollama = True
-            config.use_claude = config.use_groq = False
-            # Optionally, prompt for a specific ollama model or use last_ollama_model
-            config.current_model = config.last_ollama_model # Use last known Ollama model
-        elif new_model_key == "groq": # Assuming 'groq' is a key for the provider
+            config.last_ollama_model = selected_model['id']
+        elif provider == 'groq':
             config.session_model = "groq"
             config.use_groq = True
-            config.use_claude = config.use_ollama = False
-            config.current_model = "mixtral-8x7b-32768" # Set Groq default model
-        else: # Default to OpenAI compatible
-            config.session_model = None # Use default provider (OpenAI)
-            config.use_claude = config.use_ollama = config.use_groq = False
-            # config.current_model is already set to new_model_key
-
-        print(f"{config.GREEN}Model set to: {config.current_model}{config.RESET}")
-        if config.session_model:
-            print(f"{config.GREEN}Provider set to: {config.session_model}{config.RESET}")
-        else:
-             print(f"{config.GREEN}Provider set to: Default (OpenAI){config.RESET}")
-
+        else:  # OpenAI or compatible
+            config.session_model = None  # Default to OpenAI
+            
+        print(f"{config.GREEN}✓ Model changed to: {selected_model['id']}{config.RESET}")
+        print(f"{config.GREEN}✓ Provider: {provider.upper()}{config.RESET}")
+        
         # Save preferences
         config.save_preferences()
-        print(f"{config.CYAN}Preferences saved.{config.RESET}")
-
+        print(f"{config.CYAN}✓ Preferences saved{config.RESET}")
+        
         # Re-initialize chat models
         try:
             new_chat_models = initialize_chat_models(config)
-            # Update the original chat_models dictionary passed from main
             chat_models.clear()
             chat_models.update(new_chat_models)
-            print(f"{config.CYAN}Chat models re-initialized.{config.RESET}")
+            print(f"{config.CYAN}✓ Chat models re-initialized{config.RESET}")
         except Exception as e:
-             print(f"{config.RED}Error re-initializing chat models: {e}{config.RESET}")
-
-    else:
-        print(f"{config.YELLOW}Invalid model key. Use 'list_models' to see options.{config.RESET}")
+            print(f"{config.RED}Error re-initializing chat models: {e}{config.RESET}")
+            
+    except Exception as e:
+        print(f"{config.RED}Error changing model: {str(e)}{config.RESET}")
+        print(f"{config.YELLOW}Falling back to configured models.{config.RESET}")
+        
+        # Fallback to original static model list
+        list_available_models(config)
+        new_model_key = input("Enter the key of the model to switch to: ").strip()
+        
+        if new_model_key in config.models:
+            config.current_model = new_model_key
+            config.save_preferences()
+            print(f"{config.GREEN}Model set to: {config.current_model}{config.RESET}")
+        else:
+            print(f"{config.YELLOW}Invalid model key.{config.RESET}")
 
 def list_available_models(config):
-    print("Available models:")
-    for model in config.models.keys():
-        print(model)
+    """List all available models from all providers dynamically."""
+    print(f"{config.CYAN}Detecting available models...{config.RESET}")
+    
+    try:
+        model_manager = ModelManager()
+        all_models = model_manager.get_all_models()
+        
+        if not all_models:
+            print(f"{config.YELLOW}No models detected. Check your API keys and services.{config.RESET}")
+            return
+            
+        # Display models organized by provider
+        total_models = 0
+        for provider, models in all_models.items():
+            if not models:
+                continue
+                
+            print(f"\n{config.GREEN}🔹 {provider.upper()} ({len(models)} models){config.RESET}")
+            print("-" * 50)
+            
+            for model in models:
+                status_color = config.GREEN if model.is_available else config.YELLOW
+                status_text = "✓ Available" if model.is_available else "⚠ Limited/Deprecated"
+                
+                print(f"{config.CYAN}{model.model_id:<30}{config.RESET} {status_color}{status_text}{config.RESET}")
+                if model.display_name and model.display_name != model.model_id:
+                    print(f"  {config.WHITE}{model.display_name}{config.RESET}")
+                
+                total_models += 1
+        
+        print(f"\n{config.GREEN}Total models detected: {total_models}{config.RESET}")
+        print(f"{config.CYAN}Current model: {config.current_model}{config.RESET}")
+        
+    except Exception as e:
+        print(f"{config.RED}Error detecting models: {str(e)}{config.RESET}")
+        print(f"{config.YELLOW}Falling back to configured models:{config.RESET}")
+        for model in config.models.keys():
+            print(f"  {model}")
+
+def show_models_table(config):
+    """Display all models in a detailed table format."""
+    print(f"{config.CYAN}Loading model information...{config.RESET}")
+    
+    try:
+        model_manager = ModelManager()
+        all_models = model_manager.get_all_models()
+        
+        # Convert to flat list for table formatting
+        all_model_infos = []
+        for provider, models in all_models.items():
+            all_model_infos.extend(models)
+        
+        if all_model_infos:
+            table_output = model_manager.format_models_table(all_model_infos)
+            print(table_output)
+            
+            print(f"\n{config.GREEN}Total models: {len(all_model_infos)}{config.RESET}")
+            print(f"{config.CYAN}Current model: {config.current_model}{config.RESET}")
+        else:
+            print(f"{config.YELLOW}No models detected. Check your API keys and services.{config.RESET}")
+        
+    except Exception as e:
+        print(f"{config.RED}Error displaying models table: {str(e)}{config.RESET}")
+        print(f"{config.YELLOW}Falling back to basic model list:{config.RESET}")
+        list_available_models(config)
 
 def show_current_config(config):
     print(f"Current configuration:")
