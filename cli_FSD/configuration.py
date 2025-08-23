@@ -87,6 +87,9 @@ class Config:
                     # Load sequential thinking preferences
                     self.sequential_thinking_enabled = prefs.get('sequential_thinking_enabled', False)
                     self.sequential_thinking_llm_choice = prefs.get('sequential_thinking_llm_choice', False)
+                    
+                    # Load formatting preferences
+                    self.enhanced_formatting = prefs.get('enhanced_formatting', True)  # Default to enhanced
             else:
                 self.session_model = None
                 self.safe_mode = False
@@ -97,6 +100,7 @@ class Config:
                 self.scriptreviewer_on = False
                 self.last_ollama_model = 'llama3.1:8b'  # Default Ollama model
                 self.ollama_endpoint = 'http://localhost:11434'  # Default endpoint
+                self.enhanced_formatting = True  # Default to enhanced formatting
         except Exception as e:
             print(f"Error loading preferences: {e}")
             # Use defaults if loading fails
@@ -126,7 +130,8 @@ class Config:
                 'last_ollama_model': self.last_ollama_model,
                 'ollama_endpoint': self.ollama_endpoint,
                 'sequential_thinking_enabled': self.sequential_thinking_enabled,
-                'sequential_thinking_llm_choice': self.sequential_thinking_llm_choice
+                'sequential_thinking_llm_choice': self.sequential_thinking_llm_choice,
+                'enhanced_formatting': self.enhanced_formatting
             }
             with open(self.preferences_file, 'w') as f:
                 json.dump(prefs, f, indent=2)

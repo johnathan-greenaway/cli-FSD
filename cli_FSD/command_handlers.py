@@ -100,7 +100,7 @@ def handle_command_mode(config, chat_models):
         'sequential thinking history', 'sequential thinking clear',
         'session', 'session status', 'history', 'recall',
         'model', 'list_models', 'models_table', 'config', 'clear history',
-        'file', 'fileint', 'ollama models'
+        'file', 'fileint', 'ollama models', 'format on', 'format off', 'format demo'
     ]
     
     # Set up readline for command history
@@ -153,6 +153,8 @@ def handle_command_mode(config, chat_models):
     print("  file                   - Browse and view files")
     print("  fileint                - Advanced file operations")
     print("  ollama models          - Browse and manage Ollama models")
+    print("  format on/off          - Toggle enhanced text formatting")
+    print("  format demo            - Show formatting examples")
     print("\nType part of a command and press TAB to cycle through matching commands.")
     
     while True:
@@ -246,6 +248,16 @@ def handle_command_mode(config, chat_models):
                 handle_file_interaction_command(config)
             elif command.lower() == 'ollama models' or command.lower() == 'ollama':
                 handle_ollama_models_command(config)
+            elif command.lower() == 'format on':
+                config.enhanced_formatting = True
+                config.save_preferences()
+                print(f"{config.GREEN}✅ Enhanced formatting enabled{config.RESET}")
+            elif command.lower() == 'format off':
+                config.enhanced_formatting = False
+                config.save_preferences()
+                print(f"{config.YELLOW}Enhanced formatting disabled{config.RESET}")
+            elif command.lower() == 'format demo':
+                show_formatting_demo(config)
             else:
                 # Execute the command as a shell command only if it's not an internal command
                 result = execute_shell_command(command, config.api_key, stream_output=True, safe_mode=config.safe_mode)
@@ -321,6 +333,16 @@ def process_command(command, config, chat_models):
         handle_file_interaction_command(config)
     elif command == 'ollama models' or command == 'ollama':
         handle_ollama_models_command(config)
+    elif command == 'format on':
+        config.enhanced_formatting = True
+        config.save_preferences()
+        print(f"{config.GREEN}✅ Enhanced formatting enabled{config.RESET}")
+    elif command == 'format off':
+        config.enhanced_formatting = False
+        config.save_preferences()
+        print(f"{config.YELLOW}Enhanced formatting disabled{config.RESET}")
+    elif command == 'format demo':
+        show_formatting_demo(config)
     # Add sequential thinking commands
     elif command == 'sequential thinking on':
         config.sequential_thinking_enabled = True
@@ -589,18 +611,102 @@ def show_models_table(config):
         print(f"{config.YELLOW}Falling back to basic model list:{config.RESET}")
         list_available_models(config)
 
+def show_formatting_demo(config):
+    """Show examples of enhanced formatting."""
+    from .utils import (
+        format_header, format_section, format_status_box,
+        format_code_block, format_table, format_progress_bar,
+        format_list_items
+    )
+    
+    print(f"\n{config.CYAN}🎨 Enhanced Formatting Demo{config.RESET}")
+    print("=" * 50)
+    
+    # Header demo
+    print(format_header("Welcome to CLI-FSD Enhanced Formatting", style='bold'))
+    
+    # Section demo  
+    features = [
+        "Beautiful headers and sections",
+        "Color-coded status messages",
+        "Formatted code blocks with line numbers",
+        "Professional tables",
+        "Progress bars and lists"
+    ]
+    print(format_section("✨ New Features", features, color=config.GREEN))
+    
+    # Status boxes demo
+    print(format_status_box('success', 'Enhanced formatting is working perfectly!'))
+    print(format_status_box('info', 'This improves readability significantly', 
+                           ['Better visual hierarchy', 'Consistent styling', 'Professional appearance']))
+    
+    # Code block demo
+    sample_code = "def enhanced_formatting():\n    print('Much better readability!')\n    return True"
+    print(format_code_block(sample_code, 'python'))
+    
+    # Table demo
+    headers = ["Feature", "Status", "Impact"]
+    rows = [
+        ["Headers", "✅ Complete", "High"],
+        ["Code Blocks", "✅ Complete", "High"], 
+        ["Tables", "✅ Complete", "Medium"],
+        ["Progress Bars", "✅ Complete", "Medium"]
+    ]
+    print(format_table(headers, rows, title="Feature Status Overview"))
+    
+    # Progress demo
+    print(f"\n{config.CYAN}📊 Progress Indicators:{config.RESET}")
+    print(f"Formatting Implementation: {format_progress_bar(100, 100)}")
+    print(f"User Experience: {format_progress_bar(95, 100)}")
+    
+    # List demo
+    tips = [
+        "Use 'format on' to enable enhanced formatting",
+        "Use 'format off' for classic text output",
+        "Enhanced formatting works with all responses",
+        "Perfect for better readability and professional look"
+    ]
+    print(format_section("💡 Tips", tips, color=config.BLUE))
+    
+    print(f"\n{config.GREEN}✨ Enhanced formatting makes CLI-FSD more readable and professional!{config.RESET}")
+
 def show_current_config(config):
-    print(f"Current configuration:")
-    print(f"Model: {config.current_model}")
-    print(f"Server Port: {config.server_port}")
-    print(f"Autopilot Mode: {'Enabled' if config.autopilot_mode else 'Disabled'}")
-    print(f"Safe Mode: {'Enabled' if config.safe_mode else 'Disabled'}")
-    print(f"Using Claude: {'Yes' if config.use_claude else 'No'}")
-    print(f"Using Ollama: {'Yes' if config.use_ollama else 'No'}")
-    if config.use_ollama:
-        print(f"Current Ollama Model: {config.last_ollama_model}")
-    print(f"Using Groq: {'Yes' if config.use_groq else 'No'}")
-    print(f"Script Reviewer: {'Enabled' if config.scriptreviewer_on else 'Disabled'}")
+    """Display current configuration with enhanced formatting if enabled."""
+    if hasattr(config, 'enhanced_formatting') and config.enhanced_formatting:
+        from .utils import format_section, format_table
+        
+        # Display as formatted table
+        headers = ["Setting", "Value"]
+        rows = [
+            ["Model", config.current_model],
+            ["Server Port", str(config.server_port)],
+            ["Autopilot Mode", "✅ Enabled" if config.autopilot_mode else "❌ Disabled"],
+            ["Safe Mode", "✅ Enabled" if config.safe_mode else "❌ Disabled"],
+            ["Enhanced Formatting", "✅ Enabled" if config.enhanced_formatting else "❌ Disabled"],
+            ["Using Claude", "✅ Yes" if config.use_claude else "❌ No"],
+            ["Using Ollama", "✅ Yes" if config.use_ollama else "❌ No"],
+            ["Using Groq", "✅ Yes" if config.use_groq else "❌ No"],
+            ["Script Reviewer", "✅ Enabled" if config.scriptreviewer_on else "❌ Disabled"]
+        ]
+        
+        if config.use_ollama:
+            rows.append(["Ollama Model", config.last_ollama_model])
+            
+        print(format_table(headers, rows, title="CLI-FSD Configuration"))
+    else:
+        # Classic display
+        print(f"Current configuration:")
+        print(f"Model: {config.current_model}")
+        print(f"Server Port: {config.server_port}")
+        print(f"Autopilot Mode: {'Enabled' if config.autopilot_mode else 'Disabled'}")
+        print(f"Safe Mode: {'Enabled' if config.safe_mode else 'Disabled'}")
+        print(f"Enhanced Formatting: {'Enabled' if hasattr(config, 'enhanced_formatting') and config.enhanced_formatting else 'Disabled'}")
+        print(f"Using Claude: {'Yes' if config.use_claude else 'No'}")
+        print(f"Using Ollama: {'Yes' if config.use_ollama else 'No'}")
+        if config.use_ollama:
+            print(f"Current Ollama Model: {config.last_ollama_model}")
+        print(f"Using Groq: {'Yes' if config.use_groq else 'No'}")
+        print(f"Script Reviewer: {'Enabled' if config.scriptreviewer_on else 'Disabled'}")
 
 # Session management helper functions
 def show_history(config):

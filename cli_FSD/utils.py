@@ -15,6 +15,19 @@ BOLD = "\033[1m"
 RESET = "\033[0m"
 RED = "\033[31m"
 GREEN = "\033[32m"
+BLUE = "\033[94m"
+MAGENTA = "\033[95m"
+WHITE = "\033[97m"
+GRAY = "\033[90m"
+DIM = "\033[2m"
+UNDERLINE = "\033[4m"
+
+# Background colors
+BG_RED = "\033[41m"
+BG_GREEN = "\033[42m"
+BG_YELLOW = "\033[43m"
+BG_BLUE = "\033[44m"
+BG_CYAN = "\033[46m"
 
 
 def animated_loading(stop_event, use_emojis=True, message="Loading", interval=0.2, frames=None):
@@ -95,11 +108,20 @@ def print_instructions_once_per_day():
 
 
 def print_streamed_message(message, color=CYAN, config=None):
-    # BLAZING FAST streaming - much faster than the old 0.03s delay
-    for char in message:
-        print(f"{color}{char}{RESET}", end='', flush=True)
-        time.sleep(0.002)  # 15x faster streaming (0.03 -> 0.002)
-    print()
+    """Stream message with enhanced formatting."""
+    
+    # Check if we should use enhanced formatting
+    use_enhanced = config and hasattr(config, 'enhanced_formatting') and config.enhanced_formatting
+    
+    if use_enhanced:
+        # Use the new enhanced response formatting
+        print_formatted_response(message, config)
+    else:
+        # Original fast streaming
+        for char in message:
+            print(f"{color}{char}{RESET}", end='', flush=True)
+            time.sleep(0.002)  # 15x faster streaming (0.03 -> 0.002)
+        print()
     
     # Mark that this response was streamed so we don't double-print it
     if config:
@@ -845,3 +867,334 @@ def save_script(query, script, file_extension="sh", auto_save=False, config=None
         else:
             print("Script not saved.")
             return None
+
+
+# ========== ENHANCED TEXT FORMATTING FUNCTIONS ==========
+
+def format_header(text, style='standard', width=80):
+    """Create formatted headers with different styles."""
+    styles = {
+        'standard': {
+            'top': '═',
+            'side': '║', 
+            'corner_tl': '╔',
+            'corner_tr': '╗',
+            'corner_bl': '╚', 
+            'corner_br': '╝'
+        },
+        'simple': {
+            'top': '─',
+            'side': '│',
+            'corner_tl': '┌',
+            'corner_tr': '┐', 
+            'corner_bl': '└',
+            'corner_br': '┘'
+        },
+        'bold': {
+            'top': '━',
+            'side': '┃',
+            'corner_tl': '┏',
+            'corner_tr': '┓',
+            'corner_bl': '┗',
+            'corner_br': '┛'
+        },
+        'dashed': {
+            'top': '┄',
+            'side': '┆',
+            'corner_tl': '┌',
+            'corner_tr': '┐',
+            'corner_bl': '└', 
+            'corner_br': '┘'
+        }
+    }
+    
+    chars = styles.get(style, styles['standard'])
+    text = text.strip()
+    
+    # Calculate padding
+    content_width = width - 4  # Account for side borders and spaces
+    if len(text) > content_width:
+        text = text[:content_width-3] + "..."
+    
+    padding = (content_width - len(text)) // 2
+    padded_text = " " * padding + text + " " * (content_width - len(text) - padding)
+    
+    # Build the header
+    top_line = chars['corner_tl'] + chars['top'] * (width - 2) + chars['corner_tr']
+    content_line = chars['side'] + " " + padded_text + " " + chars['side']
+    bottom_line = chars['corner_bl'] + chars['top'] * (width - 2) + chars['corner_br']
+    
+    return f"{CYAN}{top_line}\n{content_line}\n{bottom_line}{RESET}"
+
+
+def format_section(title, content, color=CYAN, indent=0):
+    """Format a section with title and content."""
+    indent_str = "  " * indent
+    separator = "─" * max(20, len(title))
+    
+    output = f"\n{indent_str}{color}{BOLD}{title}{RESET}\n"
+    output += f"{indent_str}{color}{separator}{RESET}\n"
+    
+    # Handle multi-line content
+    if isinstance(content, list):
+        for item in content:
+            output += f"{indent_str}{WHITE}• {item}{RESET}\n"
+    else:
+        for line in str(content).split('\n'):
+            if line.strip():
+                output += f"{indent_str}{WHITE}{line}{RESET}\n"
+    
+    return output
+
+
+def format_status_box(status, message, details=None):
+    """Create a formatted status box."""
+    status_colors = {
+        'success': GREEN,
+        'error': RED,
+        'warning': YELLOW,
+        'info': CYAN,
+        'pending': BLUE
+    }
+    
+    status_icons = {
+        'success': '✅',
+        'error': '❌', 
+        'warning': '⚠️',
+        'info': 'ℹ️',
+        'pending': '⏳'
+    }
+    
+    color = status_colors.get(status, WHITE)
+    icon = status_icons.get(status, '•')
+    
+    # Main status line
+    output = f"\n{color}┌─ {icon} {status.upper()}: {message}{RESET}\n"
+    
+    # Add details if provided
+    if details:
+        if isinstance(details, list):
+            for detail in details:
+                output += f"{color}│ {WHITE}{detail}{RESET}\n"
+        else:
+            for line in str(details).split('\n'):
+                if line.strip():
+                    output += f"{color}│ {WHITE}{line.strip()}{RESET}\n"
+        
+    output += f"{color}└─{'─' * (len(message) + 10)}{RESET}\n"
+    
+    return output
+
+
+def format_code_block(code, language='bash', show_line_numbers=True):
+    """Format code blocks with syntax highlighting and line numbers."""
+    language_colors = {
+        'bash': GREEN,
+        'python': BLUE,
+        'javascript': YELLOW,
+        'json': MAGENTA,
+        'sql': CYAN
+    }
+    
+    lang_color = language_colors.get(language, WHITE)
+    
+    output = f"\n{lang_color}╭─ {language.upper()}{RESET}\n"
+    
+    lines = code.strip().split('\n')
+    max_line_num = len(lines)
+    width = len(str(max_line_num))
+    
+    for i, line in enumerate(lines, 1):
+        if show_line_numbers:
+            line_num = f"{i:>{width}}"
+            output += f"{lang_color}│{GRAY}{line_num}{RESET} {WHITE}{line}{RESET}\n"
+        else:
+            output += f"{lang_color}│{RESET} {WHITE}{line}{RESET}\n"
+    
+    output += f"{lang_color}╰─{'─' * max(50, len(max(lines, key=len)) + width + 3)}{RESET}\n"
+    
+    return output
+
+
+def format_table(headers, rows, title=None, style='standard'):
+    """Create a formatted table."""
+    if not headers or not rows:
+        return "No data to display"
+    
+    # Calculate column widths
+    col_widths = [len(header) for header in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            if i < len(col_widths):
+                col_widths[i] = max(col_widths[i], len(str(cell)))
+    
+    # Table styles
+    styles = {
+        'standard': {
+            'top_left': '┌', 'top': '─', 'top_right': '┐', 'top_sep': '┬',
+            'mid_left': '├', 'mid': '─', 'mid_right': '┤', 'mid_sep': '┼',
+            'bot_left': '└', 'bot': '─', 'bot_right': '┘', 'bot_sep': '┴',
+            'side': '│'
+        },
+        'double': {
+            'top_left': '╔', 'top': '═', 'top_right': '╗', 'top_sep': '╦',
+            'mid_left': '╠', 'mid': '═', 'mid_right': '╣', 'mid_sep': '╬',
+            'bot_left': '╚', 'bot': '═', 'bot_right': '╝', 'bot_sep': '╩',
+            'side': '║'
+        }
+    }
+    
+    chars = styles.get(style, styles['standard'])
+    
+    output = ""
+    
+    # Title
+    if title:
+        total_width = sum(col_widths) + len(headers) * 3 - 1
+        output += format_header(title, width=total_width) + "\n"
+    
+    # Top border
+    line = chars['top_left']
+    for i, width in enumerate(col_widths):
+        line += chars['top'] * (width + 2)
+        if i < len(col_widths) - 1:
+            line += chars['top_sep']
+    line += chars['top_right']
+    output += f"{CYAN}{line}{RESET}\n"
+    
+    # Headers
+    header_line = chars['side']
+    for i, (header, width) in enumerate(zip(headers, col_widths)):
+        header_line += f" {BOLD}{YELLOW}{header:<{width}}{RESET} {CYAN}{chars['side']}"
+    output += f"{CYAN}{header_line}{RESET}\n"
+    
+    # Separator after headers
+    line = chars['mid_left']
+    for i, width in enumerate(col_widths):
+        line += chars['mid'] * (width + 2)
+        if i < len(col_widths) - 1:
+            line += chars['mid_sep']
+    line += chars['mid_right']
+    output += f"{CYAN}{line}{RESET}\n"
+    
+    # Data rows
+    for row in rows:
+        row_line = chars['side']
+        for i, (cell, width) in enumerate(zip(row, col_widths)):
+            cell_str = str(cell)[:width]  # Truncate if too long
+            row_line += f" {WHITE}{cell_str:<{width}}{RESET} {CYAN}{chars['side']}"
+        output += f"{CYAN}{row_line}{RESET}\n"
+    
+    # Bottom border
+    line = chars['bot_left']
+    for i, width in enumerate(col_widths):
+        line += chars['bot'] * (width + 2)
+        if i < len(col_widths) - 1:
+            line += chars['bot_sep']
+    line += chars['bot_right']
+    output += f"{CYAN}{line}{RESET}\n"
+    
+    return output
+
+
+def format_progress_bar(current, total, width=50, style='blocks'):
+    """Create a progress bar."""
+    if total == 0:
+        percentage = 0
+    else:
+        percentage = min(100, (current / total) * 100)
+    
+    filled = int((percentage / 100) * width)
+    
+    if style == 'blocks':
+        bar_filled = '█' * filled
+        bar_empty = '░' * (width - filled)
+        bar = f"{GREEN}{bar_filled}{GRAY}{bar_empty}{RESET}"
+    else:  # dots
+        bar_filled = '●' * filled
+        bar_empty = '○' * (width - filled)
+        bar = f"{GREEN}{bar_filled}{GRAY}{bar_empty}{RESET}"
+    
+    return f"[{bar}] {percentage:6.1f}% ({current}/{total})"
+
+
+def format_list_items(items, style='bullet', color=WHITE, indent=0):
+    """Format a list of items with various styles."""
+    if not items:
+        return ""
+    
+    indent_str = "  " * indent
+    output = ""
+    
+    styles = {
+        'bullet': '•',
+        'arrow': '→',
+        'check': '✓',
+        'star': '★',
+        'number': None  # Special case
+    }
+    
+    marker = styles.get(style, '•')
+    
+    for i, item in enumerate(items):
+        if style == 'number':
+            marker_str = f"{i+1}."
+        else:
+            marker_str = marker
+            
+        output += f"{indent_str}{color}{marker_str} {WHITE}{item}{RESET}\n"
+    
+    return output
+
+
+def print_formatted_response(content, config=None, wrap_width=80):
+    """Enhanced response printing with better formatting."""
+    if not content:
+        return
+        
+    # Add some spacing
+    print()
+    
+    # Split content into paragraphs
+    paragraphs = content.split('\n\n')
+    
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+            
+        # Check if it's a code block
+        if para.startswith('```'):
+            # Handle code blocks specially
+            lines = para.split('\n')
+            language = lines[0].replace('```', '').strip()
+            code = '\n'.join(lines[1:-1]) if len(lines) > 2 else ''
+            print(format_code_block(code, language or 'text'))
+            continue
+            
+        # Check if it's a header (starts with #)
+        if para.startswith('#'):
+            level = len(para) - len(para.lstrip('#'))
+            title = para.lstrip('# ').strip()
+            if level == 1:
+                print(format_header(title, style='bold'))
+            else:
+                print(f"\n{CYAN}{BOLD}{'  ' * (level-1)}{title}{RESET}")
+                print(f"{'  ' * (level-1)}{CYAN}{'─' * len(title)}{RESET}")
+            continue
+            
+        # Check if it's a list
+        if any(line.strip().startswith(('- ', '* ', '+ ')) for line in para.split('\n')):
+            items = []
+            for line in para.split('\n'):
+                line = line.strip()
+                if line.startswith(('- ', '* ', '+ ')):
+                    items.append(line[2:])
+            print(format_list_items(items, style='arrow', color=CYAN))
+            continue
+            
+        # Regular paragraph - wrap text
+        import textwrap
+        wrapped = textwrap.fill(para, width=wrap_width)
+        print(f"{WHITE}{wrapped}{RESET}")
+        print()  # Add spacing between paragraphs
